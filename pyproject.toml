@@ -1,0 +1,65 @@
+[project]
+name = "strixops"
+version = "0.1.0"
+description = "StrixOps — autonomous pentest engine, drop-in core for the Strix platform"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = [
+    # Pinned to match the reference implementation (strix v1.6.0); do not bump
+    # without re-validating the SandboxAgent/Runner integration surface.
+    "openai-agents[litellm]==0.19.0",
+    "openai==2.53.0",
+    "litellm==1.90.1",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.6",
+    "docker>=7.1",
+    "requests>=2.32",
+    "cvss>=3.2",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+    # console
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+# `strix` is the drop-in entrypoint the platform supervisor resolves
+# (shutil.which("strix") -> $STRIX_HOME/strix). `strixops` is the explicit alias.
+strix = "strixops.cli:main"
+strixops = "strixops.cli:main"
+# StrixOps console (web API + UI server)
+strixops-console = "strixops.console.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/strixops"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"console/web/out" = "strixops/console/web"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Dry-run script fixtures keep content strings on single lines for readability.
+"src/strixops/testing/scripted_gateway.py" = ["E501"]

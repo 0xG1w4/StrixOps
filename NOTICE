@@ -1,0 +1,32 @@
+StrixOps
+Copyright 2026 StrixOps authors
+
+This product includes software and content developed as a clean-room
+reimplementation that uses the open-source Strix project
+(https://github.com/usestrix/strix) as its behavioral specification.
+
+The following assets are derived from Strix (Apache License 2.0,
+Copyright usestrix / Strix contributors) and are used under that license:
+
+  * The skills corpus (prompt/discipline markdown under
+    src/strixops/skills/content/) is ported in substance from Strix's
+    agent skill library, with skill names preserved for prompt stability.
+  * System-prompt structure and tool guidance text follow Strix's prompt
+    architecture.
+  * The internal-pentest sandbox layer in containers/Dockerfile.sandbox
+    mirrors the tool inventory of Strix's sandbox image additions.
+  * Session management, context budgets and conversation compaction in
+    src/strixops/engine/{sessions,context_budget,compaction}.py, the matching
+    context settings, and tool-output bounding in src/strixops/tools/output_store.py
+    are adapted from Strix v1.6.0. Engine/factory integration retains those
+    behaviors while using StrixOps' OpenAI-compatible model routing.
+  * Vulnerability deduplication and CVSS validation in src/strixops/report/
+    and src/strixops/tools/reporting.py, child input-history inheritance,
+    and image-history handling follow the corresponding Strix v1.6.0
+    implementations. Sandbox image reading uses the OpenAI Agents SDK.
+
+The sandbox base image ghcr.io/usestrix/strix-sandbox is a third-party
+artifact extended with internal-network tools for the shared web/internal sandbox.
+
+All other source code in this repository is original work of the StrixOps
+authors, licensed under the Apache License, Version 2.0 (see LICENSE).

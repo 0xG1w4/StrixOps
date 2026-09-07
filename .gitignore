@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.tsbuildinfo
+.idea/
+.vscode/
+
+# Runs & scratch
+strix_runs/
+.strixops/
+.state/
+*.log
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+*.bak
+*.tmp
+
+# Local credentials and environment (keep sanitized examples)
+.env
+.env.*
+!.env.example
+!.env.sample
+.envrc
+.secrets/
+.ssh/
+.aws/
+.kube/
+.netrc
+.npmrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa
+id_ed25519
+
+# AI development tools and local instructions (product prompts/skills stay tracked)
+AGENTS.md
+AGENTS.override.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+.agents/
+.codex/
+.claude/
+.cursor/
+.cursorrules
+.cursorignore
+.windsurf/
+.windsurfrules
+.aider*
+.continue/
+.copilot/
+.mcp.json
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+.github/agents/
+
+# Standalone design experiments
+/design/
+
+# OS
+.DS_Store
+._*
+Thumbs.db
+
+# console web
+node_modules/
+.next*/
+console/web/out/
+console/web/next-env.d.ts

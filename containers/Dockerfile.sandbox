@@ -1,0 +1,124 @@
+# Shared StrixOps sandbox for web and internal scans — the published upstream
+# web image plus the internal-network tool layer (AD/kerberos, SMB/LDAP/SNMP,
+# tunneling, password cracking, payload staging). Tool inventory mirrors the
+# platform fork's sandbox additions; see NOTICE for provenance.
+#
+# Build: containers/build-images.sh   (tags strixops-sandbox:<tag>)
+#
+# Deliberate omission vs the fork: the fork downloaded a Windows gs-netcat
+# payload from a hardcoded third-party IP; that binary is skipped here
+# (unverifiable supply chain). Linux payloads come from official releases.
+
+ARG BASE_IMAGE=ghcr.io/usestrix/strix-sandbox:1.3.0
+FROM ${BASE_IMAGE}
+
+USER root
+
+# Workspace + pentester home layout used by internal workflows.
+RUN mkdir -p /home/pentester/configs \
+    /home/pentester/wordlists \
+    /home/pentester/output \
+    /home/pentester/scripts \
+    /home/pentester/tools/payloads \
+    /app/runtime \
+    /app/tools \
+    /workspace/output && \
+    chown -R pentester:pentester /workspace /app /home/pentester/tools \
+    /home/pentester/output /home/pentester/wordlists /home/pentester/configs \
+    /home/pentester/scripts
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tmux \
+    proxychains4 sshpass openssh-client \
+    smbclient smbmap ldap-utils snmp snmp-mibs-downloader nfs-common \
+    krb5-user iptables \
+    masscan hydra john hashcat \
+    responder evil-winrm \
+    postgresql-client default-mysql-client \
+    ftp telnet ipmitool \
+    rustc cargo libffi-dev libkrb5-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Keep Python tool environments outside /root so both root and pentester
+# can execute the shared commands already on the sandbox PATH.
+ENV PIPX_HOME=/opt/pipx
+ENV PIPX_BIN_DIR=/usr/local/bin
+
+RUN pipx install impacket && \
+    pipx install certipy-ad && \
+    pipx install pypykatz && \
+    pipx install kerbrute && \
+    pipx install bloodhound-ce
+
+# NetExec / enum4linux-ng are not published on PyPI — install from their
+# upstream git repos. Best-effort: on arm64, NetExec's aardwolf dependency
+# has no wheel and its source build needs a Rust toolchain that pipx's uv
+# backend doesn't drive reliably; x86_64 deployments (the platform's VPS
+# target) install cleanly. Absence is visible via `pipx list`.
+RUN pipx install git+https://github.com/Pennyw0rth/NetExec.git \
+    || echo "WARNING: NetExec unavailable on this platform (arm64 wheel gap)"; \
+    pipx install git+https://github.com/cddmp/enum4linux-ng.git \
+    || echo "WARNING: enum4linux-ng unavailable on this platform"
+
+RUN chmod -R a+rX /opt/pipx
+
+ENV GSOCKET_VERSION=v1.4.43
+ENV FSCAN_VERSION=1.8.4
+ENV CHISEL_VERSION=1.10.1
+ENV MONGOSH_VERSION=2.3.2
+
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then GS_ARCH="aarch64"; \
+    else GS_ARCH="x86_64"; fi && \
+    curl -fsSL -o /usr/local/bin/gs-netcat \
+    "https://github.com/hackerschoice/gsocket/releases/download/${GSOCKET_VERSION}/gs-netcat_linux-${GS_ARCH}" && \
+    chmod 755 /usr/local/bin/gs-netcat
+
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then FSCAN_BIN="fscan_arm64"; \
+    else FSCAN_BIN="fscan"; fi && \
+    curl -fsSL -o /usr/local/bin/fscan \
+    "https://github.com/shadow1ng/fscan/releases/download/${FSCAN_VERSION}/${FSCAN_BIN}" && \
+    chmod 755 /usr/local/bin/fscan
+
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then CHISEL_ARCH="arm64"; \
+    else CHISEL_ARCH="amd64"; fi && \
+    curl -fsSL -o /tmp/chisel.gz \
+    "https://github.com/jpillora/chisel/releases/download/v${CHISEL_VERSION}/chisel_${CHISEL_VERSION}_linux_${CHISEL_ARCH}.gz" && \
+    gunzip /tmp/chisel.gz && \
+    install -m 0755 /tmp/chisel /usr/local/bin/chisel && \
+    rm -f /tmp/chisel
+
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then MONGOSH_ARCH="arm64"; \
+    else MONGOSH_ARCH="x64"; fi && \
+    curl -fsSL -o /tmp/mongosh.tgz \
+    "https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-${MONGOSH_ARCH}.tgz" && \
+    tar -xzf /tmp/mongosh.tgz -C /tmp && \
+    install -m 0755 "/tmp/mongosh-${MONGOSH_VERSION}-linux-${MONGOSH_ARCH}/bin/mongosh" /usr/local/bin/mongosh && \
+    rm -rf /tmp/mongosh.tgz "/tmp/mongosh-${MONGOSH_VERSION}-linux-${MONGOSH_ARCH}"
+
+# Pre-staged drop binaries for lateral movement (Linux + Windows, official
+# release sources only).
+USER pentester
+RUN cd /home/pentester/tools/payloads && \
+    curl -fsSL -o gs-netcat_linux_amd64 \
+    "https://github.com/hackerschoice/gsocket/releases/download/${GSOCKET_VERSION}/gs-netcat_linux-x86_64" && \
+    curl -fsSL -o gs-netcat_linux_arm64 \
+    "https://github.com/hackerschoice/gsocket/releases/download/${GSOCKET_VERSION}/gs-netcat_linux-aarch64" && \
+    curl -fsSL -o fscan_linux_amd64 \
+    "https://github.com/shadow1ng/fscan/releases/download/${FSCAN_VERSION}/fscan" && \
+    curl -fsSL -o fscan_linux_arm64 \
+    "https://github.com/shadow1ng/fscan/releases/download/${FSCAN_VERSION}/fscan_arm64" && \
+    curl -fsSL -o fscan_windows_amd64.exe \
+    "https://github.com/shadow1ng/fscan/releases/download/${FSCAN_VERSION}/fscan.exe" && \
+    chmod +x gs-netcat_linux_amd64 gs-netcat_linux_arm64 fscan_linux_amd64 fscan_linux_arm64
+USER root
+
+# Login shells reset PATH in /etc/profile. Restore the upstream tool paths
+# for either sandbox user after that reset, keeping the shell's system paths.
+RUN printf '%s\n' \
+    'export PATH="/home/pentester/go/bin:/home/pentester/.local/bin:/home/pentester/.npm-global/bin:/app/.venv/bin:$PATH"' \
+    > /etc/profile.d/strixops-path.sh && \
+    chmod 644 /etc/profile.d/strixops-path.sh

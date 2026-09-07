@@ -1,0 +1,164 @@
+.panel {
+  min-width: 0;
+}
+
+.panel :global(.panel-header) {
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--signal-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.statusDot {
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+}
+
+.status[data-state="configured"] { color: var(--signal-success); }
+.status[data-state="error"] { color: var(--signal-warning); }
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 28px;
+  padding: 20px;
+}
+
+.provider {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.providerIcon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--signal-line);
+  border-radius: 3px;
+  background: var(--signal-raised);
+  color: var(--signal-accent);
+}
+
+.providerName {
+  color: var(--signal-strong);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.providerHint, .hint {
+  color: var(--signal-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.providerHint { margin-top: 4px; }
+.form { min-width: 0; }
+
+.controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.inputWrap {
+  position: relative;
+  min-width: 0;
+}
+
+.panel .keyInput {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding-right: 48px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.keyInput:disabled { opacity: 0.6; }
+
+.visibility {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 3px;
+  color: var(--signal-muted);
+}
+
+.visibility:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--signal-accent) 8%, transparent);
+  color: var(--signal-accent);
+}
+
+.visibility:disabled { opacity: 0.45; cursor: default; }
+
+.visibility:focus-visible, .retry:focus-visible {
+  outline: 2px solid var(--signal-accent);
+  outline-offset: -3px;
+}
+
+.panel .save {
+  min-width: 96px;
+  min-height: 44px;
+  height: 44px;
+  white-space: nowrap;
+}
+
+.hint { margin-top: 8px; }
+
+.error, .errorRow {
+  margin-top: 8px;
+  color: var(--signal-danger);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.errorRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.retry {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--signal-line);
+  border-radius: 3px;
+  color: var(--signal-text);
+}
+
+.retry:hover { border-color: var(--signal-accent); color: var(--signal-accent); }
+
+@media (max-width: 900px) {
+  .body { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+}
+
+@media (max-width: 480px) {
+  .body { padding: 16px 14px; gap: 18px; }
+  .controls { grid-template-columns: minmax(0, 1fr); }
+  .panel .save { width: 100%; }
+  .panel .keyInput { font-size: 16px; }
+}
