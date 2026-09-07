@@ -11,9 +11,12 @@ them the same way (``apps/api/services/direct_report.py``). Exotic providers
 
 from __future__ import annotations
 
+import httpx
 from agents.models.interface import Model
 from openai import AsyncOpenAI
 
+from strixops.config.model_options import resolved_api_mode, validate_model_options
+from strixops.config.responses_transport import PlatformResponsesModel
 from strixops.config.settings import EngineSettings
 from strixops.config.vision_transport import PlatformChatCompletionsModel
 
@@ -35,10 +38,24 @@ def strip_provider_prefix(model: str) -> str:
     return name
 
 
-def make_platform_model(settings: EngineSettings, model_override: str | None = None) -> Model:
+def make_platform_model(
+    settings: EngineSettings,
+    model_override: str | None = None,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> Model:
     model_name = strip_provider_prefix(model_override or settings.strix_llm)
+    problems = validate_model_options(model_name, settings.llm_api_mode, settings.llm_reasoning_effort)
+    if problems:
+        raise ValueError("Invalid model route: " + "; ".join(problems))
     client = AsyncOpenAI(
         base_url=settings.llm_api_base or None,
         api_key=settings.llm_api_key or "missing",
+        **({"http_client": http_client} if http_client is not None else {}),
     )
-    return PlatformChatCompletionsModel(model=model_name, openai_client=client)
+    model_class = (
+        PlatformResponsesModel
+        if resolved_api_mode(model_name, settings.llm_api_mode) == "responses"
+        else PlatformChatCompletionsModel
+    )
+    return model_class(model=model_name, openai_client=client, reasoning_effort=settings.llm_reasoning_effort)

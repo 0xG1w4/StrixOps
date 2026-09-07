@@ -14,6 +14,8 @@ from typing import Any
 from agents.items import TResponseInputItem
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
+from strixops.config.reasoning_transport import RouteReasoningMixin
+
 
 def project_tool_images(input: str | list[TResponseInputItem]) -> str | list[TResponseInputItem]:
     """Preserve images without interrupting a parallel tool-result group."""
@@ -70,7 +72,7 @@ def project_tool_images(input: str | list[TResponseInputItem]) -> str | list[TRe
     return projected
 
 
-class PlatformChatCompletionsModel(OpenAIChatCompletionsModel):
+class PlatformChatCompletionsModel(RouteReasoningMixin, OpenAIChatCompletionsModel):
     """Use the SDK request/stream/retry implementation with image projection."""
 
     async def _fetch_response(

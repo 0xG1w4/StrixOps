@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from strixops.config.model_options import validate_model_options
+
 
 def _env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
@@ -27,6 +29,8 @@ class EngineSettings:
     operator_hints_dir: str
     host_workspace_dir: str
     dry_run: bool
+    llm_api_mode: str = "chat_completions"
+    llm_reasoning_effort: str = "default"
 
     @classmethod
     def from_env(cls) -> EngineSettings:
@@ -38,6 +42,8 @@ class EngineSettings:
             operator_hints_dir=_env("STRIX_OPERATOR_HINTS_DIR"),
             host_workspace_dir=_env("STRIX_HOST_WORKSPACE_DIR"),
             dry_run=bool(_env("STRIXOPS_DRY_RUN")),
+            llm_api_mode=_env("LLM_API_MODE").lower() or "chat_completions",
+            llm_reasoning_effort=_env("LLM_REASONING_EFFORT").lower() or "default",
         )
 
     def validate(self) -> list[str]:
@@ -50,6 +56,9 @@ class EngineSettings:
                 problems.append("LLM_API_KEY is empty")
             if not self.strix_llm:
                 problems.append("STRIX_LLM is empty")
+            problems.extend(
+                validate_model_options(self.strix_llm, self.llm_api_mode, self.llm_reasoning_effort)
+            )
         return problems
 
     @property

@@ -91,3 +91,95 @@ def test_public_profile_masks_key(store_path):
     assert public["llm_api_key"].startswith("•••")
     assert profile["llm_api_key"] not in public["llm_api_key"]
     assert public["llm_api_key_set"] is True
+
+
+def test_legacy_profile_options_are_explicit_without_changing_storage(store_path):
+    profile = _make()
+    public = settings_store.public_profile(profile)
+    env = settings_store.effective_llm(profile, "web")
+    assert public["api_mode_web"] == public["api_mode_internal"] == "chat_completions"
+    assert public["reasoning_effort_web"] == public["reasoning_effort_internal"] == "default"
+    assert env["llm_api_mode"] == "chat_completions"
+    assert env["llm_reasoning_effort"] == "default"
+    assert "api_mode_web" not in profile
+
+
+@pytest.mark.parametrize("empty_slot", ["web", "internal"])
+def test_model_fallback_inherits_protocol_and_effort_together(store_path, empty_slot):
+    populated = "internal" if empty_slot == "web" else "web"
+    profile, errors = settings_store.sanitize_profile(
+        _make(
+            **{
+                f"model_{empty_slot}": "",
+                f"model_{populated}": "deployment-alias",
+                f"api_mode_{empty_slot}": "chat_completions",
+                f"reasoning_effort_{empty_slot}": "none",
+                f"api_mode_{populated}": "responses",
+                f"reasoning_effort_{populated}": "high",
+            }
+        )
+    )
+    assert not errors
+    env = settings_store.effective_llm(profile, empty_slot)
+    assert env["strix_llm"] == "deployment-alias"
+    assert env["llm_api_mode"] == "responses"
+    assert env["llm_reasoning_effort"] == "high"
+
+
+def test_patch_preserves_omitted_options_and_allows_explicit_reset_and_clear(store_path):
+    profile, errors = settings_store.sanitize_profile(
+        _make(api_mode_web="responses", reasoning_effort_web="high")
+    )
+    assert not errors
+    renamed, errors = settings_store.sanitize_profile({"name": "Renamed"}, existing=profile)
+    assert not errors
+    assert renamed["api_mode_web"] == "responses"
+    assert renamed["reasoning_effort_web"] == "high"
+    reset, errors = settings_store.sanitize_profile(
+        {"reasoning_effort_web": "default", "model_internal": ""}, existing=renamed
+    )
+    assert not errors
+    assert reset["reasoning_effort_web"] == "default"
+    assert reset["api_mode_web"] == "responses"
+    assert reset["model_internal"] == ""
+
+
+@pytest.mark.parametrize(
+    "options", [{"api_mode_web": "unknown"}, {"reasoning_effort_internal": "impossible"}]
+)
+def test_invalid_model_option_is_rejected(store_path, options):
+    _, errors = settings_store.sanitize_profile(_make(**options))
+    assert errors
+
+
+def test_masked_key_cannot_be_saved_without_a_source(store_path):
+    profile, errors = settings_store.sanitize_profile(_make(llm_api_key="•••cret"))
+    assert errors
+    assert profile["llm_api_key"] == ""
+
+
+@pytest.mark.parametrize("copy", [False, True])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"llm_api_base": "https://different.example/v1"},
+        {"llm_api_base": "https://provider.example/v2"},
+        {"llm_api_base": "http://provider.example/v1"},
+        {"llm_api_base": "https://provider.example:444/v1"},
+        {"route_type": "openrouter"},
+    ],
+)
+def test_reusing_key_requires_same_provider_and_endpoint(store_path, change, copy):
+    source, errors = settings_store.sanitize_profile(
+        _make(route_type="custom", llm_api_base="https://provider.example/v1")
+    )
+    assert not errors
+    kwargs = {"copy_source" if copy else "existing": source}
+    profile, errors = settings_store.sanitize_profile({"llm_api_key": "•••-key", **change}, **kwargs)
+    assert any("enter a new API key" in error for error in errors)
+    assert not profile["llm_api_key"]
+    replacement, errors = settings_store.sanitize_profile(
+        {"llm_api_key": "new-endpoint-key", **change}, **kwargs
+    )
+    assert not errors
+    assert replacement["llm_api_key"] == "new-endpoint-key"

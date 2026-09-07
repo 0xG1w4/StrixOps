@@ -3,22 +3,29 @@
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { ArrowDownToLine, Check, ChevronDown, Cpu, Eye, EyeOff, Globe, KeyRound, Loader2, Search, Server, X } from "lucide-react";
-import { fetchModelCatalog, ModelCatalogError, type CatalogModel } from "@/lib/api";
+import { ArrowDownToLine, Check, ChevronDown, Cpu, Eye, EyeOff, FlaskConical, Globe, KeyRound, Loader2, Search, Server, X } from "lucide-react";
+import { fetchModelCatalog, ModelCatalogError, ModelTestError, testModelRoute, type CatalogModel, type ModelApiMode, type ModelConnection, type ModelReasoningEffort } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { API_MODES, REASONING_EFFORTS, allowedModelEfforts, isAstraModel, modelOptionError, normalizeModelEndpoint, resolveModelApiMode } from "@/lib/model-options";
 import styles from "./ModelRouteDialog.module.css";
 
 export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 export type RouteType = "custom" | "openrouter";
 export interface ModelRouteDraft {
   id: string | null;
+  copy_from_profile_id?: string;
   name: string;
   route_type: RouteType;
   llm_api_base: string;
   llm_api_key: string;
   keyVisible: boolean;
+  saved_key_available: boolean;
   model_web: string;
   model_internal: string;
+  api_mode_web: ModelApiMode;
+  api_mode_internal: ModelApiMode;
+  reasoning_effort_web: ModelReasoningEffort;
+  reasoning_effort_internal: ModelReasoningEffort;
 }
 
 const COPY = {
@@ -36,6 +43,28 @@ const COPY = {
     modelPlaceholder: "输入模型 ID，或从右侧选择",
     footer: "保存后可在启动扫描时使用此路由。",
     savedKey: "已保存的密钥可直接拉取；输入新密钥即可替换。",
+    copied: "已复制为新路由草稿，修改后点击“创建路由”保存。相同服务地址可沿用原密钥。",
+    api: "API 类型", effort: "推理强度", auto: "自动", defaultEffort: "服务商默认", noneEffort: "none（关闭推理）",
+    apiHint: (api: string) => `自动选择：${api}。自定义模型别名可手动指定。`,
+    effortHint: "服务商默认不传推理参数；none 会明确关闭推理。",
+    inheritedHint: "未指定模型时，沿用另一扫描类型的模型、API 与推理强度。",
+    astraHint: "Astra 的工具调用使用 Responses，推理强度支持 low 到 max。",
+    responsesRequired: "此模型的工具调用需要 Responses，请选择自动或 Responses。",
+    reasoningResponses: "当前推理设置需要 Responses 才能调用工具。请选择 Responses，或将推理强度设为 none。",
+    unsupportedEffort: (efforts: string) => `此模型不支持当前推理强度。请选择服务商默认，或 ${efforts}。`,
+    test: "测试模型", testing: "测试中…", testSuccess: "工具调用与结果回传通过",
+    testHint: "验证工具调用与结果回传，会产生少量模型用量。",
+    testErrors: {
+      upstream_http: "服务未能完成模型测试，请检查服务状态后重试。",
+      upstream_auth: "密钥或模型访问验证失败，请检查密钥与模型权限。",
+      upstream_timeout: "模型测试超时，请稍后重试或降低推理强度。",
+      upstream_incompatible: "服务拒绝了模型请求，请检查所选 API、推理强度、串流及工具调用支持。",
+      probe_incomplete: "模型未完成串流回复，请检查模型服务或重试。",
+      probe_tool_call: "模型未正确发起测试工具调用，请检查模型与网关的工具支持。",
+      probe_tool_result: "模型未正确读取工具结果，请检查网关的工具结果回传支持。",
+      probe_failed: "模型测试失败，请检查模型服务与所选 API 的兼容性。",
+      model_required: "请选择要测试的模型。",
+    } as Record<string, string>,
     errors: {
       invalid_route: "请选择有效的模型服务类型。",
       invalid_api_base: "请输入有效的 HTTP / HTTPS API 地址，不含查询参数或账号密码。",
@@ -54,6 +83,8 @@ const COPY = {
       console_invalid_response: "控制台后端返回了无效响应，请重试或检查后端服务。",
       console_http_error: "控制台后端请求失败，请检查后端服务后重试。",
       unavailable: "暂时无法拉取模型，请重试或手动输入模型 ID。",
+      test_endpoint_missing: "后端尚未提供模型测试接口，请重启或更新后端后重试。",
+      test_failed: "模型测试未通过，请检查 API 类型、推理强度与服务商支持情况。",
     } as Record<string, string>,
   },
   en: {
@@ -70,6 +101,28 @@ const COPY = {
     modelPlaceholder: "Enter or choose a model ID",
     footer: "This route will be available when you launch a scan.",
     savedKey: "Use your saved key to fetch models, or enter a new key to replace it.",
+    copied: "Copied to a new draft. Make any changes and choose Create route to save. The same service URL can reuse the original key.",
+    api: "API type", effort: "Reasoning effort", auto: "Auto", defaultEffort: "Provider default", noneEffort: "none (no reasoning)",
+    apiHint: (api: string) => `Auto selects ${api}. Choose manually for custom model aliases.`,
+    effortHint: "Provider default omits the reasoning parameter; none explicitly disables reasoning.",
+    inheritedHint: "Without a model, this scan type uses the other type's model, API, and reasoning effort.",
+    astraHint: "Astra uses Responses for tools and supports reasoning efforts from low to max.",
+    responsesRequired: "This model requires Responses for tools. Choose Auto or Responses.",
+    reasoningResponses: "This reasoning setting requires Responses for tools. Choose Responses or set effort to none.",
+    unsupportedEffort: (efforts: string) => `This model does not support the selected effort. Choose Provider default or ${efforts}.`,
+    test: "Test model", testing: "Testing…", testSuccess: "Tool call and returned result verified",
+    testHint: "Verifies a tool call and its returned result. Uses a small amount of model tokens.",
+    testErrors: {
+      upstream_http: "The provider could not complete the model test. Check its status and try again.",
+      upstream_auth: "Authentication or model access failed. Check the key and model permissions.",
+      upstream_timeout: "The model test timed out. Retry or lower the reasoning effort.",
+      upstream_incompatible: "The provider rejected the request. Check support for the selected API, effort, streaming, and tools.",
+      probe_incomplete: "The model did not complete its streamed reply. Check the provider or retry.",
+      probe_tool_call: "The model did not call the test tool correctly. Check model and gateway tool support.",
+      probe_tool_result: "The model did not read the tool result correctly. Check gateway support for returning tool results.",
+      probe_failed: "Model test failed. Check the provider and selected API compatibility.",
+      model_required: "Choose a model to test.",
+    } as Record<string, string>,
     errors: {
       invalid_route: "Choose a valid provider type.",
       invalid_api_base: "Enter a valid HTTP / HTTPS API base without query parameters or credentials.",
@@ -88,20 +141,32 @@ const COPY = {
       console_invalid_response: "The console backend returned an invalid response. Try again or check the backend service.",
       console_http_error: "The console backend request failed. Check the backend service and try again.",
       unavailable: "Unable to fetch models. Try again or enter model IDs manually.",
+      test_endpoint_missing: "The backend does not provide model testing yet. Restart or update it and try again.",
+      test_failed: "Model test failed. Check the API type, reasoning effort, and provider support.",
     } as Record<string, string>,
   },
 };
 
 type Copy = (typeof COPY)["en"];
 
-function ModelField({ id, label, Icon, value, onChange, models, disabled, copy }: {
+function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, apiMode, effort, onApiChange, onEffortChange, connection, canTest }: {
   id: string; label: string; Icon: typeof Globe; value: string;
   onChange: (value: string) => void; models: CatalogModel[]; disabled: boolean; copy: Copy;
+  apiMode: ModelApiMode; effort: ModelReasoningEffort;
+  onApiChange: (value: ModelApiMode) => void; onEffortChange: (value: ModelReasoningEffort) => void;
+  connection: ModelConnection; canTest: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const menuRef = React.useRef<HTMLDivElement>(null);
   const searchRef = React.useRef<HTMLInputElement>(null);
+  const pendingTest = React.useRef<AbortController | null>(null);
+  const [testState, setTestState] = React.useState<"idle" | "running" | "success" | "error">("idle");
+  const [testMessage, setTestMessage] = React.useState("");
+  const optionError = modelOptionError(value, apiMode, effort);
+  const hasModel = !!value.trim();
+  const apiLabel = (mode: ModelApiMode) => mode === "auto" ? copy.auto : mode === "responses" ? "Responses" : "Chat Completions";
+  const effortLabel = (value: ModelReasoningEffort) => value === "default" ? copy.defaultEffort : value === "none" ? copy.noneEffort : value;
   const query = search.trim().toLowerCase();
   const filtered = React.useMemo(() => models.filter((model) =>
     model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query),
@@ -113,6 +178,31 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy }
     const frame = requestAnimationFrame(() => searchRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [open]);
+
+  React.useEffect(() => {
+    pendingTest.current?.abort();
+    setTestState("idle");
+    setTestMessage("");
+    return () => pendingTest.current?.abort();
+  }, [value, apiMode, effort, connection.profile_id, connection.route_type, connection.llm_api_base, connection.llm_api_key]);
+
+  const runTest = async () => {
+    pendingTest.current?.abort();
+    const controller = new AbortController();
+    pendingTest.current = controller;
+    setTestState("running");
+    setTestMessage("");
+    try {
+      const result = await testModelRoute({ ...connection, model: value.trim().replace(/^openrouter\//, ""), api_mode: apiMode, reasoning_effort: effort }, controller.signal);
+      if (controller.signal.aborted) return;
+      setTestState("success");
+      setTestMessage(`${copy.testSuccess} · ${apiLabel(result.api_mode)} · ${effortLabel(result.reasoning_effort)}`);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setTestState("error");
+      setTestMessage(error instanceof ModelTestError ? copy.testErrors[error.code] || copy.errors[error.code] || error.message : copy.errors.test_failed);
+    }
+  };
 
   return (
     <div className={styles.modelCard}>
@@ -175,6 +265,40 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy }
           </Menu.Portal>
         </Menu.Root>
       </div>
+      <div className={styles.modelSettings}>
+        <div className={styles.field}>
+          <label htmlFor={`${id}-api`}>{copy.api}</label>
+          <select id={`${id}-api`} className={styles.select} value={apiMode} disabled={disabled || !hasModel}
+            aria-describedby={`${id}-api-hint`} aria-invalid={optionError === "responsesRequired" || optionError === "reasoningResponses" || undefined}
+            onChange={(event) => onApiChange(event.target.value as ModelApiMode)}>
+            {API_MODES.map((mode) => <option key={mode} value={mode}>{apiLabel(mode)}</option>)}
+          </select>
+        </div>
+        <div className={styles.field}>
+          <label htmlFor={`${id}-effort`}>{copy.effort}</label>
+          <select id={`${id}-effort`} className={styles.select} value={effort} disabled={disabled || !hasModel}
+            aria-describedby={hasModel ? `${id}-effort-hint` : `${id}-api-hint`} aria-invalid={optionError === "unsupportedEffort" || optionError === "reasoningResponses" || undefined}
+            onChange={(event) => onEffortChange(event.target.value as ModelReasoningEffort)}>
+            {REASONING_EFFORTS.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}
+          </select>
+        </div>
+      </div>
+      <p id={`${id}-api-hint`} className={styles.hint}>
+        {!hasModel ? copy.inheritedHint : isAstraModel(value) ? copy.astraHint : copy.apiHint(apiLabel(resolveModelApiMode(value, "auto")))}
+      </p>
+      {hasModel && <p id={`${id}-effort-hint`} className={styles.hint}>{copy.effortHint}</p>}
+      {optionError && <p className={styles.optionError} role="alert">
+        {optionError === "unsupportedEffort" ? copy.unsupportedEffort(allowedModelEfforts(value)?.join(" / ") || "") : copy[optionError]}
+      </p>}
+      <div className={styles.testRow}>
+        <button type="button" className={styles.testButton} onClick={() => void runTest()}
+          aria-label={`${copy.test} · ${label}`} disabled={disabled || !canTest || !hasModel || !!optionError || testState === "running"}>
+          {testState === "running" ? <Loader2 size={14} className={styles.spin} /> : <FlaskConical size={14} />}
+          {testState === "running" ? copy.testing : copy.test}
+        </button>
+      </div>
+      {testMessage && <p className={testState === "error" ? styles.optionError : styles.testSuccess}
+        role={testState === "error" ? "alert" : "status"}>{testMessage}</p>}
     </div>
   );
 }
@@ -190,12 +314,17 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
   const [fetchError, setFetchError] = React.useState("");
   const nameRef = React.useRef<HTMLInputElement>(null);
   const pending = React.useRef<AbortController | null>(null);
-  const initialEndpoint = React.useRef({ route: draft.route_type, base: draft.llm_api_base.trim().replace(/\/+$/, "") });
+  const initialEndpoint = React.useRef({ route: draft.route_type, base: normalizeModelEndpoint(draft.llm_api_base) });
   const base = draft.route_type === "openrouter" ? OPENROUTER_BASE : draft.llm_api_base.trim();
-  const savedKey = !!draft.id && (!draft.llm_api_key.trim() || draft.llm_api_key.startsWith("•••"));
+  const key = draft.llm_api_key.trim();
+  const sourceId = draft.id || draft.copy_from_profile_id;
+  const savedKey = !!sourceId && draft.saved_key_available && (!key || key.startsWith("•••"));
   const endpointChanged = savedKey && (draft.route_type !== initialEndpoint.current.route
-    || base.replace(/\/+$/, "") !== initialEndpoint.current.base);
-  const canFetch = !!base && (!!draft.llm_api_key.trim() || savedKey) && !endpointChanged;
+    || normalizeModelEndpoint(base) !== initialEndpoint.current.base);
+  const hasNewKey = !!key && !key.startsWith("•••");
+  const canFetch = !!base && (hasNewKey || savedKey) && !endpointChanged;
+  const connection: ModelConnection = { profile_id: sourceId, route_type: draft.route_type,
+    llm_api_base: base, llm_api_key: key };
 
   React.useEffect(() => {
     pending.current?.abort();
@@ -203,7 +332,7 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
     setFetchError("");
     setFetching(false);
     return () => { pending.current?.abort(); };
-  }, [draft.id, draft.route_type, base, draft.llm_api_key]);
+  }, [sourceId, draft.route_type, base, draft.llm_api_key]);
 
   const fetchModels = async () => {
     pending.current?.abort();
@@ -212,8 +341,7 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
     setFetching(true);
     setFetchError("");
     try {
-      const result = await fetchModelCatalog({ profile_id: draft.id, route_type: draft.route_type,
-        llm_api_base: base, llm_api_key: draft.llm_api_key.trim() }, controller.signal);
+      const result = await fetchModelCatalog(connection, controller.signal);
       if (!controller.signal.aborted) {
         setModels(result.models);
         if (!result.models.length) setFetchError("empty_models");
@@ -244,6 +372,7 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
           </header>
           <form className={styles.form} onSubmit={(event) => { event.preventDefault(); if (!saving) onSave(); }}>
             <div className={styles.body}>
+              {draft.copy_from_profile_id && <p className={styles.copyHint}>{copy.copied}</p>}
               <div className={styles.field}>
                 <label htmlFor="profile-name">{t("settings.profileName")}</label>
                 <input ref={nameRef} id="profile-name" className={styles.input} placeholder={t("settings.profileName.placeholder")}
@@ -277,7 +406,7 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
                     <div className={styles.inputGroup}>
                       <KeyRound size={15} className={styles.keyIcon} aria-hidden="true" />
                       <input id="profile-api-key" className={`${styles.keyInput} ${styles.mono}`} type={draft.keyVisible ? "text" : "password"}
-                        disabled={saving} autoComplete="off" spellCheck={false} placeholder={draft.id ? t("settings.keyUnchanged") : "sk-…"}
+                        disabled={saving} autoComplete="off" spellCheck={false} placeholder={sourceId ? t("settings.keyUnchanged") : "sk-…"}
                         value={draft.llm_api_key} onChange={(event) => onChange({ ...draft, llm_api_key: event.target.value })} />
                       <button type="button" className={styles.iconButton} disabled={saving}
                         onClick={() => onChange({ ...draft, keyVisible: !draft.keyVisible })}
@@ -307,10 +436,17 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
                 </div>
                 <div className={styles.models}>
                   <ModelField id="profile-web-model" label={copy.web} Icon={Globe} value={draft.model_web}
-                    onChange={(value) => onChange({ ...draft, model_web: value })} models={models} disabled={saving || fetching} copy={copy} />
+                    onChange={(value) => onChange({ ...draft, model_web: value })} models={models} disabled={saving || fetching} copy={copy}
+                    apiMode={draft.api_mode_web} effort={draft.reasoning_effort_web}
+                    onApiChange={(value) => onChange({ ...draft, api_mode_web: value })}
+                    onEffortChange={(value) => onChange({ ...draft, reasoning_effort_web: value })} connection={connection} canTest={canFetch} />
                   <ModelField id="profile-internal-model" label={copy.internal} Icon={Server} value={draft.model_internal}
-                    onChange={(value) => onChange({ ...draft, model_internal: value })} models={models} disabled={saving || fetching} copy={copy} />
+                    onChange={(value) => onChange({ ...draft, model_internal: value })} models={models} disabled={saving || fetching} copy={copy}
+                    apiMode={draft.api_mode_internal} effort={draft.reasoning_effort_internal}
+                    onApiChange={(value) => onChange({ ...draft, api_mode_internal: value })}
+                    onEffortChange={(value) => onChange({ ...draft, reasoning_effort_internal: value })} connection={connection} canTest={canFetch} />
                 </div>
+                <p className={styles.hint}>{copy.testHint}</p>
               </section>
               {errors.length > 0 && <div className={styles.error} role="alert">{errors.map((error) => <div key={error}>{error}</div>)}</div>}
             </div>
@@ -318,7 +454,9 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
               <p>{copy.footer}</p>
               <div className={styles.actions}>
                 <button type="button" className="button-secondary" disabled={saving} onClick={onClose}>{t("common.cancel")}</button>
-                <button type="submit" className="button-primary" disabled={saving}>
+                <button type="submit" className="button-primary" disabled={saving || endpointChanged
+                  || !!modelOptionError(draft.model_web, draft.api_mode_web, draft.reasoning_effort_web)
+                  || !!modelOptionError(draft.model_internal, draft.api_mode_internal, draft.reasoning_effort_internal)}>
                   {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
                   {t(draft.id ? "settings.saveChanges" : "settings.createProfile")}
                 </button>

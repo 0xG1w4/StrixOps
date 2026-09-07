@@ -62,7 +62,7 @@
 }
 .close { flex-basis: 36px; width: 36px; min-height: 36px; border-radius: 8px; align-self: flex-start; margin: -6px -10px 0 0; }
 .close:hover, .iconButton:hover, .pickerTrigger:hover { background: rgb(var(--raise-rgb) / 6%); color: var(--text-primary); }
-.close:focus-visible, .iconButton:focus-visible, .pickerTrigger:focus-visible, .provider:focus-visible, .fetchButton:focus-visible {
+.close:focus-visible, .iconButton:focus-visible, .pickerTrigger:focus-visible, .provider:focus-visible, .fetchButton:focus-visible, .testButton:focus-visible {
   outline: 2px solid rgb(var(--cyan-strong-rgb));
   outline-offset: 2px;
 }
@@ -116,6 +116,20 @@
 .modelCard { min-width: 0; padding: 10px; background: rgb(var(--raise-rgb) / 2%); border: 1px solid rgb(var(--raise-rgb) / 8%); border-radius: 11px; }
 .modelLabel { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }
 .modelLabel svg { color: rgb(var(--cyan-strong-rgb)); }
+.modelSettings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 13px 0 9px; }
+.modelSettings .field { gap: 6px; }
+.modelSettings label { font-size: 11px; }
+.select { width: 100%; min-height: 40px; border: 1px solid rgb(var(--raise-rgb) / 13%); border-radius: 7px; padding: 8px 6px; background: var(--bg-panel-solid); color: var(--text-primary); font-size: 11px; }
+.select:focus-visible { outline: 2px solid rgb(var(--cyan-strong-rgb)); outline-offset: 2px; }
+.select:disabled { opacity: .5; cursor: not-allowed; }
+.select[aria-invalid="true"] { border-color: rgb(var(--danger-rgb) / 60%); }
+.modelCard > .hint + .hint { margin-top: 5px; }
+.copyHint { margin: 0; padding: 10px 12px; border: 1px solid rgb(var(--cyan-rgb) / 22%); border-radius: 8px; background: rgb(var(--cyan-rgb) / 5%); color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.optionError { margin: 8px 0 0; color: rgb(var(--danger-rgb)); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.testRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.testButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 10px; border: 1px solid rgb(var(--cyan-rgb) / 24%); border-radius: 7px; background: rgb(var(--cyan-rgb) / 5%); color: rgb(var(--cyan-strong-rgb)); font-size: 11px; cursor: pointer; }
+.testButton:hover { background: rgb(var(--cyan-rgb) / 11%); }
+.testSuccess { margin: 8px 0 0; color: rgb(var(--success-rgb)); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .pickerTrigger { border-left: 1px solid rgb(var(--raise-rgb) / 10%); color: rgb(var(--cyan-strong-rgb)); }
 .pickerTrigger[data-state="open"] { background: rgb(var(--cyan-rgb) / 10%); }
 .pickerTrigger > svg { transition: transform 140ms; }

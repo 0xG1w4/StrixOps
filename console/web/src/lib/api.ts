@@ -294,6 +294,9 @@ export interface ScanLaunched {
 
 /* ------------------------------------------------------------------ settings */
 
+export type ModelApiMode = "auto" | "chat_completions" | "responses";
+export type ModelReasoningEffort = "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 /** GET /api/settings profile entry (API key always masked server-side). */
 export interface ModelProfile {
   id: string;
@@ -304,6 +307,10 @@ export interface ModelProfile {
   llm_api_key_set: boolean;
   model_web: string;
   model_internal: string;
+  api_mode_web?: ModelApiMode;
+  api_mode_internal?: ModelApiMode;
+  reasoning_effort_web?: ModelReasoningEffort;
+  reasoning_effort_internal?: ModelReasoningEffort;
   created_at: string;
   updated_at: string;
 }
@@ -322,7 +329,16 @@ export interface ProfileWrite {
   llm_api_key?: string;
   model_web?: string;
   model_internal?: string;
+  api_mode_web?: ModelApiMode;
+  api_mode_internal?: ModelApiMode;
+  reasoning_effort_web?: ModelReasoningEffort;
+  reasoning_effort_internal?: ModelReasoningEffort;
 }
+
+/** Creating a copy resolves its saved key on the server for the same provider and endpoint. */
+export type ProfileCreate = ProfileWrite & { copy_from_profile_id?: string };
+
+export type ModelConnection = Pick<ProfileWrite, "route_type" | "llm_api_base" | "llm_api_key"> & { profile_id?: string | null };
 
 export interface CatalogModel {
   id: string;
@@ -342,7 +358,7 @@ function isAbortError(error: unknown): boolean {
 
 /** Fetch through the console so stored keys never have to reach the browser. */
 export async function fetchModelCatalog(
-  body: Pick<ProfileWrite, "route_type" | "llm_api_base" | "llm_api_key"> & { profile_id?: string | null },
+  body: ModelConnection,
   signal?: AbortSignal,
 ): Promise<{ models: CatalogModel[]; count: number }> {
   let response: Response;
@@ -389,7 +405,7 @@ interface ModelProfileWrapped {
   profile: ModelProfile;
 }
 
-export async function createProfile(body: ProfileWrite): Promise<ModelProfile> {
+export async function createProfile(body: ProfileCreate): Promise<ModelProfile> {
   const res = await postJSON<ModelProfileWrapped>("/api/settings/profiles", body);
   return res.profile;
 }
@@ -412,6 +428,55 @@ export async function deleteProfile(id: string): Promise<void> {
 
 export async function activateProfile(id: string): Promise<void> {
   await postJSON("/api/settings/activate", { profile_id: id });
+}
+
+export class ModelTestError extends Error {
+  constructor(public readonly code: string, message?: string) {
+    super(message || code);
+    this.name = "ModelTestError";
+  }
+}
+
+export interface ModelTestResult {
+  ok: true;
+  model: string;
+  api_mode: Exclude<ModelApiMode, "auto">;
+  reasoning_effort: ModelReasoningEffort;
+  message: string;
+}
+
+/** Verify a tool call and its returned result with the unsaved route settings. */
+export async function testModelRoute(
+  body: ModelConnection & { model: string; api_mode: ModelApiMode; reasoning_effort: ModelReasoningEffort },
+  signal?: AbortSignal,
+): Promise<ModelTestResult> {
+  let response: Response;
+  try {
+    response = await fetch(`${API}/api/settings/test-model`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), cache: "no-store", signal,
+    });
+  } catch (error) {
+    if (signal?.aborted || isAbortError(error)) throw error;
+    throw new ModelTestError("console_connection");
+  }
+  let result;
+  try {
+    result = await response.json();
+  } catch (error) {
+    if (signal?.aborted || isAbortError(error)) throw error;
+    throw new ModelTestError("console_invalid_response");
+  }
+  if (!response.ok) {
+    if (typeof result?.detail?.code === "string") {
+      throw new ModelTestError(result.detail.code, typeof result.detail.message === "string" ? result.detail.message : undefined);
+    }
+    throw new ModelTestError(response.status === 404 || response.status === 405 ? "test_endpoint_missing" : "console_http_error");
+  }
+  if (result?.ok !== true || !["responses", "chat_completions"].includes(result.api_mode)) {
+    throw new ModelTestError("console_invalid_response");
+  }
+  return result;
 }
 
 

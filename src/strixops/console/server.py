@@ -39,8 +39,10 @@ from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
+from strixops.config.model_options import resolved_api_mode, validate_model_options
 from strixops.console import (
     model_catalog,
+    model_probe,
     parser,
     project_assignment,
     project_reports,
@@ -57,6 +59,7 @@ LIVE_GRACE_SECONDS = 300  # events.jsonl quiet longer than this → stale
 ENGINE_LOG_TAIL_LINES = 200
 STREAM_POLL_SECONDS = 1.0
 STREAM_DEADLINE_SECONDS = 6 * 3600
+MODEL_PROBE_DISCONNECT_POLL_SECONDS = 0.2
 REPORT_FILENAME = "penetration_test_report.md"
 LAUNCH_SIDECAR = ".console_launch.json"  # launch facts the engine does not record
 
@@ -215,6 +218,10 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
         "gsocket": str(scan_config.get("gsocket_key") or ""),
         "crypto": bool(scan_config.get("crypto_mode")),
         "model": str(scan_config.get("model") or launch_meta.get("model") or ""),
+        "llm_api_mode": str(scan_config.get("llm_api_mode") or launch_meta.get("llm_api_mode") or ""),
+        "llm_reasoning_effort": str(
+            scan_config.get("llm_reasoning_effort") or launch_meta.get("llm_reasoning_effort") or ""
+        ),
     }
     dry_run = scan_config.get("dry_run", launch_meta.get("dry_run"))
     if dry_run is not None:
@@ -617,6 +624,11 @@ class ProfileBody(BaseModel):
     llm_api_key: str = ""
     model_web: str = ""
     model_internal: str = ""
+    api_mode_web: str = "chat_completions"
+    api_mode_internal: str = "chat_completions"
+    reasoning_effort_web: str = "default"
+    reasoning_effort_internal: str = "default"
+    copy_from_profile_id: str | None = None
 
 
 class ModelCatalogBody(BaseModel):
@@ -624,6 +636,33 @@ class ModelCatalogBody(BaseModel):
     route_type: str = "custom"
     llm_api_base: str = ""
     llm_api_key: str = ""
+
+
+class ModelProbeBody(ModelCatalogBody):
+    model: str = ""
+    api_mode: str = "auto"
+    reasoning_effort: str = "default"
+
+
+@app.post("/api/settings/test-model")
+async def test_provider_model(body: ModelProbeBody, request: Request) -> dict:
+    probe = asyncio.create_task(model_probe.test_model(**body.model_dump()))
+    try:
+        while not probe.done():
+            done, _ = await asyncio.wait({probe}, timeout=MODEL_PROBE_DISCONNECT_POLL_SECONDS)
+            if done:
+                break
+            # FastAPI has already parsed the request body, so checking for
+            # disconnect here cannot compete with a body reader.
+            if await request.is_disconnected():
+                raise HTTPException(status_code=499, detail="model test canceled")
+        return await probe
+    finally:
+        if not probe.done():
+            probe.cancel()
+        # Await cancellation so the probe closes its streaming HTTP client
+        # before this request ends, including cancellation of the handler.
+        await asyncio.gather(probe, return_exceptions=True)
 
 
 @app.post("/api/settings/models")
@@ -650,7 +689,14 @@ def _find_profile(data: dict, profile_id: str) -> dict | None:
 @app.post("/api/settings/profiles")
 def create_profile(body: ProfileBody) -> dict:
     data = settings_store.load_settings()
-    profile, errors = settings_store.sanitize_profile(body.model_dump())
+    copy_source = None
+    if body.copy_from_profile_id:
+        copy_source = _find_profile(data, body.copy_from_profile_id)
+        if copy_source is None:
+            raise HTTPException(status_code=404, detail="unknown source profile")
+    profile, errors = settings_store.sanitize_profile(
+        body.model_dump(exclude_unset=True), copy_source=copy_source
+    )
     if errors:
         raise HTTPException(status_code=400, detail="; ".join(errors))
     data["profiles"].append(profile)
@@ -666,7 +712,9 @@ def update_profile(profile_id: str, body: ProfileBody) -> dict:
     existing = _find_profile(data, profile_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="unknown profile")
-    profile, errors = settings_store.sanitize_profile(body.model_dump(), existing=existing)
+    if body.copy_from_profile_id:
+        raise HTTPException(status_code=400, detail="copy_from_profile_id is only valid for a new profile")
+    profile, errors = settings_store.sanitize_profile(body.model_dump(exclude_unset=True), existing=existing)
     if errors:
         raise HTTPException(status_code=400, detail="; ".join(errors))
     data["profiles"] = [profile if p.get("id") == profile_id else p for p in data["profiles"]]
@@ -749,6 +797,8 @@ class ScanBody(BaseModel):
     llm_api_base: str = ""
     llm_api_key: str = ""
     strix_llm: str = ""
+    llm_api_mode: str = "chat_completions"
+    llm_reasoning_effort: str = "default"
 
 
 def _resolve_llm_env(body: ScanBody) -> dict[str, str]:
@@ -773,6 +823,8 @@ def _resolve_llm_env(body: ScanBody) -> dict[str, str]:
             "llm_api_base": body.llm_api_base,
             "llm_api_key": body.llm_api_key,
             "strix_llm": body.strix_llm,
+            "llm_api_mode": body.llm_api_mode,
+            "llm_reasoning_effort": body.llm_reasoning_effort,
         }
     raise HTTPException(
         status_code=400,
@@ -814,6 +866,11 @@ def launch_scan(body: ScanBody) -> dict:
     llm_env: dict[str, str] = {}
     if not body.dry_run:
         llm_env = _resolve_llm_env(body)
+        errors = validate_model_options(
+            llm_env["strix_llm"], llm_env["llm_api_mode"], llm_env["llm_reasoning_effort"]
+        )
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
     run_name = generate_run_name(body.target, body.scan_type)
     if (state.runs_root / run_name).exists():  # ensure unique
         run_name = f"{run_name[:-RUN_SUFFIX_LENGTH]}{secrets.token_hex(2)}"
@@ -838,6 +895,11 @@ def launch_scan(body: ScanBody) -> dict:
             {
                 "dry_run": bool(body.dry_run),
                 "model": llm_env.get("strix_llm") or "",
+                "llm_api_mode": resolved_api_mode(llm_env["strix_llm"], llm_env["llm_api_mode"])
+                if llm_env
+                else "",
+                "llm_api_mode_requested": llm_env.get("llm_api_mode") or "",
+                "llm_reasoning_effort": llm_env.get("llm_reasoning_effort") or "",
                 "profile_id": body.profile_id or "",
                 "project_id": body.project_id or "",
                 "project_scope_revision": int(project.get("scope_revision") or 1)
@@ -888,6 +950,8 @@ def launch_scan(body: ScanBody) -> dict:
         env["LLM_API_BASE"] = llm_env["llm_api_base"]
         env["LLM_API_KEY"] = llm_env["llm_api_key"]
         env["STRIX_LLM"] = llm_env["strix_llm"]
+        env["LLM_API_MODE"] = llm_env["llm_api_mode"]
+        env["LLM_REASONING_EFFORT"] = llm_env["llm_reasoning_effort"]
 
     # Capture engine stdout+stderr so launch failures are diagnosable; the
     # fd is inherited by the child, the parent's copy can close immediately.

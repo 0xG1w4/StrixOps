@@ -60,6 +60,32 @@ One process serves both the API (`/api/*`) and the built UI. Launch scans
 from the UI (dry run needs no LLM key), watch the conversation stream live,
 send operator hints mid-scan, and browse findings/reports.
 
+Model profiles share a provider URL and API key, with separate model, API type,
+and reasoning effort for Web and internal scans. Choose **Auto**, **Chat
+Completions**, or **Responses** beside each model. Auto uses Responses for the
+documented Astra, GPT-5.4 Pro, GPT-5.5, and GPT-5.6 routes; other names use Chat
+Completions. Deployment aliases can be configured explicitly. **Provider
+default** omits the reasoning parameter, while **none** sends an explicit value;
+available effort levels depend on the model. Known incompatible combinations
+are rejected before a scan starts. Empty model slots inherit the other slot's
+model, API, and effort together.
+
+**Duplicate** opens a new editable profile draft. Its saved key is reused on the
+server only for the same provider and API URL; changing the destination requires
+a new key. Creating the copy does not replace or activate it over the original.
+**Test model** makes two short streamed requests using a harmless function,
+checking the selected API, effort, and function-result round trip without
+starting a scan. This uses the provider's normal model quota. A model catalog
+listing alone does not establish tool compatibility.
+
+CLI launches can select the same options with `LLM_API_MODE` (`auto`,
+`chat_completions`, or `responses`) and `LLM_REASONING_EFFORT` (`default`, `none`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, or `max`, subject to model support).
+Missing API settings retain the legacy Chat Completions route. New profiles
+start with Auto. Explicit route effort applies to agents and their summary and
+deduplication requests. Runs record the requested/resolved API and selected
+effort for diagnosis; failed requests do not silently switch protocol or effort.
+
 ## Development
 
 ```bash

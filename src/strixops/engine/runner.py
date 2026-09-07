@@ -57,6 +57,13 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     scan_config["dry_run"] = settings.dry_run
     if settings.strix_llm:
         scan_config["model"] = settings.strix_llm
+    if not settings.dry_run:
+        from strixops.config.model_options import API_MODES, resolved_api_mode
+
+        scan_config["llm_api_mode_requested"] = settings.llm_api_mode
+        scan_config["llm_reasoning_effort"] = settings.llm_reasoning_effort
+        if settings.llm_api_mode in API_MODES:
+            scan_config["llm_api_mode"] = resolved_api_mode(settings.strix_llm, settings.llm_api_mode)
     events.run_configured(scan_config)
     _stdout_log(f"StrixOps run {run_name} starting (scan_type={spec.scan_type}, target={spec.target})")
 
