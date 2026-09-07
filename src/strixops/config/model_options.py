@@ -1,7 +1,8 @@
 """Shared, deterministic validation for a model route's API and reasoning options.
 
-Only documented model names receive capability rules. Gateway deployment aliases
-remain configurable and must be checked using the console's tool-call probe.
+Documented model names guide Auto selection and reasoning-effort validation.
+Explicit API choices remain configurable because gateways may translate them;
+compatibility must be checked using the console's tool-call probe.
 """
 
 from __future__ import annotations
@@ -16,9 +17,6 @@ _GPT54_PRO = re.compile(r"gpt-5\.4-pro(?:-\d{4}-\d{2}-\d{2})?")
 _GPT54_STANDARD = re.compile(r"gpt-5\.4(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?")
 _GPT55 = re.compile(r"gpt-5\.5(?:-\d{4}-\d{2}-\d{2})?")
 _GPT56 = re.compile(r"gpt-5\.6(?:-sol|-terra|-luna)?(?:-\d{4}-\d{2}-\d{2})?")
-_GPT54_AND_LATER = re.compile(
-    r"gpt-5\.(?:4(?:-pro|-mini|-nano)?|5|6(?:-sol|-terra|-luna)?)(?:-\d{4}-\d{2}-\d{2})?"
-)
 
 
 def _known_model_name(model: str) -> str:
@@ -50,7 +48,6 @@ def validate_model_options(model: str, api_mode: str, reasoning_effort: str) -> 
         return errors
 
     name = _known_model_name(model)
-    mode = resolved_api_mode(model, api_mode)
     # Model-specific subsets and provider defaults are from the official pages:
     # https://developers.openai.com/api/docs/models/gpt-6-astra
     # https://developers.openai.com/api/docs/models/gpt-5.4[-pro|-mini|-nano]
@@ -70,26 +67,4 @@ def validate_model_options(model: str, api_mode: str, reasoning_effort: str) -> 
             f"{model} supports reasoning effort {', '.join(supported)}; choose one of these or default."
         )
 
-    if _ASTRA.fullmatch(name) or _GPT54_PRO.fullmatch(name):
-        if mode != "responses":
-            errors.append(f"{model} requires Responses API for function tools; choose auto or responses.")
-    # https://developers.openai.com/api/docs/guides/migrate-to-responses
-    elif (
-        _GPT54_AND_LATER.fullmatch(name)
-        and mode == "chat_completions"
-        and reasoning_effort not in {"default", "none"}
-    ):
-        errors.append(
-            f"{model} requires Responses API for function tools with reasoning effort "
-            f"{reasoning_effort}; choose responses or set effort to none."
-        )
-    elif (
-        mode == "chat_completions"
-        and reasoning_effort == "default"
-        and (_GPT55.fullmatch(name) or _GPT56.fullmatch(name))
-    ):
-        errors.append(
-            f"{model} defaults to medium reasoning, which requires Responses API for function tools; "
-            "choose auto or responses, or explicitly set effort to none for Chat Completions."
-        )
     return errors

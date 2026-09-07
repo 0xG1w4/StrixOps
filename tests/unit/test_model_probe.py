@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from strixops.console import model_probe, server, settings_store
 from strixops.testing.scripted_gateway import _completion
+from tests.unit.test_model_errors import azure_policy_message
 from tests.unit.test_vision_transport import _stream
 
 
@@ -68,8 +69,18 @@ def responses_stream(output, model):
     )
 
 
-@pytest.mark.parametrize("mode", ["chat_completions", "responses"])
-def test_probe_verifies_streamed_tool_result_without_writing_profile(monkeypatch, isolated_settings, mode):
+@pytest.mark.parametrize(
+    ("model", "mode", "effort"),
+    [
+        ("gateway-alias", "chat_completions", "default"),
+        ("gateway-alias", "responses", "high"),
+        ("gpt-6-astra", "chat_completions", "high"),
+        ("gpt-5.5", "chat_completions", "default"),
+    ],
+)
+def test_probe_verifies_streamed_tool_result_without_writing_profile(
+    monkeypatch, isolated_settings, model, mode, effort,
+):
     requests = []
 
     def respond(request):
@@ -77,10 +88,14 @@ def test_probe_verifies_streamed_tool_result_without_writing_profile(monkeypatch
         requests.append((request, body))
         assert body["stream"] is True
         assert body["store"] is False
+        assert body["model"] == model
         assert "test-private-key" not in json.dumps(body)
         if mode == "chat_completions":
             assert request.url.path == "/v1/chat/completions"
-            assert "reasoning_effort" not in body
+            if effort == "default":
+                assert "reasoning_effort" not in body
+            else:
+                assert body["reasoning_effort"] == effort
             if len(requests) == 1:
                 return _stream(_completion({"tool_calls": [{"name": "route_probe"}]}, 0))
             receipt = next(item["content"] for item in body["messages"] if item["role"] == "tool")
@@ -115,7 +130,7 @@ def test_probe_verifies_streamed_tool_result_without_writing_profile(monkeypatch
         return responses_stream(output, body["model"])
 
     options = mock_http(monkeypatch, respond)
-    body = request_body(api_mode=mode, reasoning_effort="high" if mode == "responses" else "default")
+    body = request_body(model=model, api_mode=mode, reasoning_effort=effort)
     with TestClient(server.app) as client:
         result = client.post("/api/settings/test-model", json=body)
     assert result.status_code == 200, result.text
@@ -205,6 +220,75 @@ async def test_model_options_fail_before_any_http(monkeypatch):
     requests = []
     mock_http(monkeypatch, lambda request: requests.append(request))
     with pytest.raises(HTTPException) as caught:
-        await model_probe.test_model(**request_body(model="gpt-6-astra", api_mode="chat_completions"))
+        await model_probe.test_model(**request_body(model="gpt-6-astra", api_mode="invalid"))
     assert caught.value.detail["code"] == "invalid_model_options"
     assert not requests
+
+
+def test_responses_stream_error_returns_safe_diagnostics(monkeypatch):
+    def respond(request):
+        error = {"error": {
+            "message": "litellm.APIError: Response API in-stream error test-private-key",
+            "code": "server_error", "type": "api_error", "param": "tools",
+            "debug": "PRIVATE_PROMPT_MUST_NOT_LEAK",
+        }}
+        return httpx.Response(
+            200, text=f"event: error\ndata: {json.dumps(error)}\n\n",
+            headers={"content-type": "text/event-stream", "x-request-id": "req-probe-fixture"},
+        )
+
+    mock_http(monkeypatch, respond)
+    with TestClient(server.app) as client:
+        response = client.post(
+            "/api/settings/test-model", json=request_body(api_mode="responses"),
+        )
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["code"] == "upstream_stream_error"
+    assert "api=responses" in detail["diagnostics"]
+    assert "code=server_error" in detail["diagnostics"]
+    assert "request_id=req-probe-fixture" in detail["diagnostics"]
+    assert "test-private-key" not in response.text
+    assert "PRIVATE_PROMPT_MUST_NOT_LEAK" not in response.text
+
+
+@pytest.mark.parametrize("stream_error", [False, True])
+def test_explicit_provider_policy_is_distinct_from_route_incompatibility(monkeypatch, stream_error):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        error = {"error": {"code": 500 if stream_error else 400, "message": azure_policy_message()}}
+        if stream_error:
+            return httpx.Response(
+                200, text=f"event: error\ndata: {json.dumps(error)}\n\n",
+                headers={"content-type": "text/event-stream", "x-litellm-call-id": "call-policy-fixture"},
+            )
+        return httpx.Response(400, json=error)
+
+    mock_http(monkeypatch, respond)
+    with TestClient(server.app) as client:
+        response = client.post("/api/settings/test-model", json=request_body(api_mode="responses"))
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["code"] == "upstream_policy"
+    assert "cybersecurity policy" in detail["message"]
+    assert "upstream_policy=cyber_policy" in detail["diagnostics"]
+    assert "PRIVATE" not in response.text
+    assert len(requests) == 1
+
+
+def test_generic_500_stream_error_is_not_labelled_as_policy(monkeypatch):
+    def respond(request):
+        error = {"error": {"code": 500, "message": "litellm.APIError: Response API in-stream error"}}
+        return httpx.Response(
+            200, text=f"event: error\ndata: {json.dumps(error)}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    mock_http(monkeypatch, respond)
+    with TestClient(server.app) as client:
+        response = client.post("/api/settings/test-model", json=request_body(api_mode="responses"))
+    detail = response.json()["detail"]
+    assert detail["code"] == "upstream_stream_error"
+    assert "upstream_policy=" not in detail["diagnostics"]

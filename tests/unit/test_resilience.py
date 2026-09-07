@@ -5,7 +5,13 @@ Session compaction and overflow behavior are covered in test_context_compaction.
 
 from __future__ import annotations
 
+import httpx
+import pytest
+from agents.retry import ModelRetryAdvice, ModelRetryNormalizedError, RetryPolicyContext
+from openai import APIError, InternalServerError
+
 from strixops.engine.resilience import model_settings
+from tests.unit.test_model_errors import azure_policy_message
 
 
 def test_model_settings_carry_retry_and_usage():
@@ -14,6 +20,26 @@ def test_model_settings_carry_retry_and_usage():
     assert settings.retry.max_retries == 5
     assert settings.include_usage is True
     assert settings.parallel_tool_calls is False
+
+
+@pytest.mark.parametrize("http_error", [False, True])
+async def test_explicit_policy_vetoes_provider_retry_advice_even_wrapped_as_500(http_error):
+    request = httpx.Request("POST", "https://provider.invalid/v1/responses")
+    body = {"code": 500, "message": azure_policy_message()}
+    if http_error:
+        error = InternalServerError("failed", response=httpx.Response(500, request=request), body=body)
+    else:
+        error = APIError("failed", request=request, body=body)
+    context = RetryPolicyContext(
+        error=error,
+        attempt=1,
+        max_retries=5,
+        stream=True,
+        normalized=ModelRetryNormalizedError(status_code=500),
+        provider_advice=ModelRetryAdvice(suggested=True, replay_safety="safe"),
+    )
+    decision = await model_settings().retry.policy(context)
+    assert decision.retry is False
 
 
 def test_usage_accumulator_and_tracking_model():

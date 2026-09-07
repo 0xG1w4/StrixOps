@@ -20,6 +20,7 @@ from agents import Agent, RunConfig, Runner
 from agents.memory import Session
 
 from strixops.config.context import ContextSettings
+from strixops.config.model_errors import format_model_error
 from strixops.engine import compaction, resilience
 from strixops.engine.coordinator import STATUS_CRASHED, STATUS_FAILED, AgentCoordinator
 from strixops.engine.scanconfig import EngineContext
@@ -226,7 +227,7 @@ async def _run_agent_cycles(
                         agent_name=context.agent_name,
                     )
                     continue
-            last_error = f"{type(exc).__name__}: {exc}"
+            last_error = format_model_error(exc)
             break
 
         # Retry any pending usage write; completed responses already published totals.

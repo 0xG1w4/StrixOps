@@ -66,9 +66,12 @@ Completions**, or **Responses** beside each model. Auto uses Responses for the
 documented Astra, GPT-5.4 Pro, GPT-5.5, and GPT-5.6 routes; other names use Chat
 Completions. Deployment aliases can be configured explicitly. **Provider
 default** omits the reasoning parameter, while **none** sends an explicit value;
-available effort levels depend on the model. Known incompatible combinations
-are rejected before a scan starts. Empty model slots inherit the other slot's
-model, API, and effort together.
+available effort levels depend on the model. Manual API choices are honored for
+all model names, including GPT: native OpenAI API/tool compatibility restrictions
+are shown as advisory notices because gateways may translate requests. Check
+the gateway's support with **Test model**. Invalid option values and unsupported
+reasoning effort levels are still rejected. Empty model slots inherit the other
+slot's model, API, and effort together.
 
 **Duplicate** opens a new editable profile draft. Its saved key is reused on the
 server only for the same provider and API URL; changing the destination requires
@@ -85,6 +88,21 @@ Missing API settings retain the legacy Chat Completions route. New profiles
 start with Auto. Explicit route effort applies to agents and their summary and
 deduplication requests. Runs record the requested/resolved API and selected
 effort for diagnosis; failed requests do not silently switch protocol or effort.
+
+For Responses stream failures, the run log and model test retain safe error
+codes, parameters, and request IDs when the provider supplies them. Use the
+request ID to find the underlying error in the gateway/provider logs. A generic
+LiteLLM `Response API in-stream error` does not identify the cause. Agent runs
+apply the existing bounded retry policy to explicitly transient stream errors
+only before output begins; unknown errors, rejected parameters, and errors after
+text or tool output are not automatically replayed.
+
+An explicit `cyber_policy` rejection requires checking the provider's approval
+for security work on the actual API organization/project behind the route.
+Changing API type or reasoning effort does not grant that access. Some gateways
+hide policy errors inside a generic streamed 500; inspect their server logs for
+the original error. StrixOps reports recognizable policy rejections separately
+and does not retry them or switch models to work around them.
 
 ## Development
 

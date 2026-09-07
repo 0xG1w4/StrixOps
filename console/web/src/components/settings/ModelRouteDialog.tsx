@@ -6,7 +6,7 @@ import * as Menu from "@radix-ui/react-dropdown-menu";
 import { ArrowDownToLine, Check, ChevronDown, Cpu, Eye, EyeOff, FlaskConical, Globe, KeyRound, Loader2, Search, Server, X } from "lucide-react";
 import { fetchModelCatalog, ModelCatalogError, ModelTestError, testModelRoute, type CatalogModel, type ModelApiMode, type ModelConnection, type ModelReasoningEffort } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { API_MODES, REASONING_EFFORTS, allowedModelEfforts, isAstraModel, modelOptionError, normalizeModelEndpoint, resolveModelApiMode } from "@/lib/model-options";
+import { API_MODES, REASONING_EFFORTS, allowedModelEfforts, isAstraModel, modelApiWarning, modelOptionError, normalizeModelEndpoint, resolveModelApiMode } from "@/lib/model-options";
 import styles from "./ModelRouteDialog.module.css";
 
 export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
@@ -48,14 +48,16 @@ const COPY = {
     apiHint: (api: string) => `自动选择：${api}。自定义模型别名可手动指定。`,
     effortHint: "服务商默认不传推理参数；none 会明确关闭推理。",
     inheritedHint: "未指定模型时，沿用另一扫描类型的模型、API 与推理强度。",
-    astraHint: "Astra 的工具调用使用 Responses，推理强度支持 low 到 max。",
-    responsesRequired: "此模型的工具调用需要 Responses，请选择自动或 Responses。",
-    reasoningResponses: "当前推理设置需要 Responses 才能调用工具。请选择 Responses，或将推理强度设为 none。",
+    astraHint: "Astra 自动选择 Responses；手动选择会按指定 API 发送。推理强度支持 low 到 max。",
+    responsesRequired: "OpenAI 原生服务要求此模型使用 Responses 调用工具。网关的 Chat Completions 兼容性取决于服务商；可保留选择并测试。",
+    reasoningResponses: "OpenAI 原生服务对此模型的工具调用与推理组合要求 Responses。网关是否支持 Chat Completions 请通过模型测试确认；此提示不影响保存。",
     unsupportedEffort: (efforts: string) => `此模型不支持当前推理强度。请选择服务商默认，或 ${efforts}。`,
     test: "测试模型", testing: "测试中…", testSuccess: "工具调用与结果回传通过",
     testHint: "验证工具调用与结果回传，会产生少量模型用量。",
     testErrors: {
       upstream_http: "服务未能完成模型测试，请检查服务状态后重试。",
+      upstream_stream_error: "模型服务在串流中回报错误，请根据以下诊断信息查看服务端日志。",
+      upstream_policy: "上游因网络安全政策（cyber_policy）拒绝请求。请向模型服务商确认此 API 路由的安全工作授权。",
       upstream_auth: "密钥或模型访问验证失败，请检查密钥与模型权限。",
       upstream_timeout: "模型测试超时，请稍后重试或降低推理强度。",
       upstream_incompatible: "服务拒绝了模型请求，请检查所选 API、推理强度、串流及工具调用支持。",
@@ -106,14 +108,16 @@ const COPY = {
     apiHint: (api: string) => `Auto selects ${api}. Choose manually for custom model aliases.`,
     effortHint: "Provider default omits the reasoning parameter; none explicitly disables reasoning.",
     inheritedHint: "Without a model, this scan type uses the other type's model, API, and reasoning effort.",
-    astraHint: "Astra uses Responses for tools and supports reasoning efforts from low to max.",
-    responsesRequired: "This model requires Responses for tools. Choose Auto or Responses.",
-    reasoningResponses: "This reasoning setting requires Responses for tools. Choose Responses or set effort to none.",
+    astraHint: "Auto selects Responses for Astra; manual selection uses the specified API. Supported efforts range from low to max.",
+    responsesRequired: "OpenAI's native service requires Responses for this model's tools. Gateway Chat Completions compatibility depends on the provider; you can keep this choice and test it.",
+    reasoningResponses: "OpenAI's native service requires Responses for this model's tools with reasoning. Use Test model to check your gateway's Chat Completions support; this notice does not prevent saving.",
     unsupportedEffort: (efforts: string) => `This model does not support the selected effort. Choose Provider default or ${efforts}.`,
     test: "Test model", testing: "Testing…", testSuccess: "Tool call and returned result verified",
     testHint: "Verifies a tool call and its returned result. Uses a small amount of model tokens.",
     testErrors: {
       upstream_http: "The provider could not complete the model test. Check its status and try again.",
+      upstream_stream_error: "The provider reported a stream error. Check its logs using the diagnostics below.",
+      upstream_policy: "The provider rejected this request under its cybersecurity policy (cyber_policy). Confirm this API route's authorization for security work with the provider.",
       upstream_auth: "Authentication or model access failed. Check the key and model permissions.",
       upstream_timeout: "The model test timed out. Retry or lower the reasoning effort.",
       upstream_incompatible: "The provider rejected the request. Check support for the selected API, effort, streaming, and tools.",
@@ -164,6 +168,7 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
   const [testState, setTestState] = React.useState<"idle" | "running" | "success" | "error">("idle");
   const [testMessage, setTestMessage] = React.useState("");
   const optionError = modelOptionError(value, apiMode, effort);
+  const apiWarning = modelApiWarning(value, apiMode, effort);
   const hasModel = !!value.trim();
   const apiLabel = (mode: ModelApiMode) => mode === "auto" ? copy.auto : mode === "responses" ? "Responses" : "Chat Completions";
   const effortLabel = (value: ModelReasoningEffort) => value === "default" ? copy.defaultEffort : value === "none" ? copy.noneEffort : value;
@@ -200,7 +205,8 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
     } catch (error) {
       if (controller.signal.aborted) return;
       setTestState("error");
-      setTestMessage(error instanceof ModelTestError ? copy.testErrors[error.code] || copy.errors[error.code] || error.message : copy.errors.test_failed);
+      const message = error instanceof ModelTestError ? copy.testErrors[error.code] || copy.errors[error.code] || error.message : copy.errors.test_failed;
+      setTestMessage(error instanceof ModelTestError && error.diagnostics ? `${message} (${error.diagnostics})` : message);
     }
   };
 
@@ -269,7 +275,7 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
         <div className={styles.field}>
           <label htmlFor={`${id}-api`}>{copy.api}</label>
           <select id={`${id}-api`} className={styles.select} value={apiMode} disabled={disabled || !hasModel}
-            aria-describedby={`${id}-api-hint`} aria-invalid={optionError === "responsesRequired" || optionError === "reasoningResponses" || undefined}
+            aria-describedby={`${id}-api-hint${apiWarning ? ` ${id}-api-warning` : ""}`}
             onChange={(event) => onApiChange(event.target.value as ModelApiMode)}>
             {API_MODES.map((mode) => <option key={mode} value={mode}>{apiLabel(mode)}</option>)}
           </select>
@@ -277,7 +283,7 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
         <div className={styles.field}>
           <label htmlFor={`${id}-effort`}>{copy.effort}</label>
           <select id={`${id}-effort`} className={styles.select} value={effort} disabled={disabled || !hasModel}
-            aria-describedby={hasModel ? `${id}-effort-hint` : `${id}-api-hint`} aria-invalid={optionError === "unsupportedEffort" || optionError === "reasoningResponses" || undefined}
+            aria-describedby={hasModel ? `${id}-effort-hint` : `${id}-api-hint`} aria-invalid={!!optionError || undefined}
             onChange={(event) => onEffortChange(event.target.value as ModelReasoningEffort)}>
             {REASONING_EFFORTS.map((value) => <option key={value} value={value}>{effortLabel(value)}</option>)}
           </select>
@@ -287,6 +293,7 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
         {!hasModel ? copy.inheritedHint : isAstraModel(value) ? copy.astraHint : copy.apiHint(apiLabel(resolveModelApiMode(value, "auto")))}
       </p>
       {hasModel && <p id={`${id}-effort-hint`} className={styles.hint}>{copy.effortHint}</p>}
+      {hasModel && apiWarning && <p id={`${id}-api-warning`} className={styles.optionWarning} role="status">{copy[apiWarning]}</p>}
       {optionError && <p className={styles.optionError} role="alert">
         {optionError === "unsupportedEffort" ? copy.unsupportedEffort(allowedModelEfforts(value)?.join(" / ") || "") : copy[optionError]}
       </p>}

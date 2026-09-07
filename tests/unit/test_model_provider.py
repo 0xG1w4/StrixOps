@@ -45,6 +45,9 @@ def _settings(model="gateway-alias", mode="chat_completions", effort="default"):
         ("custom-gpt-6-astra", "auto", "chat_completions"),
         ("gateway-alias", "responses", "responses"),
         ("gateway-alias", "chat_completions", "chat_completions"),
+        ("gpt-6-astra", "chat_completions", "chat_completions"),
+        ("gpt-5.4-pro", "chat_completions", "chat_completions"),
+        ("gpt-5.5", "chat_completions", "chat_completions"),
     ],
 )
 def test_auto_is_deterministic_and_preserves_explicit_choices(model, mode, expected):
@@ -56,14 +59,8 @@ def test_auto_is_deterministic_and_preserves_explicit_choices(model, mode, expec
     [
         ("", "invalid", "default", "API mode"),
         ("", "auto", "ultra", "Reasoning effort"),
-        ("gpt-6-astra", "chat_completions", "default", "requires Responses"),
         ("gpt-6-astra", "responses", "none", "supports reasoning effort"),
         ("openai/gpt-6-astra", "auto", "minimal", "supports reasoning effort"),
-        ("gpt-5.4", "chat_completions", "high", "requires Responses"),
-        ("gpt-5.5", "chat_completions", "medium", "requires Responses"),
-        ("gpt-5.5", "chat_completions", "default", "defaults to medium"),
-        ("gpt-5.6-sol", "chat_completions", "default", "defaults to medium"),
-        ("gpt-5.4-pro", "chat_completions", "default", "requires Responses"),
         ("gpt-5.4-pro", "responses", "none", "supports reasoning effort"),
         ("gpt-5.4", "responses", "max", "supports reasoning effort"),
         ("gpt-5.5", "responses", "minimal", "supports reasoning effort"),
@@ -81,11 +78,18 @@ def test_known_invalid_routes_fail_before_http(model, mode, effort, message):
         ("", "auto", "default"),
         ("gpt-6-astra", "auto", "default"),
         ("gpt-6-astra", "responses", "max"),
+        ("gpt-6-astra", "chat_completions", "default"),
+        ("gpt-6-astra", "chat_completions", "high"),
         ("gpt-5.4", "chat_completions", "none"),
+        ("gpt-5.4", "chat_completions", "high"),
         ("gpt-5.4", "responses", "high"),
         ("gpt-5.5", "chat_completions", "none"),
+        ("gpt-5.5", "chat_completions", "medium"),
+        ("gpt-5.5", "chat_completions", "default"),
+        ("gpt-5.6-sol", "chat_completions", "default"),
         ("gpt-5.6", "auto", "max"),
         ("gpt-5.4-pro", "auto", "default"),
+        ("gpt-5.4-pro", "chat_completions", "default"),
         ("gateway-alias", "chat_completions", "max"),
     ],
 )
@@ -104,7 +108,7 @@ def test_engine_env_options_and_legacy_defaults(monkeypatch):
     configured = EngineSettings.from_env()
     assert configured.llm_api_mode == "responses"
     assert configured.llm_reasoning_effort == "high"
-    assert _settings("gpt-6-astra").validate()
+    assert not _settings("gpt-6-astra").validate()
     assert not _settings("gpt-6-astra", "auto", "high").validate()
 
 
@@ -329,3 +333,53 @@ async def test_provider_default_removes_real_sdk_gpt_model_default(mode):
         )
     assert "reasoning" not in bodies[0]
     assert "reasoning_effort" not in bodies[0]
+
+
+@pytest.mark.parametrize("model_name", ["gpt-6-astra", "gpt-5.4-pro", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol"])
+@pytest.mark.parametrize("effort", ["high", "default"])
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_explicit_gpt_chat_choice_reaches_gateway_with_tools(model_name, effort, streaming):
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append((request, body))
+        completion = _completion(
+            {"tool_calls": [{
+                "name": "agent_finish",
+                "arguments": {"result_summary": "Fixture complete", "report_to_parent": False},
+            }]},
+            0,
+        )
+        return _stream(completion) if body.get("stream") else httpx.Response(200, json=completion)
+
+    context = EngineContext(agent_id="child", agent_name="child", parent_id="root")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        model = make_platform_model(_settings(model_name, "chat_completions", effort), http_client=client)
+        assert isinstance(model, PlatformChatCompletionsModel)
+        agent = Agent(
+            name="Explicit GPT Chat fixture", model=model, tools=[agent_finish],
+            tool_use_behavior=StopAtTools(stop_at_tool_names=["agent_finish"]),
+        )
+        kwargs = {
+            "input": "Finish the fixture.", "context": context,
+            "run_config": RunConfig(tracing_disabled=True),
+        }
+        if streaming:
+            result = Runner.run_streamed(agent, **kwargs)
+            async for _ in result.stream_events():
+                pass
+        else:
+            result = await Runner.run(agent, **kwargs)
+    assert json.loads(result.final_output)["agent_finished"] is True
+    assert len(requests) == 1
+    request, body = requests[0]
+    assert str(request.url) == "https://gateway.invalid/v1/chat/completions"
+    assert body["model"] == model_name
+    assert body["tools"][0]["function"]["name"] == "agent_finish"
+    assert bool(body.get("stream")) is streaming
+    assert "reasoning" not in body
+    if effort == "default":
+        assert "reasoning_effort" not in body
+    else:
+        assert body["reasoning_effort"] == effort

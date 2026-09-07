@@ -431,7 +431,7 @@ export async function activateProfile(id: string): Promise<void> {
 }
 
 export class ModelTestError extends Error {
-  constructor(public readonly code: string, message?: string) {
+  constructor(public readonly code: string, message?: string, public readonly diagnostics = "") {
     super(message || code);
     this.name = "ModelTestError";
   }
@@ -469,7 +469,9 @@ export async function testModelRoute(
   }
   if (!response.ok) {
     if (typeof result?.detail?.code === "string") {
-      throw new ModelTestError(result.detail.code, typeof result.detail.message === "string" ? result.detail.message : undefined);
+      throw new ModelTestError(result.detail.code,
+        typeof result.detail.message === "string" ? result.detail.message : undefined,
+        typeof result.detail.diagnostics === "string" ? result.detail.diagnostics : "");
     }
     throw new ModelTestError(response.status === 404 || response.status === 405 ? "test_endpoint_missing" : "console_http_error");
   }

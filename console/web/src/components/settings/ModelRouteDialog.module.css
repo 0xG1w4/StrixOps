@@ -126,6 +126,7 @@
 .modelCard > .hint + .hint { margin-top: 5px; }
 .copyHint { margin: 0; padding: 10px 12px; border: 1px solid rgb(var(--cyan-rgb) / 22%); border-radius: 8px; background: rgb(var(--cyan-rgb) / 5%); color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
 .optionError { margin: 8px 0 0; color: rgb(var(--danger-rgb)); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.optionWarning { margin: 8px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .testRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .testButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 7px 10px; border: 1px solid rgb(var(--cyan-rgb) / 24%); border-radius: 7px; background: rgb(var(--cyan-rgb) / 5%); color: rgb(var(--cyan-strong-rgb)); font-size: 11px; cursor: pointer; }
 .testButton:hover { background: rgb(var(--cyan-rgb) / 11%); }

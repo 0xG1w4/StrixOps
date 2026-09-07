@@ -35,12 +35,17 @@ export function allowedModelEfforts(model: string): ModelReasoningEffort[] | nul
   return null;
 }
 
-export function modelOptionError(model: string, mode: ModelApiMode, effort: ModelReasoningEffort): "responsesRequired" | "reasoningResponses" | "unsupportedEffort" | null {
+export function modelOptionError(model: string, _mode: ModelApiMode, effort: ModelReasoningEffort): "unsupportedEffort" | null {
+  const allowed = allowedModelEfforts(model);
+  return allowed && effort !== "default" && !allowed.includes(effort) ? "unsupportedEffort" : null;
+}
+
+// Native API limitations are advisory: a gateway may translate the selected protocol.
+export function modelApiWarning(model: string, mode: ModelApiMode, effort: ModelReasoningEffort): "responsesRequired" | "reasoningResponses" | null {
   const name = knownModelName(model);
   const resolved = resolveModelApiMode(model, mode);
   if ((ASTRA.test(name) || GPT54_PRO.test(name)) && resolved !== "responses") return "responsesRequired";
   const allowed = allowedModelEfforts(model);
-  if (allowed && effort !== "default" && !allowed.includes(effort)) return "unsupportedEffort";
   if (allowed && resolved === "chat_completions" && effort !== "none"
     && (effort !== "default" || GPT55.test(name) || GPT56.test(name))) return "reasoningResponses";
   return null;

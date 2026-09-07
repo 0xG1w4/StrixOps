@@ -18,7 +18,7 @@ import httpx
 import pytest
 from agents import Agent, Model, ModelResponse, StopAtTools, ToolOutputImage, ToolOutputText, function_tool
 from agents.items import Usage
-from openai import APIStatusError, BadRequestError
+from openai import APIError, APIStatusError, BadRequestError
 from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
 
 from strixops.engine import compaction, loop, sessions
@@ -171,6 +171,21 @@ async def _run(environment, model, *, initial_input="seed task", agent_id="child
 
 def _user_contents(items):
     return [item["content"] for item in items if item.get("role") == "user"]
+
+
+async def test_stream_error_identifiers_reach_persisted_failure_and_events(environment):
+    exc = APIError(
+        "litellm.APIError: Response API in-stream error",
+        request=httpx.Request("POST", "https://model.invalid/v1/responses"),
+        body={"code": "invalid_request_error", "param": "tools"},
+    )
+    exc.request_id = "req-loop-fixture"
+    model = _ScriptedModel([exc])
+    result, context = await _run(environment, model)
+    assert result is None and len(model.inputs) == 1
+    assert "code=invalid_request_error" in context.failure_reason
+    assert "request_id=req-loop-fixture" in context.failure_reason
+    assert context.failure_reason in (environment[0] / "events.jsonl").read_text()
 
 
 async def test_first_string_run_overflow_recovers_current_saved_tool_history(

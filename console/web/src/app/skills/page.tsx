@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Chip, EmptyState, MicroLabel, Panel, Spinner } from "@/components/ui";
-import { getJSON, postJSON, putText } from "@/lib/api";
+import { getJSON, putText } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { fmtTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -113,9 +113,7 @@ export default function SkillsPage() {
           content
         );
       } else {
-        await postJSON(`/api/prompts/${encodeURIComponent(selected.name)}`, {
-          content,
-        });
+        await putText(`/api/prompts/${encodeURIComponent(selected.name)}`, content);
       }
       setDirty(false);
       toast.success(t("common.saved"), {

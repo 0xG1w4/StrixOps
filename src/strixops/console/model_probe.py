@@ -12,8 +12,13 @@ from agents import Model, ModelResponse, ModelSettings, ModelTracing, function_t
 from agents.items import Usage
 from fastapi import HTTPException
 from httpx import AsyncClient
-from openai import APIConnectionError, APIStatusError, APITimeoutError
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError
 
+from strixops.config.model_errors import (
+    UPSTREAM_CYBER_POLICY_MESSAGE,
+    model_error_details,
+    upstream_policy_code,
+)
 from strixops.config.model_options import resolved_api_mode, validate_model_options
 from strixops.config.provider import make_platform_model, strip_provider_prefix
 from strixops.config.settings import EngineSettings
@@ -21,6 +26,17 @@ from strixops.console.model_catalog import _connection, _error
 
 PROBE_TIMEOUT = 45
 PROBE_OUTPUT_TOKENS = 2048
+
+
+def _upstream_policy_error(exc: APIError) -> HTTPException:
+    return HTTPException(
+        status_code=502,
+        detail={
+            "code": "upstream_policy",
+            "message": UPSTREAM_CYBER_POLICY_MESSAGE,
+            "diagnostics": model_error_details(exc),
+        },
+    )
 
 
 async def _round_trip(model: Model, api_mode: str) -> None:
@@ -134,6 +150,8 @@ async def test_model(
     except (TimeoutError, APITimeoutError) as exc:
         raise _error("upstream_timeout", "The model test did not finish within 45 seconds.", 504) from exc
     except APIStatusError as exc:
+        if upstream_policy_code(exc):
+            raise _upstream_policy_error(exc) from exc
         status = exc.status_code
         if status in {401, 403}:
             raise _error("upstream_auth", "The provider rejected this API key or model access.", 502) from exc
@@ -153,6 +171,18 @@ async def test_model(
         ) from exc
     except (APIConnectionError, httpx.HTTPError) as exc:
         raise _error("upstream_connection", "Could not connect to the model provider.", 502) from exc
+    except APIError as exc:
+        if upstream_policy_code(exc):
+            raise _upstream_policy_error(exc) from exc
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "upstream_stream_error",
+                "message": "The provider reported an error inside the model stream. "
+                "Use the diagnostic identifiers to check the provider logs.",
+                "diagnostics": model_error_details(exc),
+            },
+        ) from exc
     except HTTPException:
         raise
     except Exception as exc:

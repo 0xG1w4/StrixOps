@@ -171,7 +171,43 @@ def test_inline_default_effort_overrides_ambient_setting(
     assert env["LLM_REASONING_EFFORT"] == "default"
 
 
-def test_invalid_model_combination_fails_before_spawning_or_writing_run(
+@pytest.mark.parametrize(("model", "effort"), [("gpt-6-astra", "high"), ("gpt-5.5", "default")])
+def test_create_and_launch_preserve_explicit_gpt_chat_route(
+    profile_api: TestClient, monkeypatch: pytest.MonkeyPatch, model: str, effort: str,
+) -> None:
+    created = profile_api.post(
+        "/api/settings/profiles",
+        json={
+            "name": "Gateway Chat route", "route_type": "custom",
+            "llm_api_base": "https://provider.example/v1", "llm_api_key": "saved-test-secret",
+            "model_web": model, "api_mode_web": "chat_completions", "reasoning_effort_web": effort,
+        },
+    )
+    assert created.status_code == 200, created.text
+    profile = created.json()["profile"]
+    assert profile["api_mode_web"] == "chat_completions"
+    assert profile["reasoning_effort_web"] == effort
+    monkeypatch.setenv("LLM_API_MODE", "responses")
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "low")
+    launch = Mock(return_value=Mock(pid=12345))
+    monkeypatch.setattr(server.subprocess, "Popen", launch)
+
+    response = profile_api.post(
+        "/api/scans", json={"target": "https://example.com", "profile_id": profile["id"]},
+    )
+    assert response.status_code == 200, response.text
+    env = launch.call_args.kwargs["env"]
+    assert env["STRIX_LLM"] == model
+    assert env["LLM_API_MODE"] == "chat_completions"
+    assert env["LLM_REASONING_EFFORT"] == effort
+    run_dir = server.state.runs_root / response.json()["run_name"]
+    metadata = json.loads((run_dir / server.LAUNCH_SIDECAR).read_text(encoding="utf-8"))
+    assert metadata["llm_api_mode"] == "chat_completions"
+    assert metadata["llm_api_mode_requested"] == "chat_completions"
+    assert metadata["llm_reasoning_effort"] == effort
+
+
+def test_invalid_api_mode_fails_before_spawning_or_writing_run(
     profile_api: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     launch = Mock()
@@ -183,7 +219,7 @@ def test_invalid_model_combination_fails_before_spawning_or_writing_run(
             "llm_api_base": "https://provider.example/v1",
             "llm_api_key": "inline-secret",
             "strix_llm": "gpt-6-astra",
-            "llm_api_mode": "chat_completions",
+            "llm_api_mode": "invalid",
             "llm_reasoning_effort": "high",
         },
     )
