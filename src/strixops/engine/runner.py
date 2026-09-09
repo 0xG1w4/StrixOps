@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import io
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -45,7 +47,27 @@ def _stdout_log(message: str) -> None:
     print(message, flush=True)
 
 
+def _evidence_failure_detail(evidence: dict[str, Any]) -> str:
+    """Explain an incomplete delivery without exposing arbitrary exception bodies."""
+    detail = (
+        f"{evidence.get('count', 0)} file(s) delivered, "
+        f"{evidence.get('failed_count', 0)} file(s) not delivered, "
+        f"{evidence.get('missing_reference_count', 0)} unresolved reference(s), "
+        f"{len(evidence.get('errors', []))} collection error(s)"
+    )
+    missing = [ref for ref in evidence.get("references", []) if not ref.get("deliverable")]
+    if missing:
+        # JSON quoting keeps untrusted filenames from injecting terminal lines.
+        detail += "; unresolved: " + ", ".join(
+            json.dumps(str(ref.get("reference", ""))[:200], ensure_ascii=False)
+            for ref in missing[:3]
+        )
+    return detail + "; see run.json evidence and evidence/.evidence_index.json"
+
+
 async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
+    targets = spec.all_targets()
+    spec = dataclasses.replace(spec, target=targets[0], targets=targets if len(targets) > 1 else [])
     # 1. Contract surface first: run dir + events.jsonl + run.configured.
     runs_root = resolve_runs_root(settings.strix_runs)
     run_name = generate_run_name(spec.target, spec.scan_type)
@@ -66,6 +88,8 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             scan_config["llm_api_mode"] = resolved_api_mode(settings.strix_llm, settings.llm_api_mode)
     events.run_configured(scan_config)
     _stdout_log(f"StrixOps run {run_name} starting (scan_type={spec.scan_type}, target={spec.target})")
+    if len(targets) > 1:
+        _stdout_log(f"Multi-target run: {len(targets)} targets share this run and report.")
 
     coordinator = AgentCoordinator(run_dir, events)
     run_state = RunState(run_dir, events)
@@ -80,6 +104,9 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
         Path(settings.host_workspace_dir).expanduser().resolve() if settings.host_workspace_dir else None
     )
     evidence_collected = False
+    scan_succeeded = False
+    interrupted = False
+    cleanup_errors: list[dict[str, str]] = []
 
     def prepare_workspace() -> str:
         nonlocal workspace_dir
@@ -121,16 +148,10 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 run_state.save()
                 return 0
 
-        # Shield the file writer, then join it on cancellation. Teardown must
-        # never race an in-progress copy, and disk I/O must not block the loop.
-        task = asyncio.create_task(asyncio.to_thread(collect))
+        # The whole finalizer is shielded and joined below. Its copy cannot be
+        # orphaned by repeated cancellation of the outer scan task.
         try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # Preserve cancellation even if recording a disk failure also fails.
-            with contextlib.suppress(Exception):
-                await task
-            raise
+            return await asyncio.to_thread(collect)
         finally:
             evidence_collected = True
 
@@ -159,6 +180,10 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             usage_accumulator.flush()
 
     usage_sink = _UsageSink()
+
+    # Bound by the try below once the model route comes up; stays None on the
+    # fatal startup paths so finalize never references an unbound name.
+    model_for: Any = None
 
     try:
         context_settings = ContextSettings()
@@ -307,29 +332,17 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             session=session_for("root"),
         )
 
-        # 4. Teardown: reap any leftover child tasks (normally none —
-        # finish_scan refuses while children are active).
-        await _reap_children(coordinator)
-
         if payload and payload.get("scan_completed"):
-            evidence_count = await collect_run_evidence()
-            run_state.write_executive_report()
-            if run_state.run_record.get("evidence", {}).get("status") == "incomplete":
-                _stdout_log("Evidence delivery is incomplete; see run.json and the retained workspace.")
-            run_state.mark_complete()
-            await coordinator.set_status("root", STATUS_COMPLETED)
-            evidence_note = f", {evidence_count} evidence file(s)" if evidence_count else ""
-            _stdout_log(
-                f"Scan completed: {len(run_state.reports)} finding(s), "
-                f"{run_state.duration_seconds()}s{evidence_note}"
+            # The agent's finish intent is not a successful run until evidence
+            # delivery and sandbox cleanup have also finished.
+            scan_succeeded = True
+        else:
+            failure_reason = (
+                root_context.failure_reason or "root agent ended without a successful finish_scan"
             )
-            return EXIT_OK
-
-        failure_reason = root_context.failure_reason or "root agent ended without a successful finish_scan"
-        run_state.mark_failed(failure_reason)
-        await coordinator.set_status("root", STATUS_FAILED)
-        _stdout_log(f"Scan failed: {failure_reason}")
-        return EXIT_FAILED
+            run_state.mark_failed(failure_reason)
+            await coordinator.set_status("root", STATUS_FAILED)
+            _stdout_log(f"Scan failed: {failure_reason}")
 
     except asyncio.CancelledError:
         # SIGTERM/SIGINT (the cli installs the handlers): asyncio.run's cleanup
@@ -337,43 +350,205 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
         # teardown below runs, then let the cancellation propagate.
         _stdout_log("interrupted — marking run failed")
         run_state.mark_failed("interrupted")
-        raise
+        interrupted = True
     except Exception as exc:  # noqa: BLE001 — never exit without artifacts/state
         _stdout_log(f"fatal: {type(exc).__name__}: {exc}")
         run_state.mark_failed(f"{type(exc).__name__}: {exc}")
-        return EXIT_FAILED
     finally:
-        if hints_poller is not None:
-            hints_poller.stop()
-        if hints_task is not None:
-            hints_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await hints_task
-        # A child may still own a running SDK stream after a root failure.
-        # Stop those writers before closing their shared SQLite database.
-        await _reap_children(coordinator)
-        usage_accumulator.flush()
-        await collect_run_evidence()
-        # If a final draft exists after failure/interruption, keep a partial
-        # report with the actual evidence delivery status for operator recovery.
-        if run_state.run_record.get("status") == "failed":
+
+        def cleanup_failed(stage: str, exc: BaseException) -> None:
+            detail = (
+                _evidence_failure_detail(run_state.run_record.get("evidence", {}))
+                if stage == "evidence" else ""
+            )
+            cleanup_errors.append({
+                "stage": stage, "error_type": type(exc).__name__,
+                **({"message": detail} if detail else {}),
+            })
+            logger.error(
+                "scan cleanup failed at %s (%s)%s", stage, type(exc).__name__,
+                f": {detail}" if detail else "",
+            )
+            # Preserve the original failure/interruption and record teardown
+            # errors separately. Even a state write failure must not skip delete.
+            reason = (
+                run_state.run_record.get("failure_reason")
+                or f"cleanup failed: {stage} ({type(exc).__name__})" + (f": {detail}" if detail else "")
+            )
             with contextlib.suppress(Exception):
-                run_state.write_executive_report()
-        for session in agent_sessions.values():
+                run_state.mark_failed(str(reason))
+
+        async def finalize() -> None:
+            run_state.run_record["cleanup"] = {"status": "in_progress", "errors": cleanup_errors}
+            if hints_poller is not None:
+                try:
+                    hints_poller.stop()
+                except Exception as exc:
+                    cleanup_failed("hints", exc)
+            if hints_task is not None:
+                hints_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await hints_task
+            agents_settled = False
+            try:
+                await _reap_children(coordinator)
+                agents_settled = True
+            except BaseException as exc:
+                cleanup_failed("agents", exc)
+            try:
+                usage_accumulator.flush()
+            except Exception as exc:
+                cleanup_failed("usage", exc)
+
+            writers_stopped = sandbox is None
+            if sandbox is not None:
+                try:
+                    # Legacy test doubles may lack quiesce; every real bundle
+                    # implements the verified Docker stop boundary.
+                    quiesce = getattr(sandbox, "quiesce", None)
+                    if quiesce is not None:
+                        if run_state.run_record.get("status") == "failed":
+                            await quiesce(diagnostics_dir=run_dir / "diagnostics")
+                        else:
+                            await quiesce()
+                    writers_stopped = True
+                except BaseException as exc:
+                    cleanup_failed("sandbox_quiesce", exc)
+                finally:
+                    if isinstance(getattr(sandbox, "quiescence", None), dict):
+                        run_state.run_record["cleanup"]["quiescence"] = dict(sandbox.quiescence)
+
+            if agents_settled and writers_stopped:
+                try:
+                    await collect_run_evidence()
+                    if run_state.run_record.get("evidence", {}).get("status") == "incomplete":
+                        cleanup_failed("evidence", RuntimeError("Evidence delivery incomplete"))
+                except BaseException as exc:
+                    cleanup_failed("evidence", exc)
+            elif workspace_dir is not None:
+                # No snapshot can claim stable evidence while a writer might
+                # still be active. Keep the source workspace for recovery.
+                run_state.run_record["evidence"] = {
+                    "status": "incomplete",
+                    "count": 0,
+                    "captured_count": 0,
+                    "persisted_count": 0,
+                    "failed_count": 0,
+                    "total_bytes": 0,
+                    "files": [],
+                    "references": [],
+                    "missing_reference_count": 0,
+                    "errors": [
+                        "Evidence collection skipped: writer shutdown was not confirmed; workspace retained."
+                    ],
+                }
+            try:
+                # A failed/interrupted scan may still have a useful final draft.
+                # Live runs compose the deliverable from the full findings
+                # corpus via a dedicated synthesis call (the platform's report
+                # worker, ported); anything else — dry run, model failure,
+                # timeout — falls back to the deterministic composer so the
+                # run never ends without a report file.
+                synthesized = None
+                if not settings.dry_run and model_for is not None:
+                    from strixops.report.synthesis import synthesis_enabled, synthesize_executive_report
+
+                    if synthesis_enabled():
+                        synthesized = await synthesize_executive_report(
+                            run_state,
+                            lambda: model_for("report-synthesis"),
+                        )
+                if synthesized is not None:
+                    from strixops.platform import artifacts
+
+                    artifacts.write_executive_report(run_state.run_dir, synthesized)
+                    run_state.run_record["report_synthesized"] = True
+                    run_state.events.emit(
+                        event_type="report.synthesized",
+                        payload={"mode": "llm", "chars": len(synthesized)},
+                        agent_name="report synthesis",
+                    )
+                else:
+                    run_state.write_executive_report()
+                    run_state.run_record["report_synthesized"] = False
+            except Exception as exc:
+                cleanup_failed("report", exc)
+            try:
+                run_state.save()
+            except Exception as exc:
+                cleanup_failed("state", exc)
+            if agents_settled:
+                for session in agent_sessions.values():
+                    try:
+                        session.close()
+                    except Exception as exc:
+                        cleanup_failed("session", exc)
+            configure_spill_writer(None)
+            if sandbox is not None:
+                try:
+                    if run_state.run_record.get("status") == "failed":
+                        await sandbox.teardown(diagnostics_dir=run_dir / "diagnostics")
+                    else:
+                        await sandbox.teardown()
+                except BaseException as exc:
+                    cleanup_failed("sandbox_delete", exc)
+                finally:
+                    if isinstance(getattr(sandbox, "cleanup", None), dict):
+                        run_state.run_record["cleanup"]["sandbox"] = dict(sandbox.cleanup)
+            if gateway is not None:
+                try:
+                    await asyncio.to_thread(gateway.stop)
+                except Exception as exc:
+                    cleanup_failed("gateway", exc)
+            try:
+                await coordinator.set_status(
+                    "root",
+                    STATUS_COMPLETED
+                    if scan_succeeded and not interrupted and not cleanup_errors
+                    else STATUS_FAILED,
+                )
+            except BaseException as exc:
+                cleanup_failed("agent_status", exc)
+            run_state.run_record["cleanup"]["status"] = "failed" if cleanup_errors else "complete"
+            try:
+                run_state.save()
+            except Exception as exc:
+                run_state.run_record["cleanup"]["status"] = "failed"
+                cleanup_failed("state", exc)
+
+        cleanup_task = asyncio.create_task(finalize(), name="strixops-run-finalize")
+        while True:
+            try:
+                await asyncio.shield(cleanup_task)
+                break
+            except asyncio.CancelledError:
+                # Repeated SIGTERM/SIGINT only cancels this waiter, never the
+                # task writing evidence or removing the owned container.
+                interrupted = True
+                with contextlib.suppress(Exception):
+                    run_state.mark_failed("interrupted")
+                if cleanup_task.done():
+                    cleanup_task.result()
+                    break
+        if interrupted:
+            raise asyncio.CancelledError
+    if scan_succeeded and not cleanup_errors:
+        try:
+            run_state.mark_complete()
+        except Exception as exc:
+            _stdout_log(f"Completion could not be persisted: {type(exc).__name__}")
             with contextlib.suppress(Exception):
-                session.close()
-        configure_spill_writer(None)
-        if sandbox is not None:
-            if run_state.run_record.get("status") == "failed":
-                await sandbox.teardown(diagnostics_dir=run_dir / "diagnostics")
-            else:
-                await sandbox.teardown()
-        if gateway is not None:
-            gateway.stop()
+                run_state.mark_failed(f"completion failed: {type(exc).__name__}")
+            return EXIT_FAILED
+        evidence_count = int(run_state.run_record.get("evidence", {}).get("count", 0))
+        evidence_note = f", {evidence_count} evidence file(s)" if evidence_count else ""
+        _stdout_log(
+            f"Scan completed: {len(run_state.reports)} finding(s), "
+            f"{run_state.duration_seconds()}s{evidence_note}"
+        )
+        return EXIT_OK
+    return EXIT_FAILED
 
 
 async def _reap_children(coordinator: AgentCoordinator) -> None:
-    for agent_id in list(coordinator.agent_ids()):
-        if agent_id == "root":
-            continue
-        await coordinator.cancel_agent(agent_id)
+    await coordinator.quiesce()

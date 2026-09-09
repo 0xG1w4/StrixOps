@@ -7,7 +7,7 @@ import {
   ArrowUpRight, BarChart3, Crosshair, FileSearch, FolderOpen, LibraryBig,
   LoaderCircle, Radar, Search, SlidersHorizontal, X, type LucideIcon,
 } from "lucide-react";
-import { getJSON, getProjects, type ProjectSummary, type RunSummary, type RunsPage } from "@/lib/api";
+import { getJSON, getProjects, runTargetLabel, runTargets, type ProjectSummary, type RunSummary, type RunsPage } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import styles from "./CommandPalette.module.css";
 
@@ -152,12 +152,12 @@ export default function CommandPalette() {
     const runEntries: Entry[] = [...runs]
       .sort((a, b) => (b.start_time || "").localeCompare(a.start_time || ""))
       .map((run) => ({
-        id: `run:${run.name}`, label: run.target || run.name, detail: run.name,
+        id: `run:${run.name}`, label: runTargetLabel(run), detail: run.name,
         // Run summaries do not attest report availability. This opens the report
         // view, whose own loading/empty state remains authoritative.
         meta: `${t(`status.${run.status}`) === `status.${run.status}` ? t("status.unknown") : t(`status.${run.status}`)} · ${copy.report}`,
         href: `/run?name=${encodeURIComponent(run.name)}&tab=report`,
-        search: `${run.name} ${run.target} ${projectNames.get(run.project_id) ?? ""} ${run.status} ${copy.report}`,
+        search: `${run.name} ${runTargets(run).join(" ")} ${projectNames.get(run.project_id) ?? ""} ${run.status} ${copy.report}`,
         icon: FileSearch, mono: true,
       })).filter(matches);
     const pages: Array<{ href: string; key: string; icon: LucideIcon; words: string }> = [

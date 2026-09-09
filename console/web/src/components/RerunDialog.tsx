@@ -13,7 +13,8 @@
 import * as React from "react";
 import { CircleAlert, CircleCheck, RotateCw } from "lucide-react";
 import { Spinner } from "@/components/ui";
-import { apiURL, getSettings, postJSON } from "@/lib/api";
+import RunTargetList from "@/components/RunTargetList";
+import { apiURL, getSettings, postJSON, runTargetLabel, runTargets } from "@/lib/api";
 import type { ModelProfile, RunDetail, ScanLaunched } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -39,7 +40,7 @@ export default function RerunDialog({
   onCancel: () => void;
   onLaunched: (runName: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [instruction, setInstruction] = React.useState("");
   const [instructionLoaded, setInstructionLoaded] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -105,14 +106,16 @@ export default function RerunDialog({
         : profile.model_web || profile.model_internal)
     : "";
   const liveBlocked = !profile;
+  const targets = runTargets(run);
 
   const relaunch = async () => {
-    if (busy || liveBlocked) return;
+    if (busy || liveBlocked || targets.length === 0) return;
     setBusy(true);
     setError("");
     try {
       const res = await postJSON<ScanLaunched>("/api/scans", {
         target: run.target,
+        ...(targets.length > 1 ? { targets } : {}),
         scan_type: run.scan_type || "web",
         crypto: Boolean(run.crypto),
         socks5: run.socks5 || "",
@@ -131,7 +134,7 @@ export default function RerunDialog({
     }
   };
 
-  const target = run.target || run.name;
+  const target = runTargetLabel(run);
 
   return (
     <div
@@ -139,7 +142,8 @@ export default function RerunDialog({
       onClick={onCancel}
     >
       <div
-        className="panel w-full max-w-2xl animate-enter"
+        className="panel max-h-[calc(100dvh-2rem)] w-full max-w-2xl animate-enter"
+        style={{ overflowY: "auto" }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="rerun-title"
@@ -189,6 +193,8 @@ export default function RerunDialog({
               </span>
             </div>
           </div>
+
+          <RunTargetList targets={targets} />
 
           {/* instruction */}
           <div>
@@ -247,6 +253,13 @@ export default function RerunDialog({
               {t("rerun.profileRequired")}
             </div>
           )}
+          {targets.length === 0 && (
+            <div className="alert-warning" role="alert">
+              {locale === "zh-CN"
+                ? "无法读取此任务的完整目标范围，请在新增任务中重新填写目标。"
+                : "This task's complete scope could not be read. Enter the targets in a new task."}
+            </div>
+          )}
           {error && (
             <div className="alert-error" role="alert">
               <div className="flex items-start gap-2">
@@ -295,7 +308,7 @@ export default function RerunDialog({
               type="button"
               className="button-primary button-compact"
               onClick={() => void relaunch()}
-              disabled={busy || liveBlocked || !instructionLoaded}
+              disabled={busy || liveBlocked || !instructionLoaded || targets.length === 0}
               aria-busy={busy}
             >
               {busy ? (

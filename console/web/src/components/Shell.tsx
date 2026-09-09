@@ -21,7 +21,7 @@ import {
 import * as Dialog from "@radix-ui/react-dialog";
 import { MatrixText } from "@/components/MatrixText";
 import CommandPalette from "@/components/CommandPalette";
-import { getJSON, type Health, type RunSummary, type RunsPage } from "@/lib/api";
+import { getJSON, runTargetLabel, runTargets, type Health, type RunSummary, type RunsPage } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -233,7 +233,7 @@ function EnginePanel({ stats }: { stats: EngineStats }) {
       <div className="engine-panel-meta">
         <span>{stats.liveRuns.toString().padStart(2, "0")} LIVE</span>
         <span>{stats.totalRuns.toString().padStart(2, "0")} RUNS</span>
-        <span>v0.1.0</span>
+        <span>v1.0.0</span>
       </div>
     </div>
   );
@@ -331,7 +331,7 @@ function CommandRail({ stats }: { stats: EngineStats }) {
       {active && <span className="command-verb">watch</span>}
       {active && run ? (
         <Link href={`/run?name=${encodeURIComponent(run.name)}`} className="command-target">
-          <strong>{run.target || run.name}</strong>
+          <strong title={runTargets(run).join("\n")}>{runTargetLabel(run)}</strong>
           <span>{run.name}</span>
         </Link>
       ) : (

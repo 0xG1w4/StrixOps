@@ -32,10 +32,11 @@ async def create_agent(
 ) -> str:
     """Spawn a specialized child agent to execute a testing assignment.
 
-    You are an orchestrator: delegate hands-on testing work to child agents
-    instead of doing it yourself. Give each child a crisp, self-contained
-    assignment (target surface, what to test, what to report). Children run
-    concurrently and report back with a completion summary when done.
+    Delegate a bounded subtask when it helps your assignment. Give each child
+    a crisp, self-contained scope, goal and reporting requirement. Children
+    run concurrently and report back when done; each agent remains responsible
+    for its own assignment. Consult view_agent_graph for configured depth,
+    active and lifetime limits. A rejected spawn creates no child.
 
     Args:
         name: Short descriptive agent name, e.g. "auth-bypass-prober".
@@ -57,7 +58,13 @@ async def create_agent(
         parent=ctx.context,
     )
     if not result.get("ok"):
-        return json.dumps({"success": False, "message": result.get("error", "spawn failed")})
+        return json.dumps(
+            {
+                "success": False,
+                "message": result.get("error", "spawn failed"),
+                "error_code": result.get("error_code", "SPAWN_FAILED"),
+            }
+        )
     return json.dumps(
         {
             "success": True,
@@ -88,7 +95,7 @@ async def wait_for_agents(
     coordinator: AgentCoordinator = services.coordinator  # type: ignore[assignment]
     me = ctx.context.agent_id
 
-    children = coordinator.children_of(me)
+    children = coordinator.descendants_of(me)
     if not children:
         pending = coordinator.drain_messages(me)
         return json.dumps(
@@ -104,11 +111,7 @@ async def wait_for_agents(
         deadline = asyncio.get_running_loop().time() + max(1, int(timeout_seconds))
         timed_out = False
         while True:
-            outstanding = [
-                c
-                for c in coordinator.children_of(me)
-                if coordinator.entry_of(c) and coordinator.entry_of(c)["status"] not in TERMINAL_STATUSES
-            ]
+            outstanding = coordinator.active_descendants(me)
             if not outstanding:
                 break
             if coordinator.pending_messages(me):
@@ -117,22 +120,25 @@ async def wait_for_agents(
                 timed_out = True
                 break
             await asyncio.sleep(WAIT_POLL_SECONDS)
-    except asyncio.CancelledError:
-        # Hint interruption cancels the wait mid-poll; the mailbox wakeup
-        # path replays with the messages. Leave the drain to the waker.
-        raise
+    finally:
+        # A hint can interrupt the wait; terminal agents must never be revived.
+        entry = coordinator.entry_of(me)
+        if entry is not None and entry["status"] not in TERMINAL_STATUSES:
+            await coordinator.set_status(me, "running")
 
     entries = {
         coordinator.name_of(c): (coordinator.entry_of(c) or {}).get("status", "unknown")
         for c in coordinator.children_of(me)
     }
     messages = [m.get("content", "") for m in coordinator.drain_messages(me)]
-    await coordinator.set_status(me, "running")
+    outstanding = coordinator.active_descendants(me)
 
     summary = "; ".join(f"{name}={status}" for name, status in entries.items())
     message = (
         f"Timed out after {timeout_seconds}s — children still working."
         if timed_out
+        else f"Message received; {len(outstanding)} descendant(s) are still working or settling."
+        if outstanding
         else f"Children finished: {summary}"
         if entries
         else "No child agents found."
@@ -142,6 +148,7 @@ async def wait_for_agents(
             "success": True,
             "message": message,
             "timed_out": timed_out,
+            "active_agent_ids": outstanding,
             "children": entries,
             "messages": messages,
         }
@@ -179,7 +186,9 @@ async def send_message_to_agent(
     return json.dumps(
         {
             "success": sent,
-            "message": "Message sent." if sent else f"Unknown agent {target_agent_id!r}.",
+            "message": "Message sent."
+            if sent
+            else f"Agent {target_agent_id!r} is unknown, finished, or stopping; no message was delivered.",
         }
     )
 
@@ -197,8 +206,21 @@ def view_agent_graph(ctx: RunContextWrapper[EngineContext]) -> str:
             "status": entry.get("status", "unknown"),
             "parent": entry.get("parent_id"),
             "task": entry.get("task", ""),
+            "depth": entry.get("depth", 0),
         }
-    return json.dumps({"success": True, "agents": graph})
+    return json.dumps(
+        {
+            "success": True,
+            "agents": graph,
+            "limits": {
+                "max_depth": coordinator.limits.max_depth,
+                "max_active": coordinator.limits.max_active,
+                "max_total": coordinator.limits.max_total,
+                "root_depth": 0,
+                "root_counts_toward_limits": True,
+            },
+        }
+    )
 
 
 @function_tool(strict_mode=False)
@@ -218,6 +240,15 @@ async def stop_agent(
     services: EngineServices = ctx.context.services  # type: ignore[assignment]
     coordinator: AgentCoordinator = services.coordinator  # type: ignore[assignment]
 
+    if target_agent_id not in coordinator.descendants_of(ctx.context.agent_id):
+        return json.dumps({"success": False, "message": "You may stop only your own descendants."})
+    if not cascade and coordinator.active_descendants(target_agent_id):
+        return json.dumps(
+            {
+                "success": False,
+                "message": "This agent has active descendants; use cascade=true to stop the whole branch.",
+            }
+        )
     targets = [target_agent_id]
     if cascade:
         frontier = [target_agent_id]

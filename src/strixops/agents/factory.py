@@ -13,12 +13,22 @@ The lifecycle termination rule is final: the run stops only when
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
+from dataclasses import replace
 from typing import Any
 
 from agents import Agent, FunctionTool, StopAtTools
 
 from strixops.agents.prompts import child_instructions, root_instructions
 from strixops.engine.scanconfig import ScanSpec
+from strixops.tools.assessment import (
+    amend_threat_model,
+    get_threat_model,
+    list_coverage,
+    record_coverage,
+    save_threat_model,
+    update_coverage,
+)
 from strixops.tools.collaboration import (
     create_agent,
     send_message_to_agent,
@@ -31,8 +41,11 @@ from strixops.tools.lifecycle import agent_finish, finish_scan
 from strixops.tools.output_store import bound_and_store
 from strixops.tools.proxy import proxy_tools
 from strixops.tools.reporting import (
+    create_dependency_report,
     create_finding,
     create_vulnerability_report,
+    get_report,
+    list_reports,
     update_vulnerability_report,
 )
 from strixops.tools.skills import list_skills, load_skill
@@ -44,17 +57,30 @@ ROOT_AGENT_NAME = "root agent"
 LIFECYCLE_TOOLS = {"finish_scan", "agent_finish"}
 
 
-def _save_prompt_snapshot(run_dir: Any, agent_name: str, instructions: str) -> None:
-    """Freeze the composed system prompt to .state/ so operators can inspect
-    exactly what the agent received (prompt_parts edits are captured at
-    scan time, not affected by later edits)."""
-    import re
-    from pathlib import Path
+def _resource_tools(tools: list[Any], resources: Any) -> list[Any]:
+    if resources is None:
+        return tools
+    result: list[Any] = []
+    for tool in tools:
+        if not isinstance(tool, FunctionTool):
+            result.append(tool)
+            continue
+        invoke = tool.on_invoke_tool
 
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", agent_name)[:40] or "agent"
-    state_dir = Path(run_dir) / ".state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / f"prompt_{safe}.md").write_text(instructions, encoding="utf-8")
+        async def with_resources(ctx: Any, raw_input: str, inner: Any = invoke) -> Any:
+            with resources.activate():
+                return await inner(ctx, raw_input)
+
+        result.append(replace(tool, on_invoke_tool=with_resources))
+    return result
+
+
+def _resources(run_dir: Any, spec: ScanSpec | None) -> Any:
+    if run_dir is None:
+        return None
+    from strixops.engine.prompt_resources import PromptResources
+
+    return PromptResources.for_run(run_dir, spec)
 
 
 def base_tools() -> list[Any]:
@@ -64,6 +90,15 @@ def base_tools() -> list[Any]:
         update_todo,
         load_skill,
         list_skills,
+        record_coverage,
+        update_coverage,
+        list_coverage,
+        save_threat_model,
+        get_threat_model,
+        amend_threat_model,
+        list_reports,
+        get_report,
+        create_dependency_report,
         record_internal_event,
         get_internal_campaign,
         create_vulnerability_report,
@@ -84,6 +119,20 @@ def root_tools() -> list[Any]:
             view_agent_graph,
             stop_agent,
             finish_scan,
+        ]
+    )
+
+
+def child_tools() -> list[Any]:
+    return _bounded_tools(
+        [
+            *base_tools(),
+            create_agent,
+            wait_for_agents,
+            send_message_to_agent,
+            view_agent_graph,
+            stop_agent,
+            agent_finish,
         ]
     )
 
@@ -215,12 +264,12 @@ def build_root_agent(
     sandbox: bool = False,
     run_dir: Any = None,
 ) -> Any:
-    instructions = root_instructions(spec)
-
-    # Snapshot the composed prompt so operators can see exactly what the
-    # agent received (prompt_parts edits at scan time are frozen here).
-    if run_dir is not None:
-        _save_prompt_snapshot(run_dir, "root", instructions)
+    resources = _resources(run_dir, spec)
+    with resources.activate() if resources is not None else nullcontext():
+        instructions = root_instructions(resources.spec if resources is not None else spec)
+    tools = _resource_tools(root_tools(), resources)
+    if resources is not None:
+        resources.record_prompt("root", ROOT_AGENT_NAME, instructions, tools)
 
     if sandbox:
         from agents.sandbox import SandboxAgent
@@ -228,7 +277,7 @@ def build_root_agent(
         return SandboxAgent(
             name=ROOT_AGENT_NAME,
             instructions=instructions,
-            tools=root_tools(),
+            tools=tools,
             tool_use_behavior=StopAtTools(stop_at_tool_names=["finish_scan"]),
             model=model,
             capabilities=_sandbox_capabilities(),
@@ -236,7 +285,7 @@ def build_root_agent(
     return Agent(
         name=ROOT_AGENT_NAME,
         instructions=instructions,
-        tools=root_tools(),
+        tools=tools,
         model=model,
         tool_use_behavior=StopAtTools(stop_at_tool_names=["finish_scan"]),
     )
@@ -251,11 +300,20 @@ def build_child_agent(
     spec: ScanSpec | None = None,
     skills: list[str] | None = None,
     run_dir: Any = None,
+    agent_id: str | None = None,
 ) -> Any:
-    instructions = child_instructions(task, spec, skills=skills)
+    resources = _resources(run_dir, spec)
+    with resources.activate() if resources is not None else nullcontext():
+        instructions = child_instructions(
+            task,
+            resources.spec if resources is not None else spec,
+            skills=skills,
+        )
+    tools = _resource_tools(child_tools(), resources)
+    if resources is not None:
+        import uuid
 
-    if run_dir is not None:
-        _save_prompt_snapshot(run_dir, name, instructions)
+        resources.record_prompt(agent_id or uuid.uuid4().hex[:8], name, instructions, tools)
 
     if sandbox:
         from agents.sandbox import SandboxAgent
@@ -263,7 +321,7 @@ def build_child_agent(
         return SandboxAgent(
             name=name,
             instructions=instructions,
-            tools=_bounded_tools([*base_tools(), agent_finish]),
+            tools=tools,
             tool_use_behavior=StopAtTools(stop_at_tool_names=["agent_finish"]),
             model=model,
             capabilities=_sandbox_capabilities(),
@@ -271,7 +329,7 @@ def build_child_agent(
     return Agent(
         name=name,
         instructions=instructions,
-        tools=_bounded_tools([*base_tools(), agent_finish]),
+        tools=tools,
         model=model,
         tool_use_behavior=StopAtTools(stop_at_tool_names=["agent_finish"]),
     )

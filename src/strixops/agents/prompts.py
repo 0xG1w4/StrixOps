@@ -8,20 +8,35 @@ missing or unreadable. The console's /skills page edits those files.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from strixops import skills as skill_registry
-from strixops.engine.scanconfig import ScanSpec, authorized_target_line
+from strixops.engine.scanconfig import ScanSpec, authorized_target_line, multi_target_instruction
 
 PROMPT_PARTS_DIR = Path(__file__).parent / "prompt_parts"
 
 _DEFAULTS: dict[str, str] = {}
 
 _LANGUAGE_FILES = {"zh": "language_zh.md", "en": "language_en.md"}
+_FROZEN_PARTS: ContextVar[dict[str, str] | None] = ContextVar("strixops_prompt_parts", default=None)
+
+
+@contextmanager
+def use_prompt_parts(parts: dict[str, str]):
+    token = _FROZEN_PARTS.set(parts)
+    try:
+        yield
+    finally:
+        _FROZEN_PARTS.reset(token)
 
 
 def load_part(name: str, default: str = "") -> str:
     """Read a prompt part file; fall back to the embedded default."""
+    frozen = _FROZEN_PARTS.get()
+    if frozen is not None:
+        return frozen.get(name, default).strip()
     path = PROMPT_PARTS_DIR / name
     try:
         text = path.read_text(encoding="utf-8", errors="replace").strip()
@@ -95,6 +110,8 @@ def engagement_context(spec: ScanSpec | None) -> str:
         "hostname/address and effective identity; record that evidence. Tool/session handles "
         "from another agent's history are background and must be revalidated before reuse.",
     ]
+    if coordination := multi_target_instruction(spec):
+        sections.append(coordination)
     if spec.scan_type == "internal":
         if spec.socks5_proxy:
             sections.append(

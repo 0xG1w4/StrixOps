@@ -57,11 +57,11 @@ def _unique_run_dirs(run_dirs: Iterable[Path]) -> list[Path]:
     return result
 
 
-def _run_skill_hits(run_dir: Path) -> tuple[dict[str, int], str, str]:
-    """Return ``(skill hits, first event timestamp, configured target)``."""
+def _run_skill_hits(run_dir: Path) -> tuple[dict[str, int], str, dict[str, Any]]:
+    """Return ``(skill hits, first event timestamp, configured scope)``."""
     hits: dict[str, int] = {}
     first_timestamp = ""
-    event_target = ""
+    event_config: dict[str, Any] = {}
     # ``agent.created`` is contractually unique per agent.  Guard against a
     # replayed duplicate anyway; counting it twice is never meaningful.
     injected_seen: set[tuple[str, str]] = set()
@@ -69,7 +69,7 @@ def _run_skill_hits(run_dir: Path) -> tuple[dict[str, int], str, str]:
     try:
         lines = (run_dir / "events.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return hits, first_timestamp, event_target
+        return hits, first_timestamp, event_config
 
     for line in lines:
         if not line.strip():
@@ -93,7 +93,7 @@ def _run_skill_hits(run_dir: Path) -> tuple[dict[str, int], str, str]:
         if event_type == "run.configured":
             scan_config = payload.get("scan_config")
             if isinstance(scan_config, dict):
-                event_target = str(scan_config.get("target") or event_target)
+                event_config = scan_config
             continue
 
         if event_type == "tool.execution.started":
@@ -123,7 +123,7 @@ def _run_skill_hits(run_dir: Path) -> tuple[dict[str, int], str, str]:
                 injected_seen.add(dedupe_key)
                 hits[skill] = hits.get(skill, 0) + 1
 
-    return hits, first_timestamp, event_target
+    return hits, first_timestamp, event_config
 
 
 def aggregate_project_skill_analytics(
@@ -143,15 +143,25 @@ def aggregate_project_skill_analytics(
     by_run: list[dict[str, Any]] = []
 
     for run_dir in dirs:
-        run_hits, event_start, event_target = _run_skill_hits(run_dir)
+        run_hits, event_start, event_config = _run_skill_hits(run_dir)
         record = parser.json_load(run_dir / "run.json")
         scan_config = record.get("scan_config")
         if not isinstance(scan_config, dict):
             scan_config = {}
+        # A recorded full scope must not be replaced by an older event's primary.
+        scope = scan_config if "targets" in scan_config else event_config or scan_config
+        target_error = ""
+        try:
+            targets = parser.scan_targets(scope)
+        except ValueError:
+            targets = []
+            target_error = "Recorded target scope is invalid; the complete scope is unknown."
 
         run_entry = {
             "run": run_dir.name,
-            "target": event_target or str(scan_config.get("target") or ""),
+            "target": targets[0] if targets else str(scope.get("target") or ""),
+            "targets": targets,
+            "target_count": len(targets),
             "status": str(record.get("status") or "unknown"),
             "start_time": str(record.get("start_time") or event_start),
             "project_id": str(scan_config.get("project_id") or ""),
@@ -160,6 +170,8 @@ def aggregate_project_skill_analytics(
             # Existing Insights UI calls this field ``total``.
             "total": sum(run_hits.values()),
         }
+        if target_error:
+            run_entry["target_error"] = target_error
         by_run.append(run_entry)
 
         for skill, count in run_hits.items():

@@ -41,7 +41,7 @@ class EngineSettings:
             strix_runs=_env("STRIX_RUNS"),
             operator_hints_dir=_env("STRIX_OPERATOR_HINTS_DIR"),
             host_workspace_dir=_env("STRIX_HOST_WORKSPACE_DIR"),
-            dry_run=bool(_env("STRIXOPS_DRY_RUN")),
+            dry_run=_env("STRIXOPS_DRY_RUN").lower() in {"1", "true", "yes", "on"},
             llm_api_mode=_env("LLM_API_MODE").lower() or "chat_completions",
             llm_reasoning_effort=_env("LLM_REASONING_EFFORT").lower() or "default",
         )

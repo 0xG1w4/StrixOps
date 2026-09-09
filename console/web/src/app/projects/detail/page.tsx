@@ -8,6 +8,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   FileText,
   Fingerprint,
@@ -25,6 +27,8 @@ import {
   getProjectFindings,
   getProjectReports,
   getProjectRuns,
+  runTargetLabel,
+  runTargets,
   getProjectSkillAnalytics,
   updateProjectScope,
   type ProjectFindings,
@@ -73,6 +77,8 @@ const COPY = {
     hits: "次载入",
     distinct: "个不同技能",
     noSkills: "尚未记录技能调用。",
+    expandSkills: "展开全部",
+    collapseSkills: "收起列表",
     recentTasks: "最近任务",
     allTasks: "历史任务",
     searchTasks: "搜索任务或目标",
@@ -153,6 +159,8 @@ const COPY = {
     hits: "loads",
     distinct: "distinct skills",
     noSkills: "No skill activity recorded yet.",
+    expandSkills: "Show all",
+    collapseSkills: "Collapse list",
     recentTasks: "Recent tasks",
     allTasks: "Task history",
     searchTasks: "Search tasks or targets",
@@ -367,7 +375,6 @@ function ProjectWorkspace() {
     : project.vulnerability_count + project.internal_finding_count;
   const completedRuns = runs.filter((run) => run.status.toLowerCase() === "completed");
   const latestReport = reports[0] ?? null;
-  const topSkills = skills?.top_skills ?? skills?.skills?.slice(0, 5) ?? [];
 
   const generate = async () => {
     const sequence = loadSequence.current;
@@ -438,11 +445,11 @@ function ProjectWorkspace() {
       <section role="tabpanel" id="workspace-panel" aria-labelledby={`workspace-tab-${tab}`} tabIndex={0} className={styles.workspacePanel}>
       {tab === "overview" && (
         <Overview
+          key={project.id}
           project={project}
           runs={runs}
           findings={findings}
           skills={skills}
-          topSkills={topSkills}
           latestReport={latestReport}
           reportCount={reports.length}
           completedRuns={completedRuns.length}
@@ -468,12 +475,11 @@ function ProjectWorkspace() {
 
 type Copy = (typeof COPY)[keyof typeof COPY];
 
-function Overview({ project, runs, findings, skills, topSkills, latestReport, reportCount, completedRuns, copy, locale, generating, secondaryStatus, onGenerate, onOpenReport, onRetry, onTab }: {
+function Overview({ project, runs, findings, skills, latestReport, reportCount, completedRuns, copy, locale, generating, secondaryStatus, onGenerate, onOpenReport, onRetry, onTab }: {
   project: ProjectSummary;
   runs: RunSummary[];
   findings: ProjectFindings | null;
   skills: ProjectSkillAnalytics | null;
-  topSkills: ProjectSkillAnalytics["skills"];
   latestReport: ProjectReportVersion | null;
   reportCount: number;
   completedRuns: number;
@@ -486,7 +492,11 @@ function Overview({ project, runs, findings, skills, topSkills, latestReport, re
   onRetry: () => void;
   onTab: (tab: WorkspaceTab) => void;
 }) {
-  const maxHits = Math.max(1, ...topSkills.map((entry) => entry.hits));
+  const [skillsExpanded, setSkillsExpanded] = React.useState(false);
+  const skillListId = React.useId();
+  const skillEntries = skills?.skills ?? skills?.top_skills ?? [];
+  const visibleSkills = skillsExpanded ? skillEntries : skillEntries.slice(0, 5);
+  const maxHits = Math.max(1, ...skillEntries.map((entry) => entry.hits));
   const latestStatus = secondaryStatus.reports === "loading"
     ? copy.loading
     : secondaryStatus.reports === "error"
@@ -534,15 +544,21 @@ function Overview({ project, runs, findings, skills, topSkills, latestReport, re
               {secondaryStatus.skills === "ready" && <div className={styles.skillSummary}>
                 <strong>{skills?.totals.total_hits ?? 0}</strong> {copy.hits} · {skills?.totals.distinct_skills ?? 0} {copy.distinct}
               </div>}
-              {topSkills.length === 0 ? <div className={styles.compactEmpty}>{secondaryStatus.skills === "loading" ? copy.loading : secondaryStatus.skills === "error" ? copy.dataUnavailable : copy.noSkills}</div> : (
-                <div className={styles.skillBars}>
-                  {topSkills.slice(0, 5).map((entry) => (
-                    <div key={entry.skill}>
+              {skillEntries.length === 0 ? <div className={styles.compactEmpty}>{secondaryStatus.skills === "loading" ? copy.loading : secondaryStatus.skills === "error" ? copy.dataUnavailable : copy.noSkills}</div> : (
+                <ul id={skillListId} className={`${styles.skillBars} ${skillsExpanded ? styles.skillBarsExpanded : ""}`} aria-label={copy.skillHits} tabIndex={skillsExpanded ? 0 : undefined}>
+                  {visibleSkills.map((entry) => (
+                    <li key={entry.skill}>
                       <div className={styles.skillBarHead}><span className={styles.skillName} title={entry.skill}>{entry.skill}</span><span className={styles.barValue}>{entry.hits} / {entry.runs} {copy.tasks}</span></div>
                       <div className={styles.barTrack}><div className={styles.barFill} style={{ width: `${Math.max(4, (entry.hits / maxHits) * 100)}%` }} /></div>
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ul>
+              )}
+              {skillEntries.length > 5 && (
+                <button type="button" className={styles.skillToggle} aria-expanded={skillsExpanded} aria-controls={skillListId} onClick={() => setSkillsExpanded((expanded) => !expanded)}>
+                  {skillsExpanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+                  {skillsExpanded ? copy.collapseSkills : `${copy.expandSkills} (${skillEntries.length})`}
+                </button>
               )}
             </div>
           </Panel>
@@ -579,7 +595,7 @@ function TaskPanel({ runs, copy, locale, title, onViewAll, projectId }: { runs: 
   const query = filters.query.trim().toLowerCase();
   const filtered = projectId ? runs.filter((run) =>
     (filters.status === "all" || run.status.toLowerCase() === filters.status) &&
-    (!query || `${run.name} ${run.target}`.toLowerCase().includes(query))
+    (!query || `${run.name} ${runTargets(run).join(" ")}`.toLowerCase().includes(query))
   ) : runs;
   const hasFilters = Boolean(query || filters.status !== "all");
   return (
@@ -602,7 +618,7 @@ function TaskPanel({ runs, copy, locale, title, onViewAll, projectId }: { runs: 
         {filtered.map((run) => (
           <Link key={run.name} href={`/run?name=${encodeURIComponent(run.name)}&tab=${run.live ? "conversation" : "report"}`} className={styles.taskRow} aria-label={`${copy.taskReport}: ${run.name}`}>
             <StatusPill status={run.status} live={run.live} label={statusLabel(run.status, locale)} />
-            <span className={styles.taskIdentity}><strong>{run.target || run.name}</strong><span className={styles.taskMeta}>{run.name} · {(run.scan_type || "web").toUpperCase()}</span></span>
+            <span className={styles.taskIdentity}><strong title={runTargets(run).join("\n")}>{runTargetLabel(run)}</strong><span className={styles.taskMeta}>{run.name} · {(run.scan_type || "web").toUpperCase()}</span></span>
             <span className={styles.taskFindingMeta}>
               <span className="mono-chip">{run.vulnerability_count} FND</span>
               {run.internal_finding_count > 0 && <span className="mono-chip">{run.internal_finding_count} INT</span>}

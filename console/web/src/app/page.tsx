@@ -7,6 +7,8 @@ import {
   apiURL,
   del,
   getJSON,
+  runTargetLabel,
+  runTargets,
   type OkResult,
   type RunSummary,
   type RunsPage,
@@ -355,7 +357,7 @@ export default function DashboardPage() {
     if (typeFilter !== "all" && typeOf(r) !== typeFilter) return false;
     if (!q) return true;
     return (
-      (r.target || "").toLowerCase().includes(q) ||
+      runTargets(r).some((target) => target.toLowerCase().includes(q)) ||
       (r.name || "").toLowerCase().includes(q)
     );
   });
@@ -494,7 +496,7 @@ export default function DashboardPage() {
                   >
                     <span className="active-run-signal" aria-hidden="true" />
                     <span className="active-run-identity">
-                      <strong title={run.target || run.name}>{run.target || run.name}</strong>
+                      <strong title={runTargets(run).join("\n") || run.name}>{runTargetLabel(run)}</strong>
                       <span>{run.name} · {runDuration(run, nowMs)}</span>
                     </span>
                     <StatusPill status={pillStatus} label={statusLabel(pillStatus)} live />
@@ -730,7 +732,7 @@ export default function DashboardPage() {
 
                     <div className="run-ledger-identity">
                       <div className="run-ledger-target">
-                        <strong title={run.target || run.name}>{run.target || run.name}</strong>
+                        <strong title={runTargets(run).join("\n") || run.name}>{runTargetLabel(run)}</strong>
                         <Chip
                           tone={
                             type === "internal"

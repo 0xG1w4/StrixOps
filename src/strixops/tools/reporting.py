@@ -2,16 +2,128 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import math
+import re
+from pathlib import PurePosixPath
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
 from strixops.engine.scanconfig import EngineContext
-from strixops.platform import artifacts as artifacts_mod
 from strixops.report.cvss import calculate_cvss, validate_cvss_breakdown
 from strixops.report.dedupe import check_duplicate
-from strixops.report.state import RunState, normalize_severity
+from strixops.report.state import DuplicateDependencyReport, RunState, normalize_severity
+
+
+def _relative_path(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value.strip())
+        and value == value.strip()
+        and not value.startswith(("/", "./"))
+        and "\\" not in value
+        and not re.match(r"^[A-Za-z]:", value)
+        and not any(ord(c) < 32 for c in value)
+        and not any(part in {".", ".."} for part in value.split("/"))
+        and not PurePosixPath(value).is_absolute()
+    )
+
+
+def _validate_rich_fields(report: dict[str, Any]) -> list[str]:
+    """Validate optional structured evidence without changing legacy required args."""
+    errors: list[str] = []
+    if not str(report.get("title") or "").strip():
+        errors.append("title must be non-empty")
+    effort = str(report.get("fix_effort") or "").strip().lower()
+    if effort not in {"trivial", "low", "moderate", "medium", "high"}:
+        errors.append("fix_effort must be trivial|low|moderate|medium|high")
+    confidence = str(report.get("confidence") or "").strip().lower()
+    rationale = str(report.get("confidence_rationale") or "").strip()
+    if confidence in {"medium", "low"} and (not rationale or rationale.lower() == confidence):
+        errors.append("confidence_rationale must name the evidence gap for medium/low confidence")
+    if report.get("finding_class", "dynamic") not in {"dynamic", "dependency_cve"}:
+        errors.append("finding_class must be dynamic|dependency_cve")
+    locations = report.get("code_locations") or []
+    if not isinstance(locations, list):
+        return errors + ["code_locations must be an array"]
+    actionable = False
+    for index, loc in enumerate(locations):
+        prefix = f"code_locations[{index}]"
+        if not isinstance(loc, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        allowed = {"file", "start_line", "end_line", "snippet", "label", "fix_before", "fix_after"}
+        if set(loc) - allowed:
+            errors.append(f"{prefix} has unsupported fields: {sorted(set(loc) - allowed)}")
+        if not _relative_path(loc.get("file")):
+            errors.append(f"{prefix}.file must be a repository-relative path without '.' or '..'")
+        start, end = loc.get("start_line"), loc.get("end_line")
+        valid_span = type(start) is int and type(end) is int and start > 0 and end >= start
+        if not valid_span:
+            errors.append(f"{prefix} requires positive start_line and end_line >= start_line")
+        for name in ("snippet", "label", "fix_before", "fix_after"):
+            if name in loc and not isinstance(loc[name], str):
+                errors.append(f"{prefix}.{name} must be a string")
+        if ("fix_before" in loc) != ("fix_after" in loc):
+            errors.append(f"{prefix} requires both fix_before and fix_after")
+        if "fix_after" in loc:
+            actionable = True
+            before = loc.get("fix_before")
+            if not isinstance(before, str) or not before:
+                errors.append(f"{prefix}.fix_before must contain the original source block")
+            elif valid_span and len(before.splitlines()) != end - start + 1:
+                errors.append(f"{prefix}.fix_before line count must match start_line..end_line")
+    if actionable and not str(report.get("fix_verification") or "").strip():
+        errors.append("fix_verification is required for actionable code_locations")
+    metadata = report.get("dependency_metadata")
+    if metadata is not None:
+        allowed = {
+            "package_name",
+            "installed_version",
+            "package_ecosystem",
+            "manifest_path",
+            "fixed_version",
+            "introduced_by",
+            "dependency_path",
+            "reachability",
+            "reachability_evidence",
+            "advisory_cvss",
+            "contextual_cvss_breakdown",
+            "contextual_cvss_score",
+            "contextual_cvss_vector",
+            "contextual_cvss_reasoning",
+        }
+        if not isinstance(metadata, dict):
+            errors.append("dependency_metadata must be an object")
+        else:
+            if set(metadata) - allowed:
+                errors.append("dependency_metadata contains unsupported fields")
+            for name in ("package_name", "installed_version"):
+                if not isinstance(metadata.get(name), str) or not metadata[name].strip():
+                    errors.append(f"dependency_metadata.{name} must be non-empty")
+            for name, value in metadata.items():
+                if name in {"advisory_cvss", "contextual_cvss_breakdown", "contextual_cvss_score"}:
+                    continue
+                if not isinstance(value, str) or not value.strip():
+                    errors.append(f"dependency_metadata.{name} must be a non-empty string")
+            if "manifest_path" in metadata and not _relative_path(metadata["manifest_path"]):
+                errors.append("dependency_metadata.manifest_path must be repository-relative")
+            reachability = metadata.get("reachability")
+            if reachability is not None:
+                if reachability not in {
+                    "unknown",
+                    "not_imported",
+                    "imported",
+                    "vulnerable_symbol_used",
+                    "reachable_call_path",
+                    "confirmed_exploitable",
+                }:
+                    errors.append("dependency_metadata.reachability is invalid")
+                elif reachability != "unknown" and not metadata.get("reachability_evidence"):
+                    errors.append("reachability_evidence is required when reachability is assessed")
+    return errors
 
 
 @function_tool(strict_mode=False)
@@ -36,6 +148,10 @@ async def create_vulnerability_report(
     method: str = "",
     cve: str = "",
     cwe: str = "",
+    confidence_rationale: str = "",
+    code_locations: list[dict[str, Any]] | None = None,
+    fix_verification: str = "",
+    fix_pr_body: str = "",
 ) -> str:
     """File a validated vulnerability report. The ONLY way to record a web finding.
 
@@ -80,6 +196,12 @@ async def create_vulnerability_report(
         method: HTTP method for the affected endpoint.
         cve: CVE identifier, if this finding maps to one.
         cwe: CWE identifier, if applicable.
+        confidence_rationale: Evidence gap or explanation of confidence; required for medium/low.
+        code_locations: Repository-relative file/start_line/end_line objects, optionally
+            snippet/label and paired fix_before/fix_after blocks. Line counts must match.
+        fix_verification: Verification of security closure and preserved behavior;
+            required for suggested fixes. State what was tested and what remains untested.
+        fix_pr_body: Optional reviewer-facing explanation of the proposed fix.
     """
     run_state: RunState = ctx.context.run_state  # type: ignore[assignment]
     errors = validate_cvss_breakdown(cvss_breakdown)
@@ -103,14 +225,22 @@ async def create_vulnerability_report(
         "assumptions": assumptions,
         "counterevidence": counterevidence,
         "confidence": confidence,
-        "confidence_rationale": confidence,
+        "confidence_rationale": confidence_rationale.strip() or confidence,
         "severity_change_conditions": severity_change_conditions,
         "fix_effort": fix_effort,
         "severity": severity,
         "cvss_breakdown": cvss_breakdown,
         "cvss": score,
         "cvss_vector": vector,
+        "finding_class": "dynamic",
     }
+    for key, value in (
+        ("code_locations", code_locations),
+        ("fix_verification", fix_verification),
+        ("fix_pr_body", fix_pr_body),
+    ):
+        if value:
+            report[key] = copy.deepcopy(value)
     if endpoint:
         report["endpoint"] = endpoint
     if method:
@@ -119,6 +249,25 @@ async def create_vulnerability_report(
         report["cve"] = cve
     if cwe:
         report["cwe"] = cwe
+
+    errors = _validate_rich_fields(report)
+    for key in (
+        "description",
+        "impact",
+        "target",
+        "technical_analysis",
+        "poc_description",
+        "poc_script_code",
+        "remediation_steps",
+        "evidence",
+        "counterevidence",
+        "confidence",
+        "severity_change_conditions",
+    ):
+        if not str(report.get(key) or "").strip():
+            errors.append(f"{key} must be non-empty for a validated dynamic finding")
+    if errors:
+        return json.dumps({"success": False, "error": "Validation failed", "errors": errors})
 
     services = ctx.context.services
     model_for = services.model_for if services is not None else None
@@ -138,7 +287,7 @@ async def create_vulnerability_report(
             "method",
         )
     }
-    existing = list(run_state.reports)
+    existing = [r for r in run_state.read_reports() if r.get("finding_class", "dynamic") == "dynamic"]
     dedupe = await check_duplicate(
         candidate,
         existing,
@@ -210,6 +359,14 @@ async def update_vulnerability_report(
     method: str | None = None,
     cve: str | None = None,
     cwe: str | None = None,
+    assumptions: str | None = None,
+    confidence_rationale: str | None = None,
+    code_locations: list[dict[str, Any]] | None = None,
+    fix_verification: str | None = None,
+    fix_pr_body: str | None = None,
+    contextual_cvss_reasoning: str | None = None,
+    reachability: str | None = None,
+    reachability_evidence: str | None = None,
 ) -> str:
     """Revise a vulnerability report that is already filed, keeping its id.
 
@@ -246,12 +403,24 @@ async def update_vulnerability_report(
         method: New HTTP method (optional).
         cve: New CVE id (optional).
         cwe: New CWE id (optional).
+        assumptions: Updated assumptions or uncertainty.
+        confidence_rationale: Explanation of confidence and any missing evidence.
+        code_locations: Replacement list of relative file/start_line/end_line locations,
+            optionally paired fix_before/fix_after blocks. New fixes require fresh verification.
+        fix_verification: Verification of security closure and preserved behavior.
+        fix_pr_body: Reviewer-facing fix explanation.
+        contextual_cvss_reasoning: Dependency findings only: fresh evidence explaining a revised
+            cvss_breakdown. Required when changing the contextual rating; preserves advisory_cvss.
+        reachability: Dependency findings only: updated usage evidence level.
+        reachability_evidence: Fresh evidence for a changed reachability assessment.
     """
     run_state: RunState = ctx.context.run_state  # type: ignore[assignment]
 
-    report = next((r for r in run_state.reports if r.get("id") == report_id), None)
+    report = next((r for r in run_state.read_reports() if r.get("id") == report_id), None)
     if report is None:
         return json.dumps({"success": False, "error": f"Report {report_id} not found"})
+    if not update_reason.strip():
+        return json.dumps({"success": False, "error": "update_reason must be non-empty"})
 
     # Build the update: only replace non-None fields
     updates: dict = {}
@@ -267,13 +436,23 @@ async def update_vulnerability_report(
         "evidence": evidence,
         "counterevidence": counterevidence,
         "confidence": confidence,
-        "confidence_rationale": confidence,
+        "assumptions": assumptions,
+        "confidence_rationale": (
+            confidence_rationale
+            if confidence_rationale is not None
+            else confidence
+            if confidence is not None
+            else None
+        ),
         "severity_change_conditions": severity_change_conditions,
         "fix_effort": fix_effort,
         "endpoint": endpoint,
         "method": method,
         "cve": cve,
         "cwe": cwe,
+        "code_locations": code_locations,
+        "fix_verification": fix_verification,
+        "fix_pr_body": fix_pr_body,
     }
     for field_name, value in field_map.items():
         if value is not None:
@@ -295,28 +474,94 @@ async def update_vulnerability_report(
             cvss_vector=vector,
         )
 
-    if not updates:
+    errors: list[str] = []
+    if report.get("finding_class") == "dependency_cve":
+        if any(key in updates for key in ("target", "cve")):
+            errors.append(
+                "Dependency target and CVE identity are immutable; file distinct findings separately"
+            )
+        metadata = copy.deepcopy(report.get("dependency_metadata") or {})
+        if cvss_breakdown is not None:
+            if not str(contextual_cvss_reasoning or "").strip():
+                errors.append("Dependency rating revisions require fresh contextual_cvss_reasoning")
+            else:
+                metadata.update(
+                    contextual_cvss_breakdown=dict(cvss_breakdown),
+                    contextual_cvss_score=updates["cvss"],
+                    contextual_cvss_vector=updates["cvss_vector"],
+                    contextual_cvss_reasoning=contextual_cvss_reasoning,
+                )
+        elif contextual_cvss_reasoning is not None:
+            if not contextual_cvss_reasoning.strip():
+                errors.append("contextual_cvss_reasoning cannot be cleared")
+            else:
+                metadata["contextual_cvss_reasoning"] = contextual_cvss_reasoning
+        if reachability is not None:
+            if reachability not in {
+                "unknown",
+                "not_imported",
+                "imported",
+                "vulnerable_symbol_used",
+                "reachable_call_path",
+            }:
+                errors.append("reachability is not a supported evidence level")
+            if not str(reachability_evidence or "").strip():
+                errors.append("A changed reachability requires fresh reachability_evidence")
+            metadata["reachability"] = reachability
+        if reachability_evidence is not None:
+            if not reachability_evidence.strip():
+                errors.append("reachability_evidence cannot be cleared")
+            metadata["reachability_evidence"] = reachability_evidence
+        if metadata != report.get("dependency_metadata"):
+            updates["dependency_metadata"] = metadata
+        if any(key in updates for key in ("poc_description", "poc_script_code", "code_locations")):
+            errors.append("Dependency findings do not accept dynamic PoC or code fix fields")
+    elif any(
+        key in updates and not str(updates[key]).strip()
+        for key in (
+            "title",
+            "description",
+            "impact",
+            "target",
+            "technical_analysis",
+            "poc_description",
+            "poc_script_code",
+            "remediation_steps",
+            "evidence",
+            "counterevidence",
+            "confidence",
+            "severity_change_conditions",
+        )
+    ):
+        errors.append("Required dynamic finding fields cannot be cleared")
+    if report.get("finding_class", "dynamic") == "dynamic" and any(
+        value is not None for value in (contextual_cvss_reasoning, reachability, reachability_evidence)
+    ):
+        errors.append("Contextual dependency metadata is only accepted for dependency findings")
+    if not updates and not errors:
         return json.dumps({"success": False, "error": "No fields to update"})
-
-    # Record update history
-    history = report.get("update_history", [])
-    changed_fields = list(updates.keys())
-    old_values = {k: report.get(k) for k in changed_fields}
-    history.append(
-        {
-            "reason": update_reason,
-            "fields": changed_fields,
-            "dropped_fields": [],
-            "agent_id": ctx.context.agent_id,
-            "previous": old_values,
-        }
-    )
-    updates["update_history"] = history
-    updates["updated_at"] = artifacts_mod.utc_stamp()
-
-    # Apply
-    report.update(updates)
-    run_state.save()
+    errors.extend(_validate_rich_fields({**report, **updates}))
+    if (
+        code_locations is not None
+        and code_locations != report.get("code_locations")
+        and any("fix_after" in loc for loc in code_locations if isinstance(loc, dict))
+        and not str(fix_verification or "").strip()
+    ):
+        errors.append("A revised fix requires fresh fix_verification")
+    if errors:
+        return json.dumps({"success": False, "error": "Validation failed", "errors": errors})
+    changed_fields = list(updates)
+    try:
+        report = run_state.revise_vulnerability_report(
+            report_id,
+            updates,
+            reason=update_reason,
+            agent_id=ctx.context.agent_id,
+            agent_name=ctx.context.agent_name,
+            validate=_validate_rich_fields,
+        )
+    except ValueError as exc:
+        return json.dumps({"success": False, "error": str(exc)})
 
     return json.dumps(
         {
@@ -327,6 +572,250 @@ async def update_vulnerability_report(
             "cvss_score": report.get("cvss"),
         }
     )
+
+
+@function_tool(strict_mode=False)
+def create_dependency_report(
+    ctx: RunContextWrapper[EngineContext],
+    title: str,
+    description: str,
+    target: str,
+    cve: str,
+    package_name: str,
+    installed_version: str,
+    advisory_cvss: float,
+    impact: str,
+    remediation_steps: str,
+    assumptions: str,
+    package_ecosystem: str,
+    manifest_path: str,
+    technical_analysis: str,
+    reachability_evidence: str,
+    contextual_cvss_breakdown: dict[str, str],
+    contextual_cvss_reasoning: str,
+    fixed_version: str = "",
+    cwe: str = "",
+    fix_effort: str = "low",
+    introduced_by: str = "",
+    dependency_path: str = "",
+    reachability: str = "unknown",
+) -> str:
+    """File a verified known-CVE dependency finding without inventing a dynamic PoC.
+
+    Verify a published advisory matches the installed version at the exact
+    manifest. Cite advisory and installed-version evidence in description and
+    technical_analysis. Reachability changes prioritization, not the published
+    score. The contextual rating must follow the observed deployment and trace;
+    uncertainty is not a reason to invent a lower score. An independently
+    reproduced exploit is a separate dynamic report. Duplicates are identified
+    by target, CVE, package, ecosystem and manifest, not title alone.
+
+    Args:
+        title: Specific CVE/package finding title.
+        description: Advisory reference, affected version and observed installed-version proof.
+        target: In-scope repository or application.
+        cve: Verified CVE-YYYY-NNNN identifier, not a GHSA-only identifier.
+        package_name: Exact affected package name.
+        installed_version: Version verified in the manifest/lockfile or installed inventory.
+        advisory_cvss: Published advisory base score, finite and between 0 and 10.
+        impact: Documented consequence in this application context.
+        remediation_steps: Upgrade or mitigation instructions.
+        assumptions: Uncertainty and unverified conditions.
+        package_ecosystem: Normalized ecosystem such as npm, pypi, maven, go or cargo.
+        manifest_path: Repository-relative observed manifest or lockfile path.
+        technical_analysis: Advisory mechanism and concrete manifest/scanner evidence.
+        reachability_evidence: Observed usage and source-to-sink trace, or searches and gaps.
+        contextual_cvss_breakdown: All eight canonical CVSS 3.1 metrics, rated from evidence.
+        contextual_cvss_reasoning: Explain metrics using observed call sites and trust boundaries;
+            retain the advisory reference and explicitly name unknowns.
+        fixed_version: Fixed version if published, otherwise empty.
+        cwe: Advisory CWE identifier when known.
+        fix_effort: trivial/low/moderate/medium/high.
+        introduced_by: Direct dependency introducing a transitive package.
+        dependency_path: Observed dependency chain.
+        reachability: unknown/not_imported/imported/vulnerable_symbol_used/reachable_call_path.
+    """
+    required = {
+        "title": title,
+        "description": description,
+        "target": target,
+        "package_name": package_name,
+        "installed_version": installed_version,
+        "impact": impact,
+        "remediation_steps": remediation_steps,
+        "package_ecosystem": package_ecosystem,
+        "manifest_path": manifest_path,
+        "technical_analysis": technical_analysis,
+        "reachability_evidence": reachability_evidence,
+        "contextual_cvss_reasoning": contextual_cvss_reasoning,
+    }
+    errors = [f"{key} must be non-empty" for key, value in required.items() if not value.strip()]
+    cve = cve.strip().upper()
+    if not re.fullmatch(r"CVE-\d{4}-\d{4,}", cve):
+        errors.append("cve must be a verified CVE-YYYY-NNNN identifier")
+    if not math.isfinite(advisory_cvss) or not 0 <= advisory_cvss <= 10:
+        errors.append("advisory_cvss must be a finite published score between 0 and 10")
+    if not _relative_path(manifest_path):
+        errors.append("manifest_path must be repository-relative without '.' or '..'")
+    ecosystem = package_ecosystem.strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_.-]*", ecosystem):
+        errors.append("package_ecosystem must be a normalized ecosystem identifier")
+    reachability = reachability.strip().lower()
+    if reachability not in {
+        "unknown",
+        "not_imported",
+        "imported",
+        "vulnerable_symbol_used",
+        "reachable_call_path",
+    }:
+        errors.append("reachability is not a supported evidence level")
+    if cwe and not re.fullmatch(r"CWE-\d+", cwe.strip().upper()):
+        errors.append("cwe must use CWE-NNN format")
+    errors.extend(validate_cvss_breakdown(contextual_cvss_breakdown))
+    if errors:
+        return json.dumps({"success": False, "error": "Validation failed", "errors": errors})
+    score, severity, vector = calculate_cvss(contextual_cvss_breakdown)
+    metadata = {
+        "package_name": package_name.strip(),
+        "installed_version": installed_version.strip(),
+        "package_ecosystem": ecosystem,
+        "manifest_path": manifest_path,
+        "advisory_cvss": advisory_cvss,
+        "reachability": reachability,
+        "reachability_evidence": reachability_evidence,
+        "contextual_cvss_breakdown": dict(contextual_cvss_breakdown),
+        "contextual_cvss_score": score,
+        "contextual_cvss_vector": vector,
+        "contextual_cvss_reasoning": contextual_cvss_reasoning,
+    }
+    for key, value in (
+        ("fixed_version", fixed_version),
+        ("introduced_by", introduced_by),
+        ("dependency_path", dependency_path),
+    ):
+        if value.strip():
+            metadata[key] = value.strip()
+    report: dict[str, Any] = {
+        "title": title.strip(),
+        "description": description,
+        "target": target.strip(),
+        "cve": cve,
+        "impact": impact,
+        "technical_analysis": technical_analysis,
+        "remediation_steps": remediation_steps,
+        "assumptions": assumptions,
+        "fix_effort": fix_effort,
+        "finding_class": "dependency_cve",
+        "dependency_metadata": metadata,
+        "cvss_breakdown": dict(contextual_cvss_breakdown),
+        "cvss": score,
+        "cvss_vector": vector,
+        "severity": severity,
+    }
+    if cwe:
+        report["cwe"] = cwe.strip().upper()
+    errors = _validate_rich_fields(report)
+    if errors:
+        return json.dumps({"success": False, "error": "Validation failed", "errors": errors})
+    try:
+        saved = ctx.context.run_state.add_vulnerability_report(
+            report,
+            agent_id=ctx.context.agent_id,
+            agent_name=ctx.context.agent_name,
+        )
+    except DuplicateDependencyReport as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "is_duplicate": True,
+                "duplicate_id": exc.report_id,
+                "error": "This dependency/CVE/manifest already exists; review the existing report.",
+            }
+        )
+    return json.dumps(
+        {
+            "success": True,
+            "report_id": saved["id"],
+            "severity": severity,
+            "cvss_score": score,
+            "finding_class": "dependency_cve",
+        }
+    )
+
+
+@function_tool(strict_mode=False)
+def list_reports(
+    ctx: RunContextWrapper[EngineContext],
+    severity: str | None = None,
+    finding_class: str | None = None,
+    target: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> str:
+    """Read a bounded index of this run's shared findings; use get_report for full details.
+
+    Args:
+        severity: Optional critical/high/medium/low/info filter.
+        finding_class: Optional dynamic/dependency_cve filter.
+        target: Optional case-insensitive target substring.
+        limit: Page size from 1 to 100.
+        offset: Nonnegative pagination offset.
+    """
+    if not 1 <= limit <= 100 or offset < 0:
+        return json.dumps({"success": False, "error": "limit must be 1..100 and offset nonnegative"})
+    if severity is not None:
+        try:
+            severity = normalize_severity(severity)
+        except ValueError as exc:
+            return json.dumps({"success": False, "error": str(exc)})
+    if finding_class is not None and finding_class not in {"dynamic", "dependency_cve"}:
+        return json.dumps({"success": False, "error": "finding_class must be dynamic|dependency_cve"})
+    reports = [
+        r
+        for r in ctx.context.run_state.read_reports()
+        if (not severity or r.get("severity") == severity)
+        and (not finding_class or r.get("finding_class", "dynamic") == finding_class)
+        and (not target or target.casefold() in str(r.get("target", "")).casefold())
+    ]
+    fields = (
+        "id",
+        "title",
+        "target",
+        "endpoint",
+        "method",
+        "severity",
+        "cvss",
+        "confidence",
+        "finding_class",
+        "cve",
+        "cwe",
+        "agent_id",
+        "agent_name",
+        "updated_at",
+        "dependency_metadata",
+    )
+    return json.dumps(
+        {
+            "success": True,
+            "total": len(reports),
+            "offset": offset,
+            "reports": [{k: r[k] for k in fields if k in r} for r in reports[offset : offset + limit]],
+        },
+        ensure_ascii=False,
+    )
+
+
+@function_tool(strict_mode=False)
+def get_report(ctx: RunContextWrapper[EngineContext], report_id: str) -> str:
+    """Read one complete finding, including evidence, code fixes and attributed revisions.
+
+    Args:
+        report_id: Existing id returned by a reporting tool or list_reports.
+    """
+    report = next((r for r in ctx.context.run_state.read_reports() if r["id"] == report_id), None)
+    if report is None:
+        return json.dumps({"success": False, "error": f"Report {report_id} not found"})
+    return json.dumps({"success": True, "report": report}, ensure_ascii=False)
 
 
 @function_tool(strict_mode=False)

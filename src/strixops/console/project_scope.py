@@ -356,9 +356,12 @@ def _normalize_web_target(value: str) -> tuple[TargetKind, str]:
         except ValueError:
             pass
 
-    parsed: SplitResult = (
-        urlsplit(value) if value.startswith("//") or "://" in value else urlsplit(f"//{value}")
-    )
+    try:
+        parsed: SplitResult = (
+            urlsplit(value) if value.startswith("//") or "://" in value else urlsplit(f"//{value}")
+        )
+    except ValueError as exc:
+        raise TargetValidationError(f"web target has an invalid URL: {exc}") from exc
 
     scheme = parsed.scheme.lower()
     if scheme and scheme not in {"http", "https"}:

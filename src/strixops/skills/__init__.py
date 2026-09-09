@@ -12,6 +12,8 @@ see NOTICE.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +34,10 @@ class _Skill:
     description: str
     path: Path
     aliases: frozenset[str]
+    content: str
+
+
+_FROZEN: ContextVar[tuple[_Skill, ...] | None] = ContextVar("strixops_skill_snapshot", default=None)
 
 
 def _parse_frontmatter(text: str) -> dict:
@@ -55,6 +61,9 @@ def _valid_name(name: str) -> bool:
 
 def _entries() -> list[_Skill]:
     """Private filesystem inventory; tools expose only IDs and descriptions."""
+    frozen = _FROZEN.get()
+    if frozen is not None:
+        return list(frozen)
     root = CONTENT_ROOT.resolve()
     entries: list[_Skill] = []
     for path in sorted(root.rglob("*.md")):
@@ -82,7 +91,7 @@ def _entries() -> list[_Skill]:
         )
         description = meta.get("description", "")
         entries.append(
-            _Skill(canonical_id, description if isinstance(description, str) else "", path, aliases)
+            _Skill(canonical_id, description if isinstance(description, str) else "", path, aliases, text)
         )
     return entries
 
@@ -126,14 +135,40 @@ def resolve_skill_path(name: str) -> Path | None:
 
 
 def load_skill_markdown(name: str) -> str | None:
-    path = resolve_skill_path(name)
-    if path is None:
-        return None
+    entry = _resolve(name)
+    return entry.content if entry is not None else None
+
+
+def snapshot_skills() -> list[dict]:
+    """Capture all lazy-loadable text and aliases for one run."""
+    return [
+        {
+            "id": entry.canonical_id,
+            "description": entry.description,
+            "aliases": sorted(entry.aliases),
+            "content": entry.content,
+        }
+        for entry in _entries()
+    ]
+
+
+@contextmanager
+def use_skill_snapshot(records: list[dict]):
+    entries = tuple(
+        _Skill(
+            row["id"],
+            row["description"],
+            CONTENT_ROOT / (row["id"] + ".md"),
+            frozenset(row["aliases"]),
+            row["content"],
+        )
+        for row in records
+    )
+    token = _FROZEN.set(entries)
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        raise SkillResolutionError(f"Unable to read skill: {name!r}") from exc
-    return text if text.strip() else None
+        yield
+    finally:
+        _FROZEN.reset(token)
 
 
 def default_root_skills(scan_type: str) -> list[str]:
@@ -154,5 +189,5 @@ def default_root_skills(scan_type: str) -> list[str]:
 
 
 def default_child_skills(scan_type: str) -> list[str]:
-    """Internal scope, evidence and completion rules are never optional."""
-    return ["internal/core_contract"] if scan_type == "internal" else []
+    """Every web worker receives the same evidence and tooling foundations."""
+    return ["internal/core_contract"] if scan_type == "internal" else default_root_skills("web")

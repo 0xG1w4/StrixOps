@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   CircleAlert,
@@ -11,6 +12,7 @@ import {
   Cpu,
   Globe,
   History,
+  ListPlus,
   Network,
   Plus,
   Rocket,
@@ -29,6 +31,7 @@ import {
   type ScanLaunched,
 } from "@/lib/api";
 import { EmptyState, Spinner } from "@/components/ui";
+import { MAX_TARGETS, MultiTargetEditor, useMultiTargetCheck } from "@/components/scan/MultiTargetEditor";
 import { Select } from "@/components/Select";
 import { useI18n } from "@/lib/i18n";
 import { INSTRUCTION_KEY, readStorage, writeStorage } from "@/lib/storage";
@@ -86,6 +89,12 @@ const COPY = {
     profileRequired: "选择模型配置后即可启动",
     manageProfiles: "管理模型",
     status: "启动状态",
+    multiTarget: "多目标任务",
+    singleTarget: "返回单目标",
+    singleMode: "单目标任务",
+    multiLaunch: "启动多目标任务",
+    multiReady: "个目标 · 一次任务 · 一份报告",
+    importingTargets: "正在导入目标清单…",
   },
   en: {
     heading: "New task",
@@ -120,6 +129,12 @@ const COPY = {
     profileRequired: "Select a model profile to launch",
     manageProfiles: "Manage models",
     status: "Launch status",
+    multiTarget: "Multi-target task",
+    singleTarget: "Back to single target",
+    singleMode: "Single-target task",
+    multiLaunch: "Launch multi-target task",
+    multiReady: "targets · One task · One report",
+    importingTargets: "Importing target list…",
   },
 };
 
@@ -228,6 +243,10 @@ export default function ScanLauncherPage() {
   const copy = COPY[locale];
   const [mode, setMode] = React.useState<ScanMode>("web");
   const [target, setTarget] = React.useState("");
+  const [multiple, setMultiple] = React.useState(false);
+  const [targetsText, setTargetsText] = React.useState("");
+  const [multiRetry, setMultiRetry] = React.useState(0);
+  const [importingTargets, setImportingTargets] = React.useState(false);
   const [socks5, setSocks5] = React.useState("");
   const [gsocket, setGsocket] = React.useState("");
   const [crypto, setCrypto] = React.useState(false);
@@ -250,12 +269,26 @@ export default function ScanLauncherPage() {
   const [hydrated, setHydrated] = React.useState(false);
   const internal = mode === "internal";
   const trimmedTarget = target.trim();
+  const multiValidation = useMultiTargetCheck({ enabled: multiple, text: targetsText, scanType: mode, projectId, retry: multiRetry });
 
   React.useEffect(() => {
     const saved = readStorage(INSTRUCTION_KEY);
     if (typeof saved === "string" && saved) setInstruction(saved);
-    const requestedProject = new URLSearchParams(window.location.search).get("project_id");
+    const params = new URLSearchParams(window.location.search);
+    const requestedProject = params.get("project_id");
     if (requestedProject) setProjectId(requestedProject);
+    const requestedTarget = params.get("target");
+    if (requestedTarget) setTarget(requestedTarget);
+    const requestedMode = params.get("scan_type");
+    if (requestedMode === "web" || requestedMode === "internal") setMode(requestedMode);
+    try {
+      const requestedTargets: unknown = JSON.parse(params.get("targets") || "null");
+      if (Array.isArray(requestedTargets) && requestedTargets.length >= 2 && requestedTargets.length <= MAX_TARGETS
+        && requestedTargets.every((value) => typeof value === "string" && value.length <= 4096 && !/[\r\n]/.test(value))) {
+        setTargetsText(requestedTargets.join("\n"));
+        setMultiple(true);
+      }
+    } catch { /* An invalid optional URL draft does not change the single-target form. */ }
     setHydrated(true);
   }, []);
 
@@ -353,7 +386,7 @@ export default function ScanLauncherPage() {
     : null;
 
   React.useEffect(() => {
-    if (!projectId || !targetValid) {
+    if (multiple || !projectId || !targetValid) {
       setScopeCheck(null);
       return;
     }
@@ -380,7 +413,7 @@ export default function ScanLauncherPage() {
       }
     }, 350);
     return () => { alive = false; window.clearTimeout(timer); };
-  }, [projectId, mode, trimmedTarget, targetValid, scopeKey]);
+  }, [multiple, projectId, mode, trimmedTarget, targetValid, scopeKey]);
 
   const socksError = validateSocks5(socks5, t);
   const gsocketError = validateGsocket(gsocket, t);
@@ -391,8 +424,10 @@ export default function ScanLauncherPage() {
         : scopeState === "error" ? currentScope?.failure === "missing" ? copy.scopeMissing
           : currentScope?.failure === "invalid" ? copy.scopeInvalid : copy.scopeError : "";
   const blockers = [
-    !targetValid ? targetError || copy.inputRequired : "",
-    projectId && targetValid && scopeState !== "allowed" ? scopeMessage : "",
+    importingTargets ? copy.importingTargets : "",
+    multiple ? !multiValidation.accepted ? multiValidation.message : ""
+      : !targetValid ? targetError || copy.inputRequired : "",
+    !multiple && projectId && targetValid && scopeState !== "allowed" ? scopeMessage : "",
     internal ? bothTransports ? t("scan.route.exclusive") : socksError || gsocketError || "" : "",
     profilesState === "loading" ? copy.modelLoading
       : !effectiveProfile ? copy.profileRequired : "",
@@ -409,7 +444,7 @@ export default function ScanLauncherPage() {
     const socks = socks5.trim();
     try {
       const response = await postJSON<ScanLaunched>("/api/scans", {
-        target: trimmedTarget,
+        ...(multiple ? { targets: multiValidation.targets } : { target: trimmedTarget }),
         scan_type: mode,
         crypto: internal && crypto,
         socks5: internal && socks
@@ -430,6 +465,7 @@ export default function ScanLauncherPage() {
       // A project may have changed while the form was open. Refresh the
       // displayed verdict after rejection; launch remains server-validated.
       if (projectId) setScopeRetry((value) => value + 1);
+      if (multiple) setMultiRetry((value) => value + 1);
     }
   };
 
@@ -452,7 +488,7 @@ export default function ScanLauncherPage() {
         </span>
       </header>
 
-      <section className={styles.launchPanel} aria-label={copy.setup}>
+      <section className={cn(styles.launchPanel, multiple && styles.multiPanel)} aria-label={copy.setup}>
         <div className={styles.setupRow}>
           <div className={styles.projectField}>
             <label htmlFor="scan-project">{t("scan.project")}</label>
@@ -495,6 +531,43 @@ export default function ScanLauncherPage() {
         </div>
 
         <div className={styles.targetSection}>
+          <div className={styles.targetModeBar}>
+            <span className={cn(styles.targetModeName, multiple && styles.multiModeName)}>
+              {multiple ? <ListPlus size={16} aria-hidden="true" /> : <Terminal size={15} aria-hidden="true" />}
+              {multiple ? copy.multiTarget : copy.singleMode}
+            </span>
+            <button
+              type="button"
+              className={styles.targetModeButton}
+              disabled={busy}
+              aria-pressed={multiple}
+              onClick={() => {
+                if (!multiple && !targetsText && trimmedTarget) setTargetsText(trimmedTarget);
+                if (!multiple) setMultiRetry((value) => value + 1);
+                setMultiple((value) => !value);
+                setLaunchError("");
+                if (multiple) window.requestAnimationFrame(() => document.getElementById("scan-target")?.focus());
+              }}
+            >
+              {multiple ? <ArrowLeft size={14} aria-hidden="true" /> : <ListPlus size={14} aria-hidden="true" />}
+              {multiple ? copy.singleTarget : copy.multiTarget}
+            </button>
+          </div>
+          {multiple ? (
+            <>
+              {projectId && <div className={styles.multiScopeLink}><Link className={styles.textLink} href={`/projects/detail?id=${encodeURIComponent(projectId)}&tab=scope`}>{copy.scopeSettings} ↗</Link></div>}
+              <MultiTargetEditor
+                text={targetsText}
+                onChange={(value) => { setTargetsText(value); setLaunchError(""); }}
+                internal={internal}
+                projectId={projectId}
+                disabled={busy}
+                validation={multiValidation}
+                onRetry={() => setMultiRetry((value) => value + 1)}
+                onImportingChange={setImportingTargets}
+              />
+            </>
+          ) : <>
           <div className={styles.targetLabel}>
             <label htmlFor="scan-target">{t(internal ? "scan.target.scope" : "scan.target.url")}</label>
             {projectId && (
@@ -558,6 +631,7 @@ export default function ScanLauncherPage() {
               ))}
             </div>
           </details>
+          </>}
         </div>
 
         <div className={styles.launchFooter}>
@@ -582,13 +656,13 @@ export default function ScanLauncherPage() {
               onClick={() => void launch()}
             >
               {busy ? <Spinner /> : <Rocket size={16} aria-hidden="true" />}
-              {t(busy ? "scan.launching" : "scan.launch")}
+              {busy ? t("scan.launching") : multiple ? copy.multiLaunch : t("scan.launch")}
             </button>
           </div>
         </div>
         <div className={styles.preflight} role="status" aria-label={copy.status}>
           {canLaunch
-            ? <><CircleCheck size={14} className={styles.success} aria-hidden="true" /><span>{t("scan.launch.ready")}</span></>
+            ? <><CircleCheck size={14} className={styles.success} aria-hidden="true" /><span>{multiple ? `${multiValidation.targets.length} ${copy.multiReady}` : t("scan.launch.ready")}</span></>
             : <><span className={styles.statusDot} aria-hidden="true" /><span>{blockers.slice(0, 2).join(" · ")}</span></>}
         </div>
         {launchError && (

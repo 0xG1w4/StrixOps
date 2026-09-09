@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { Chip, ConfirmButton, EmptyState, StatusPill } from "@/components/ui";
 import AgentsPanel from "@/components/AgentsPanel";
+import AssessmentPanel from "@/components/AssessmentPanel";
 import ArtifactsBrowser from "@/components/ArtifactsBrowser";
 import EvidencePanel from "@/components/EvidencePanel";
 import ConversationView from "@/components/ConversationView";
@@ -34,7 +35,8 @@ import HintsPanel from "@/components/HintsPanel";
 import ProxyStatusPanel from "@/components/ProxyStatusPanel";
 import ReportPanel from "@/components/ReportPanel";
 import RerunDialog from "@/components/RerunDialog";
-import { apiURL, getJSON, postJSON, del } from "@/lib/api";
+import RunTargetList from "@/components/RunTargetList";
+import { apiURL, getJSON, postJSON, del, runTargetLabel, runTargets } from "@/lib/api";
 import type { Health, LogPage, RunDetail } from "@/lib/api";
 import { fmtDuration, fmtTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
@@ -56,7 +58,7 @@ const TERMINAL_STATUSES = new Set([
   "crashed",
 ]);
 
-type TabKey = "conversation" | "agents" | "findings" | "evidence" | "report" | "hints" | "artifacts";
+type TabKey = "conversation" | "agents" | "findings" | "evidence" | "assessment" | "report" | "hints" | "artifacts";
 
 const FAILED_STATUSES = new Set(["failed", "crashed"]);
 
@@ -166,6 +168,7 @@ const TAB_KEYS: readonly TabKey[] = [
   "agents",
   "findings",
   "evidence",
+  "assessment",
   "report",
   "hints",
   "artifacts",
@@ -383,6 +386,7 @@ function Cockpit() {
     { key: "agents", label: t("run.tab.agents"), count: agents },
     { key: "findings", label: t("run.tab.findings"), count: findingsTotal },
     { key: "evidence", label: t("run.tab.evidence") },
+    { key: "assessment", label: locale === "en" ? "Assessment" : "评估" },
     { key: "report", label: t("run.tab.report") },
     { key: "hints", label: t("run.tab.hints"), count: hintsTotal },
     { key: "artifacts", label: t("run.tab.artifacts") },
@@ -410,6 +414,8 @@ function Cockpit() {
         return <FindingsPanel name={name} run={run} />;
       case "evidence":
         return <EvidencePanel name={name} run={run} />;
+      case "assessment":
+        return <AssessmentPanel key={name} name={name} run={run} />;
       case "report":
         return <ReportPanel name={name} run={run} />;
       case "hints":
@@ -444,9 +450,17 @@ function Cockpit() {
                 {t("run.backToRuns")}
               </Link>
             </div>
-            <h1 className="page-title truncate" title={run.target || name}>
-              {run.target || name}
+            <h1 className="page-title truncate" title={runTargets(run).join("\n") || name}>
+              {runTargetLabel(run)}
             </h1>
+            <RunTargetList targets={runTargets(run)} />
+            {run.target_error && (
+              <p className="alert-warning mt-3" role="alert">
+                {locale === "zh-CN"
+                  ? "任务的完整目标范围记录无法读取，请检查 run.json。"
+                  : "The task's complete target scope could not be read. Check run.json."}
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <StatusPill status={live ? "live" : status} label={displayStatus(live ? "live" : status)} live={live} />
               {stale && <StatusPill status="stale" label={displayStatus("stale")} />}
@@ -725,7 +739,10 @@ function Cockpit() {
         <RerunDialog
           run={run}
           onCancel={() => setRerunOpen(false)}
-          onLaunched={(runName) => router.push(`/run?name=${encodeURIComponent(runName)}`)}
+          onLaunched={(runName) => {
+            setRerunOpen(false);
+            router.push(`/run?name=${encodeURIComponent(runName)}`);
+          }}
         />
       )}
     </div>

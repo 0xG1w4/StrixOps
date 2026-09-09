@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, FileText, FolderOpen } from "lucide-react";
 import { Chip, EmptyState, SeverityChip, StatusPill } from "@/components/ui";
-import type { ProjectSummary, RunSummary } from "@/lib/api";
+import { runTargetLabel, runTargets, type ProjectSummary, type RunSummary } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
 
@@ -53,7 +53,7 @@ function countSeverity(run: RunSummary, severity: string): number {
 }
 
 function matchesRun(run: RunSummary, query: string): boolean {
-  return [run.name, run.target, run.scan_type, run.status]
+  return [run.name, ...runTargets(run), run.scan_type, run.status]
     .some((value) => (value || "").toLowerCase().includes(query));
 }
 
@@ -211,7 +211,7 @@ export default function ProjectRunDirectory({
                         <Link
                           href={`/run?name=${encodeURIComponent(run.name)}&tab=report`}
                           className="project-task-main"
-                          aria-label={t("projects.openTaskReport", { name: run.target || run.name })}
+                          aria-label={t("projects.openTaskReport", { name: runTargetLabel(run) })}
                         >
                           <span className={`project-task-signal ${run.live ? "is-live" : ""}`} aria-hidden="true" />
                           <span className="project-task-status">
@@ -222,7 +222,7 @@ export default function ProjectRunDirectory({
                             />
                           </span>
                           <span className="project-task-identity">
-                            <strong>{run.target || run.name}</strong>
+                            <strong title={runTargets(run).join("\n")}>{runTargetLabel(run)}</strong>
                             <span>
                               <b>[RUN]</b>
                               {run.scan_type || "web"} · {run.name} · {run.start_time ? relTime(run.start_time, locale) : "—"}
@@ -255,7 +255,7 @@ export default function ProjectRunDirectory({
                         <Link
                           href={`/run?name=${encodeURIComponent(run.name)}&tab=artifacts`}
                           className="project-task-artifacts"
-                          aria-label={t("projects.openTaskArtifacts", { name: run.target || run.name })}
+                          aria-label={t("projects.openTaskArtifacts", { name: runTargetLabel(run) })}
                           title={t("run.tab.artifacts")}
                         >
                           <FolderOpen className="h-3.5 w-3.5" />

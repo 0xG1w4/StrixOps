@@ -141,16 +141,21 @@ def _record_snapshot(record: Mapping[str, Any]) -> dict[str, Any]:
     scan_results = record.get("scan_results")
     if not isinstance(scan_results, Mapping):
         scan_results = {}
+    targets = parser.scan_targets(dict(scan_config))
+    scope = {
+        "target": str(scan_config.get("target") or ""),
+        "scan_type": str(scan_config.get("scan_type") or ""),
+        "project_id": str(scan_config.get("project_id") or ""),
+    }
+    # Retain legacy single-run hashes; a multi-run snapshot binds every target.
+    if "targets" in scan_config:
+        scope.update(targets=targets, target_count=len(targets))
     return {
         "status": str(record.get("status") or "unknown"),
         "start_time": str(record.get("start_time") or ""),
         "end_time": str(record.get("end_time") or ""),
         "duration_seconds": int(record.get("duration_seconds") or 0),
-        "scan_config": {
-            "target": str(scan_config.get("target") or ""),
-            "scan_type": str(scan_config.get("scan_type") or ""),
-            "project_id": str(scan_config.get("project_id") or ""),
-        },
+        "scan_config": scope,
         "scan_results": _json_safe(dict(scan_results)),
     }
 
@@ -174,7 +179,11 @@ def _collect_sources(
             excluded.append({"run": run_dir.name, "reason": "missing_final_report"})
             continue
 
-        record_input = _record_snapshot(record)
+        try:
+            record_input = _record_snapshot(record)
+        except ValueError:
+            excluded.append({"run": run_dir.name, "reason": "invalid_target_scope"})
+            continue
         findings = parser.parse_findings(run_dir)
         input_value = {
             "run": run_dir.name,
@@ -206,6 +215,9 @@ def _collect_sources(
             "_vulnerabilities": vulnerabilities,
             "_internal": internal,
         }
+        if "targets" in record_input["scan_config"]:
+            source["targets"] = record_input["scan_config"]["targets"]
+            source["target_count"] = record_input["scan_config"]["target_count"]
         sources.append(source)
 
     sources.sort(key=lambda item: (str(item["start_time"]), str(item["run"])))
@@ -234,6 +246,10 @@ def _inline(value: Any) -> str:
     return " ".join(str(value or "").replace("\x00", "").split()) or "—"
 
 
+def _source_target_label(source: Mapping[str, Any]) -> str:
+    return ", ".join(_inline(target) for target in parser.scan_targets(dict(source))) or "—"
+
+
 def _table(value: Any) -> str:
     return _inline(value).replace("|", "\\|")
 
@@ -243,6 +259,26 @@ def _severity(value: Any) -> str:
     return severity if severity in _SEVERITY_ORDER else "info"
 
 
+def _dependency_identity(finding: Mapping[str, Any]) -> dict[str, str]:
+    metadata = finding.get("dependency_metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    return {
+        key: str(metadata[key]).strip()
+        for key in ("package_name", "package_ecosystem", "manifest_path")
+        if metadata.get(key) and str(metadata[key]).strip()
+    }
+
+
+def _finding_class(finding: Mapping[str, Any]) -> str:
+    declared = str(finding.get("finding_class") or "").strip().lower()
+    if declared:
+        return declared
+    # Older dependency reports predate the explicit finding_class field.
+    metadata = finding.get("dependency_metadata")
+    return "dependency_cve" if isinstance(metadata, Mapping) and metadata else "dynamic"
+
+
 def _finding_key(finding: Mapping[str, Any], default_target: str) -> str:
     target = _inline(finding.get("target") or default_target).lower()
     endpoint = _inline(finding.get("endpoint") or "").lower()
@@ -250,17 +286,37 @@ def _finding_key(finding: Mapping[str, Any], default_target: str) -> str:
     cwe = _inline(finding.get("cwe") or "").lower()
     title = _inline(finding.get("title") or finding.get("id") or "finding").lower()
     identity = cve if cve != "—" else f"{cwe}:{title}"
-    return _canonical_hash([target, endpoint, identity])[:16]
+    dependency = _dependency_identity(finding)
+    return _canonical_hash(
+        [
+            target,
+            endpoint,
+            identity,
+            _finding_class(finding),
+            str(finding.get("method") or "").strip().upper(),
+            dependency.get("package_name", "").lower(),
+            dependency.get("package_ecosystem", "").lower(),
+            # Repository paths can differ only by case. Missing identity fields
+            # stay unknown rather than acting as wildcards for distinct findings.
+            dependency.get("manifest_path", ""),
+        ]
+    )[:16]
 
 
 def _deduplicated_vulnerabilities(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for source in sources:
-        default_target = str(source.get("target") or "")
+        targets = parser.scan_targets(source)
+        default_target = targets[0] if len(targets) == 1 else ""
         for finding in source["_vulnerabilities"]:
             if not isinstance(finding, Mapping):
                 continue
-            key = _finding_key(finding, default_target)
+            # An unlocated finding in a multi-target run cannot be attributed to
+            # the primary or merged across targets merely because its title matches.
+            identity_target = default_target
+            if len(targets) > 1 and not finding.get("target"):
+                identity_target = f"unknown:{source['run']}:{finding.get('id', '')}"
+            key = _finding_key(finding, identity_target)
             severity = _severity(finding.get("severity"))
             current = grouped.get(key)
             if current is None:
@@ -270,6 +326,9 @@ def _deduplicated_vulnerabilities(sources: list[dict[str, Any]]) -> list[dict[st
                     "severity": severity,
                     "target": _inline(finding.get("target") or default_target),
                     "endpoint": _inline(finding.get("endpoint") or ""),
+                    "method": str(finding.get("method") or "").strip().upper(),
+                    "finding_class": _finding_class(finding),
+                    "dependency_metadata": _dependency_identity(finding),
                     "cve": _inline(finding.get("cve") or ""),
                     "cwe": _inline(finding.get("cwe") or ""),
                     "remediation": str(finding.get("remediation_steps") or "").strip(),
@@ -300,18 +359,21 @@ def _deduplicated_vulnerabilities(sources: list[dict[str, Any]]) -> list[dict[st
 def _deduplicated_internal(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for source in sources:
+        targets = parser.scan_targets(source)
+        default_target = targets[0] if len(targets) == 1 else ""
         for finding in source["_internal"]:
             if not isinstance(finding, Mapping):
                 continue
             value = {
                 "finding_type": _inline(finding.get("finding_type") or "result"),
                 "title": _inline(finding.get("title") or finding.get("id") or "Finding"),
-                "host": _inline(finding.get("host") or source.get("target") or ""),
+                "host": _inline(finding.get("host") or default_target),
                 "severity": _severity(finding.get("severity")),
             }
-            key = _canonical_hash(
-                [value["finding_type"].lower(), value["title"].lower(), value["host"].lower()]
-            )[:16]
+            identity = [value["finding_type"].lower(), value["title"].lower(), value["host"].lower()]
+            if len(targets) > 1 and not finding.get("host"):
+                identity.extend([str(source["run"]), str(finding.get("id") or "")])
+            key = _canonical_hash(identity)[:16]
             current = grouped.get(key)
             if current is None:
                 current = {**value, "fingerprint": key, "source_runs": [], "occurrences": 0}
@@ -401,6 +463,23 @@ def _short_remediation(value: str, limit: int = 360) -> str:
     return compact[: limit - 1].rstrip() + "…"
 
 
+def _finding_location(finding: Mapping[str, Any]) -> str:
+    parts = [str(finding["target"])]
+    if finding["method"]:
+        parts.append(str(finding["method"]))
+    if finding["endpoint"] != "—":
+        parts.append(str(finding["endpoint"]))
+    dependency = finding["dependency_metadata"]
+    package = "/".join(
+        dependency[key] for key in ("package_ecosystem", "package_name") if dependency.get(key)
+    )
+    if package:
+        parts.append(f"· {package}")
+    if dependency.get("manifest_path"):
+        parts.append(f"· {dependency['manifest_path']}")
+    return " ".join(parts)
+
+
 def _render_report(
     project: Mapping[str, Any],
     sources: list[dict[str, Any]],
@@ -414,7 +493,7 @@ def _render_report(
     for finding in findings:
         severity_counts[str(finding["severity"])] += 1
     occurrence_count = sum(int(finding["occurrences"]) for finding in findings)
-    targets = sorted({_inline(source.get("target")) for source in sources})
+    targets = sorted({target for source in sources for target in parser.scan_targets(source)})
     highest = next((severity for severity in _SEVERITY_ORDER if severity_counts[severity]), "info")
     name = _inline(project.get("name") or project.get("id") or "Project")
     description = _inline(project.get("description") or "")
@@ -451,16 +530,18 @@ def _render_report(
         lines += ["", "## 去重漏洞", ""]
         if findings:
             lines += [
-                "| 等级 | 漏洞 | 目标 / 端点 | 出现次数 | 来源任务 |",
-                "|---|---|---|---:|---|",
+                "| 等级 | 漏洞 | 类型 | 目标 / 端点 / 依赖 | 出现次数 | 来源任务 |",
+                "|---|---|---|---|---:|---|",
             ]
             for finding in findings:
-                location = finding["target"]
-                if finding["endpoint"] != "—":
-                    location = f"{location} {finding['endpoint']}"
+                finding_class = {
+                    "dynamic": "动态验证",
+                    "dependency_cve": "依赖 CVE",
+                }.get(finding["finding_class"], finding["finding_class"])
                 lines.append(
                     f"| {str(finding['severity']).upper()} | {_table(finding['title'])} | "
-                    f"{_table(location)} | {finding['occurrences']} | "
+                    f"{_table(finding_class)} | {_table(_finding_location(finding))} | "
+                    f"{finding['occurrences']} | "
                     f"{_table(', '.join(finding['source_runs']))} |"
                 )
         else:
@@ -479,7 +560,7 @@ def _render_report(
         lines += ["", "## 任务摘要", ""]
         for source in sources:
             lines += [
-                f"### {_inline(source['target'])} (`{_inline(source['run'])}`)",
+                f"### {_source_target_label(source)} (`{_inline(source['run'])}`)",
                 "",
                 f"- 漏洞：{source['vulnerability_count']}",
                 f"- 内网发现：{source['internal_finding_count']}",
@@ -500,7 +581,7 @@ def _render_report(
         lines += ["", "## 来源任务", ""]
         for source in sources:
             lines.append(
-                f"- `{_inline(source['run'])}` · {_inline(source['target'])} · "
+                f"- `{_inline(source['run'])}` · {_source_target_label(source)} · "
                 f"report `{str(source['report_sha256'])[:12]}`"
             )
     else:
@@ -535,16 +616,19 @@ def _render_report(
         lines += ["", "## Deduplicated Findings", ""]
         if findings:
             lines += [
-                "| Severity | Finding | Target / endpoint | Occurrences | Source tasks |",
-                "|---|---|---|---:|---|",
+                "| Severity | Finding | Class | Target / endpoint / dependency | "
+                "Occurrences | Source tasks |",
+                "|---|---|---|---|---:|---|",
             ]
             for finding in findings:
-                location = finding["target"]
-                if finding["endpoint"] != "—":
-                    location = f"{location} {finding['endpoint']}"
+                finding_class = {
+                    "dynamic": "Dynamic",
+                    "dependency_cve": "Dependency CVE",
+                }.get(finding["finding_class"], finding["finding_class"])
                 lines.append(
                     f"| {str(finding['severity']).upper()} | {_table(finding['title'])} | "
-                    f"{_table(location)} | {finding['occurrences']} | "
+                    f"{_table(finding_class)} | {_table(_finding_location(finding))} | "
+                    f"{finding['occurrences']} | "
                     f"{_table(', '.join(finding['source_runs']))} |"
                 )
         else:
@@ -566,7 +650,7 @@ def _render_report(
         lines += ["", "## Task Summaries", ""]
         for source in sources:
             lines += [
-                f"### {_inline(source['target'])} (`{_inline(source['run'])}`)",
+                f"### {_source_target_label(source)} (`{_inline(source['run'])}`)",
                 "",
                 f"- Vulnerabilities: {source['vulnerability_count']}",
                 f"- Internal findings: {source['internal_finding_count']}",
@@ -587,7 +671,7 @@ def _render_report(
         lines += ["", "## Source Tasks", ""]
         for source in sources:
             lines.append(
-                f"- `{_inline(source['run'])}` · {_inline(source['target'])} · "
+                f"- `{_inline(source['run'])}` · {_source_target_label(source)} · "
                 f"report `{str(source['report_sha256'])[:12]}`"
             )
 
@@ -612,6 +696,9 @@ def _render_report(
                     "severity",
                     "target",
                     "endpoint",
+                    "method",
+                    "finding_class",
+                    "dependency_metadata",
                     "occurrences",
                     "source_runs",
                 )
