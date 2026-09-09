@@ -13,19 +13,32 @@ Rules the platform depends on:
 
 from __future__ import annotations
 
+import copy
+import json
+import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from strixops.engine.targets import normalize_targets
 from strixops.platform import artifacts
 from strixops.platform.events import EventWriter
+from strixops.report.assessment import AssessmentState
+from strixops.report.assessment import summary as assessment_summary
 from strixops.report.evidence import collect_files, finding_references
 
 RUNNING = "running"
 COMPLETED = "completed"
 FAILED = "failed"
 INTERRUPTED = "interrupted"
+
+
+class DuplicateDependencyReport(ValueError):
+    def __init__(self, report_id: str) -> None:
+        super().__init__(f"Dependency finding already exists: {report_id}")
+        self.report_id = report_id
 
 
 # -- evidence helpers (module level) -------------------------------------------
@@ -86,6 +99,8 @@ class RunState:
     def __init__(self, run_dir: Path, events: EventWriter) -> None:
         self.run_dir = Path(run_dir)
         self.events = events
+        self._lock = threading.RLock()
+        self.assessment = AssessmentState(self.save, self._lock)
         self.reports: list[dict[str, Any]] = []
         self.internal_findings: list[dict[str, Any]] = []
         self.run_record: dict[str, Any] = {
@@ -154,6 +169,13 @@ class RunState:
     def duration_seconds(self) -> int:
         return int(time.monotonic() - self._start_monotonic)
 
+    @property
+    def final_fields(self) -> dict[str, Any] | None:
+        """Read-only copy of the finish_scan narrative, for report synthesis."""
+        if self._final_fields is None:
+            return None
+        return dict(self._final_fields)
+
     def mark_complete(self) -> None:
         self.run_record["status"] = COMPLETED
         self.run_record["end_time"] = datetime.now(UTC).isoformat()
@@ -195,18 +217,111 @@ class RunState:
         agent_id: str,
         agent_name: str,
     ) -> dict[str, Any]:
-        report = dict(report)
-        report.setdefault("id", f"vuln-{len(self.reports) + 1:04d}")
-        report.setdefault("timestamp", artifacts.utc_stamp())
-        self.reports.append(report)
-        self.save()
-        self.events.vulnerability_found(
-            finding={k: v for k, v in report.items() if k not in ("poc_script_code",)},
-            report_id=report["id"],
-            agent_id=agent_id,
-            agent_name=agent_name,
-        )
-        return report
+        with self._lock:
+            if report.get("finding_class") == "dependency_cve":
+
+                def identity(item: dict) -> tuple:
+                    metadata = item.get("dependency_metadata") or {}
+                    return (
+                        item.get("target"),
+                        item.get("cve"),
+                        metadata.get("package_name"),
+                        metadata.get("package_ecosystem"),
+                        metadata.get("manifest_path"),
+                    )
+
+                duplicate = next(
+                    (
+                        old
+                        for old in self.reports
+                        if old.get("finding_class") == "dependency_cve" and identity(old) == identity(report)
+                    ),
+                    None,
+                )
+                if duplicate is not None:
+                    raise DuplicateDependencyReport(duplicate["id"])
+            report = copy.deepcopy(report)
+            report.setdefault("id", f"vuln-{len(self.reports) + 1:04d}")
+            report.setdefault("timestamp", artifacts.utc_stamp())
+            report.setdefault("agent_id", agent_id)
+            report.setdefault("agent_name", agent_name)
+            self.reports.append(report)
+            try:
+                self.save()
+            except Exception:
+                self.reports.pop()
+                raise
+            self.events.vulnerability_found(
+                finding={k: v for k, v in report.items() if k not in ("poc_script_code",)},
+                report_id=report["id"],
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+            return copy.deepcopy(report)
+
+    def read_reports(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return copy.deepcopy(self.reports)
+
+    def revise_vulnerability_report(
+        self,
+        report_id: str,
+        updates: dict[str, Any],
+        *,
+        reason: str,
+        agent_id: str,
+        agent_name: str,
+        validate: Callable[[dict[str, Any]], list[str]] | None = None,
+    ) -> dict[str, Any]:
+        """Apply an already-validated revision and emit one additive update event.
+
+        No await separates reading the old record from replacement. The shared
+        lock also serializes tool calls from worker threads. Returned data is a
+        copy, so readers cannot mutate the owner or its audit history.
+        """
+        if not reason.strip():
+            raise ValueError("update_reason must be non-empty")
+        with self._lock:
+            index = next((i for i, r in enumerate(self.reports) if r["id"] == report_id), None)
+            if index is None:
+                raise ValueError(f"Report {report_id} not found")
+            old = self.reports[index]
+            changed = {k: copy.deepcopy(v) for k, v in updates.items() if old.get(k) != v}
+            if not changed:
+                raise ValueError("No changed fields to update")
+            revised = copy.deepcopy(old)
+            revised.update(changed)
+            if validate is not None and (errors := validate(revised)):
+                raise ValueError("Validation failed: " + "; ".join(errors))
+            now = artifacts.utc_stamp()
+            revised.setdefault("update_history", []).append(
+                {
+                    "reason": reason.strip(),
+                    "fields": list(changed),
+                    "dropped_fields": [],
+                    "agent_id": agent_id,
+                    "agent_name": agent_name,
+                    "timestamp": now,
+                    "previous": {k: copy.deepcopy(old.get(k)) for k in changed},
+                }
+            )
+            revised["updated_at"] = now
+            self.reports[index] = revised
+            try:
+                self.save()
+            except Exception:
+                self.reports[index] = old
+                raise
+            self.events.emit(
+                event_type="vulnerability.updated",
+                agent_id=agent_id,
+                agent_name=agent_name,
+                payload={
+                    "report_id": report_id,
+                    "finding": {k: copy.deepcopy(v) for k, v in revised.items() if k != "poc_script_code"},
+                },
+            )
+            return copy.deepcopy(revised)
 
     def add_internal_finding(
         self,
@@ -215,22 +330,36 @@ class RunState:
         agent_id: str,
         agent_name: str,
     ) -> dict[str, Any]:
-        finding = dict(finding)
-        finding.setdefault("id", f"int-{len(self.internal_findings) + 1:04d}")
-        finding.setdefault("timestamp", artifacts.utc_stamp())
-        self.internal_findings.append(finding)
-        self.save()
-        self.events.internal_finding_created(finding=finding, agent_id=agent_id, agent_name=agent_name)
-        return finding
+        with self._lock:
+            finding = copy.deepcopy(finding)
+            finding.setdefault("id", f"int-{len(self.internal_findings) + 1:04d}")
+            finding.setdefault("timestamp", artifacts.utc_stamp())
+            finding.setdefault("agent_id", agent_id)
+            finding.setdefault("agent_name", agent_name)
+            self.internal_findings.append(finding)
+            try:
+                self.save()
+            except Exception:
+                self.internal_findings.pop()
+                raise
+            self.events.internal_finding_created(finding=finding, agent_id=agent_id, agent_name=agent_name)
+            return copy.deepcopy(finding)
 
     # -- persistence -------------------------------------------------------
 
     def save(self) -> None:
-        artifacts.write_run_record(self.run_dir, self.run_record)
-        if self.reports:
-            artifacts.write_vulnerabilities(self.run_dir, self.reports)
-        if self.internal_findings:
-            artifacts.write_internal_findings(self.run_dir, self.internal_findings)
+        with self._lock:
+            assessment = self.assessment.snapshot(str(self.run_record.get("status") or "unknown"))
+            artifacts.atomic_write_text(
+                self.run_dir / "assessment.json",
+                json.dumps(assessment, ensure_ascii=False, indent=2, allow_nan=False),
+            )
+            self.run_record["assessment"] = assessment_summary(assessment)
+            artifacts.write_run_record(self.run_dir, self.run_record)
+            if self.reports:
+                artifacts.write_vulnerabilities(self.run_dir, self.reports)
+            if self.internal_findings:
+                artifacts.write_internal_findings(self.run_dir, self.internal_findings)
 
     # -- evidence collection ------------------------------------------------
 
@@ -287,6 +416,11 @@ class RunState:
 
         scan_config = self.run_record.get("scan_config") or {}
         target = str(scan_config.get("target") or self.run_dir.name)
+        try:
+            targets = normalize_targets(scan_config.get("target", ""), scan_config.get("targets"))
+        except ValueError:
+            targets = []
+        multi_target = len(targets) > 1
         scan_type = str(scan_config.get("scan_type") or "web")
         if zh:
             task_type_label = "内网渗透测试" if scan_type == "internal" else "Web应用渗透测试"
@@ -315,11 +449,11 @@ class RunState:
             ("重要发现与技术细节", "technical_analysis"),
             ("本阶段限制与未完成部分", "limitations"),
         ]
-        # Build the full section list: internal-specific sections only for internal scans
-        if scan_type == "internal":
-            all_sections = zh_sections[:3] + zh_sections_internal + zh_sections[3:]
-        else:
-            all_sections = zh_sections
+        # Theme sections render for every scan type — a web engagement with
+        # credentials, observed architecture or follow-on leverage files those
+        # fields too. Empty sections are skipped below, so a bare web run
+        # reads exactly as before.
+        all_sections = zh_sections[:3] + zh_sections_internal + zh_sections[3:]
 
         if zh:
             labels = {
@@ -334,7 +468,7 @@ class RunState:
                 "no_findings": "本次扫描未发现已验证的漏洞。",
                 "no_internal": "本次扫描未记录内网发现。",
             }
-            title = f"渗透测试报告 - {target}"
+            title = f"渗透测试报告 - {len(targets)} 个目标" if multi_target else f"渗透测试报告 - {target}"
         else:
             en_sections = [
                 ("Executive Summary", "executive_summary"),
@@ -351,11 +485,7 @@ class RunState:
                 ("Findings & Technical Detail", "technical_analysis"),
                 ("Limitations & Unfinished Work", "limitations"),
             ]
-            en_all = (
-                en_sections[:3] + en_sections_internal + en_sections[3:]
-                if scan_type == "internal"
-                else en_sections
-            )
+            en_all = en_sections[:3] + en_sections_internal + en_sections[3:]
             labels = {
                 "target": "Target",
                 "type": "Engagement type",
@@ -368,16 +498,29 @@ class RunState:
                 "no_findings": "No validated vulnerabilities were found in this scan.",
                 "no_internal": "No internal findings were recorded.",
             }
-            title = f"Penetration Test Report - {target}"
+            title = (
+                f"Penetration Test Report - {len(targets)} targets"
+                if multi_target
+                else f"Penetration Test Report - {target}"
+            )
 
         generated = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         # Header block: every line separated by a blank line so Markdown
         # renders each as its own paragraph (not one run-on blob).
+        target_lines = (
+            [
+                f"目标（{len(targets)}）：" if zh else f"Targets ({len(targets)}):",
+                "",
+                *[f"- {value}" for value in targets],
+            ]
+            if multi_target
+            else [f"{labels['target']}：{target}" if zh else f"{labels['target']}: {target}"]
+        )
         lines: list[str] = [
             f"# {title}",
             "",
-            f"{labels['target']}：{target}" if zh else f"{labels['target']}: {target}",
+            *target_lines,
             "",
             f"{labels['type']}：{task_type_label}" if zh else f"{labels['type']}: {task_type_label}",
             "",
@@ -386,7 +529,7 @@ class RunState:
             f"Overall Severity: {severity}",
             "",
         ]
-        if self.run_record.get("status") == FAILED:
+        if self.run_record.get("status") in (FAILED, INTERRUPTED):
             lines += ["Report Status: Partial (run failed or interrupted)", ""]
         if rationale:
             lines += [f"Severity Rationale: {rationale}", ""]
@@ -401,6 +544,37 @@ class RunState:
         methodology = (fields.get("methodology") or "").strip()
         if methodology:
             lines += [f"## {labels['methodology']}", "", methodology, ""]
+
+        assessment = self.assessment.snapshot(str(self.run_record.get("status") or "unknown"))
+        coverage = assessment["coverage"]
+        lines += ["## 覆盖记录与未解决事项" if zh else "## Coverage Records & Unresolved Items", ""]
+        if zh:
+            lines += ["覆盖记录是 Agent 对已检查项目的陈述；执行完成不代表全面覆盖或不存在风险。", ""]
+            if not coverage["entries"]:
+                lines += ["未记录结构化覆盖信息，覆盖范围未知。", ""]
+            else:
+                lines += [
+                    f"已记录 {len(coverage['entries'])} 项；其中 {coverage['unresolved_count']} 项仍需跟进。",
+                    "",
+                ]
+        else:
+            lines += [
+                "Coverage is agent-reported. Execution completion does not prove "
+                "exhaustive coverage or safety.",
+                "",
+            ]
+            if not coverage["entries"]:
+                lines += ["No structured coverage was recorded; coverage is unknown.", ""]
+            else:
+                lines += [
+                    f"Recorded items: {len(coverage['entries'])}; "
+                    f"unresolved: {coverage['unresolved_count']}.",
+                    "",
+                ]
+        for entry in coverage["entries"]:
+            if entry["outcome"] == "needs_follow_up":
+                lines += [f"- `{entry['id']}` {entry['surface']} — {entry['risk_area']}: {entry['evidence']}"]
+        lines += ["", "[Assessment details and history](assessment.json)", ""]
 
         if self.reports:
             lines += [f"## {labels['findings']}", ""]

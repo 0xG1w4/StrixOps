@@ -90,6 +90,10 @@ export interface RunTotals {
 export interface RunSummary {
   name: string;
   target: string;
+  /** Complete scope; omitted by older consoles. An empty list means unknown scope. */
+  targets?: string[];
+  target_count?: number;
+  target_error?: string;
   scan_type: string;
   project_id: string;
   /** Whether the target still matches the project's current launch scope. */
@@ -120,6 +124,18 @@ export interface RunSummary {
     output_tokens: number;
     total_tokens: number;
   };
+}
+
+/** Preserve legacy single-target records while keeping an explicit unknown scope empty. */
+export function runTargets(run: { target?: string; targets?: string[] }): string[] {
+  return Array.isArray(run.targets) ? run.targets : run.target ? [run.target] : [];
+}
+
+/** Compact identity for task lists. Full scope remains available in the task detail. */
+export function runTargetLabel(run: { name?: string; target?: string; targets?: string[] }): string {
+  const targets = runTargets(run);
+  const primary = targets[0] || run.target || run.name || "—";
+  return targets.length > 1 ? `${primary} +${targets.length - 1}` : primary;
 }
 
 /** GET /api/runs */
@@ -191,6 +207,21 @@ export interface Vulnerability {
   cve?: string;
   cwe?: string;
   confidence?: string;
+  confidence_rationale?: string;
+  severity_change_conditions?: string;
+  fix_effort?: string;
+  finding_class?: string;
+  code_locations?: Array<Record<string, unknown>>;
+  fix_verification?: string;
+  fix_pr_body?: string;
+  dependency_metadata?: Record<string, unknown>;
+  update_history?: Array<Record<string, unknown>>;
+  updated_at?: string;
+  discovered_by_agent?: string;
+  discovered_by_agent_name?: string;
+  agent_id?: string;
+  agent_name?: string;
+  poc_language?: string;
   counterevidence?: string;
   assumptions?: string;
 }
@@ -214,6 +245,60 @@ export interface FindingsPage {
 /** GET /api/runs/{name}/report */
 export interface ReportPage {
   markdown: string;
+}
+
+/** Agent-authored assessment records; resolved entries do not prove full coverage. */
+export interface CoverageEntry {
+  id?: string;
+  entry_id?: string;
+  surface: string;
+  risk_area: string;
+  outcome: string;
+  evidence?: string;
+  agent_id?: string;
+  agent_name?: string;
+  timestamp?: string;
+  created_by?: string;
+  created_by_name?: string;
+  created_at?: string;
+  updated_at?: string;
+  history?: Array<Record<string, unknown>>;
+}
+
+export interface ThreatModel {
+  target: string;
+  content: string;
+  written_by?: string;
+  written_by_name?: string;
+  updated_at?: string;
+  revision?: number;
+  amendments?: Array<{
+    content: string;
+    agent_id?: string;
+    agent_name?: string;
+    timestamp?: string;
+  }>;
+  history?: Array<Record<string, unknown>>;
+}
+
+/** GET /api/runs/{name}/assessment; older runs may have unknown sections. */
+export interface AssessmentPage {
+  schema_version: 1;
+  generated_at?: string;
+  lifecycle: { status: string };
+  coverage: {
+    status: "unknown" | "recorded";
+    provenance: "agent_reported";
+    entries: CoverageEntry[];
+    outcome_counts: Record<string, number>;
+    unresolved_count: number | null;
+    completeness: "unknown" | "has_unresolved" | "recorded_items_resolved";
+  };
+  threat_models: {
+    status: "unknown" | "recorded";
+    models: ThreatModel[];
+  };
+  interpretation?: string;
 }
 
 /* -------------------------------------------------------------------- hints */
@@ -270,6 +355,7 @@ export function archiveURL(name: string): string {
 /** POST /api/scans */
 export interface ScanRequest {
   target: string;
+  targets?: string[];
   scan_type: string;
   project_id?: string | null;
   crypto?: boolean;
@@ -538,6 +624,8 @@ export interface ProjectSkillAnalytics {
   by_run: Array<{
     run: string;
     target: string;
+    targets?: string[];
+    target_count?: number;
     status: string;
     start_time: string;
     skills: Record<string, number>;
@@ -547,6 +635,8 @@ export interface ProjectSkillAnalytics {
   runs: Array<{
     run: string;
     target: string;
+    targets?: string[];
+    target_count?: number;
     status: string;
     start_time: string;
     skills: Record<string, number>;

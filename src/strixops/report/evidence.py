@@ -14,18 +14,64 @@ from typing import Any
 from strixops.platform import artifacts
 
 # Absolute workspace references in prose are checked as well as the explicit
-# metadata.evidence_files list. Structured references support names with spaces.
-_WORKSPACE_REFERENCE = re.compile(r"/workspace/output/[^\s<>\"'`)\]}]+")
+# metadata.evidence_files list. Prose punctuation delimits a path; structured
+# references preserve exact filenames, including spaces and punctuation.
+_WORKSPACE_REFERENCE = re.compile(
+    r"/workspace/output/[^\s<>\"'`()\[\]{}，。；：、（）【】「」『』《》“”‘’,;:!?！？]*"
+)
 
 
 def evidence_filename(reference: str) -> str | None:
     """Resolve a declared evidence path, rejecting absolute paths and traversal."""
     prefix = "/workspace/output/"
+    if reference == prefix:
+        return "."
     name = reference[len(prefix) :] if reference.startswith(prefix) else reference
     path = PurePosixPath(name)
     if not name or path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
         return None
     return path.as_posix()
+
+
+def _reference_delivery(
+    name: str | None, reference: str, by_name: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    entry = by_name.get(name, {})
+    prefix = "" if name == "." else f"{name}/"
+    members = (
+        [item for filename, item in sorted(by_name.items()) if filename.startswith(prefix)]
+        if name is not None
+        else []
+    )
+    directory = name == "." or reference.endswith("/") or (not entry and bool(members))
+    if directory:
+        # Only the no-follow collection manifest can establish descendants.
+        # A named symlink/special file must never become a directory reference.
+        if entry:
+            members = []
+        delivered = bool(members) and all(item.get("deliverable") for item in members)
+        return {
+            "reference_type": "directory",
+            "file_count": len(members),
+            "files": [item["filename"] for item in members],
+            "captured": bool(members) and all(item.get("captured") for item in members),
+            "persisted": bool(members) and all(item.get("persisted") for item in members),
+            "deliverable": delivered,
+            **(
+                {
+                    "error": entry.get("error")
+                    or ("incomplete_directory_reference" if members else "missing_reference")
+                }
+                if not delivered
+                else {}
+            ),
+        }
+    return {
+        "captured": bool(entry.get("captured")),
+        "persisted": bool(entry.get("persisted")),
+        "deliverable": bool(entry.get("deliverable")),
+        **({"error": entry.get("error", "missing_reference")} if not entry.get("deliverable") else {}),
+    }
 
 
 def finding_references(findings: list[dict[str, Any]], index: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -42,20 +88,12 @@ def finding_references(findings: list[dict[str, Any]], index: list[dict[str, Any
             )
         for reference in sorted(refs):
             name = evidence_filename(reference)
-            entry = by_name.get(name, {})
             references.append(
                 {
                     "finding_id": finding.get("id", ""),
                     "reference": reference,
                     "filename": name,
-                    "captured": bool(entry.get("captured")),
-                    "persisted": bool(entry.get("persisted")),
-                    "deliverable": bool(entry.get("deliverable")),
-                    **(
-                        {"error": entry.get("error", "missing_reference")}
-                        if not entry.get("deliverable")
-                        else {}
-                    ),
+                    **_reference_delivery(name, reference, by_name),
                 }
             )
     return references

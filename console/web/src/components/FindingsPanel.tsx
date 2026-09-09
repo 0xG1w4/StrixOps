@@ -5,7 +5,7 @@
 
    Header: counts, severity filter chips (gold active state), text search.
    Rows open a FLOATING detail modal (Esc/overlay close): vulnerabilities
-   render their full structured fields with the Python PoC in a terminal
+   render their full structured fields with the PoC in a terminal
    block; internal findings fetch and render their .md artifact. Client-side
    CSV export mirrors the engine's vulnerabilities.csv columns.
    ========================================================================= */
@@ -86,10 +86,30 @@ function Field({
 function MetaChip({ label, value }: { label: string; value: string }) {
   if (!value) return null;
   return (
-    <span className="mono-chip text-[9px]" title={`${label}: ${value}`}>
-      <span className="text-fg-faint">{label}</span>
-      {value}
+    <span className="mono-chip min-w-0 max-w-full text-[9px]" title={`${label}: ${value}`}>
+      <span className="shrink-0 text-fg-faint">{label}</span>
+      <span className="truncate">{value}</span>
     </span>
+  );
+}
+
+function detailValue(value: unknown): string {
+  if (value == null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+/** Preserve optional structured fields without collapsing objects to [object Object]. */
+function DetailRecord({ value }: { value: Record<string, unknown> }) {
+  if (!value || typeof value !== "object") return <p className="text-xs text-fg-2">{detailValue(value)}</p>;
+  return (
+    <dl className="grid gap-2 text-xs sm:grid-cols-[minmax(7rem,auto)_1fr]">
+      {Object.entries(value).filter(([, item]) => item != null && item !== "").map(([key, item]) => (
+        <React.Fragment key={key}>
+          <dt className="break-words font-mono text-[10px] text-fg-muted">{key.replaceAll("_", " ")}</dt>
+          <dd className="min-w-0 whitespace-pre-wrap break-words font-mono text-fg-2">{detailValue(item)}</dd>
+        </React.Fragment>
+      ))}
+    </dl>
   );
 }
 
@@ -237,7 +257,10 @@ function VulnModalBody({
   onClose: () => void;
   closeRef: React.RefObject<HTMLButtonElement>;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const en = locale === "en";
+  const history = Array.isArray(vuln.update_history) ? vuln.update_history : [];
+  const locations = Array.isArray(vuln.code_locations) ? vuln.code_locations : [];
   return (
     <>
       <ModalHeader
@@ -257,6 +280,10 @@ function VulnModalBody({
             <MetaChip label={t("findings.meta.cve")} value={vuln.cve ?? ""} />
             <MetaChip label={t("findings.meta.cwe")} value={vuln.cwe ?? ""} />
             <MetaChip label={t("findings.meta.confidence")} value={vuln.confidence ?? ""} />
+            <MetaChip label={en ? "Class" : "发现类别"} value={vuln.finding_class ?? ""} />
+            <MetaChip label={en ? "Fix effort" : "修复工作量"} value={vuln.fix_effort ?? ""} />
+            <MetaChip label={en ? "Author" : "记录者"} value={vuln.agent_name || vuln.discovered_by_agent_name || vuln.agent_id || vuln.discovered_by_agent || ""} />
+            <MetaChip label={en ? "Updated" : "更新时间"} value={vuln.updated_at ?? ""} />
           </>
         }
         onClose={onClose}
@@ -268,6 +295,8 @@ function VulnModalBody({
       <div className="space-y-4 overflow-y-auto px-5 py-4">
         <Field label={t("findings.field.description")} value={vuln.description ?? ""} />
         <Field label={t("findings.field.impact")} value={vuln.impact ?? ""} />
+        <Field label={en ? "Confidence rationale" : "置信度依据"} value={vuln.confidence_rationale || vuln.confidence || ""} />
+        <Field label={en ? "Severity change conditions" : "严重性变化条件"} value={vuln.severity_change_conditions ?? ""} />
         <Field
           label={t("findings.field.technicalAnalysis")}
           value={vuln.technical_analysis ?? ""}
@@ -286,7 +315,7 @@ function VulnModalBody({
               <div className="terminal mt-2">
                 <div className="terminal-bar">
                   <span className="terminal-bar-dot" aria-hidden />
-                  poc.py
+                  {vuln.poc_language ? `PoC · ${vuln.poc_language}` : "PoC"}
                 </div>
                 <pre className="terminal-body">{vuln.poc_script_code}</pre>
               </div>
@@ -297,6 +326,26 @@ function VulnModalBody({
           label={t("findings.field.remediation")}
           value={vuln.remediation_steps ?? ""}
         />
+        {locations.length > 0 && (
+          <section className="space-y-2" aria-label={en ? "Code locations" : "代码位置"}>
+            <div className="micro-label text-[9px]">{en ? "Code locations and suggested fixes" : "代码位置与修复建议"}</div>
+            {locations.map((location, index) => (
+              <div key={index} className="rounded-xl border border-line/8 bg-surface/42 p-3">
+                <DetailRecord value={location} />
+              </div>
+            ))}
+          </section>
+        )}
+        <Field label={en ? "Fix verification" : "修复验证"} value={vuln.fix_verification ?? ""} />
+        <Field label={en ? "Suggested pull request description" : "建议的修复 PR 描述"} value={vuln.fix_pr_body ?? ""} />
+        {vuln.dependency_metadata && Object.keys(vuln.dependency_metadata).length > 0 && (
+          <section className="space-y-2" aria-label={en ? "Dependency metadata" : "依赖元数据"}>
+            <div className="micro-label text-[9px]">{en ? "Dependency metadata" : "依赖元数据"}</div>
+            <div className="rounded-xl border border-line/8 bg-surface/42 p-3">
+              <DetailRecord value={vuln.dependency_metadata} />
+            </div>
+          </section>
+        )}
         <Field label={t("findings.field.evidence")} value={vuln.evidence ?? ""} mono />
         <Field
           label={t("findings.field.counterevidence")}
@@ -306,6 +355,18 @@ function VulnModalBody({
           label={t("findings.field.assumptions")}
           value={String(vuln.assumptions ?? "")}
         />
+        {history.length > 0 && (
+          <details className="rounded-xl border border-line/8 p-3">
+            <summary className="cursor-pointer text-xs font-medium text-fg-2">
+              {en ? "Revision history" : "修订历史"} · {history.length}
+            </summary>
+            <ol className="mt-3 space-y-3">
+              {history.map((revision, index) => (
+                <li key={index} className="border-t border-line/6 pt-3"><DetailRecord value={revision} /></li>
+              ))}
+            </ol>
+          </details>
+        )}
       </div>
     </>
   );
@@ -405,8 +466,9 @@ export default function FindingsPanel({ name, run }: { name: string; run: RunDet
 
   const load = React.useCallback(async () => {
     try {
-      const page = await getJSON<FindingsPage>(`/api/runs/${encodeURIComponent(name)}/findings`);
+      const page = await getJSON<FindingsPage & { read_warnings?: string[] }>(`/api/runs/${encodeURIComponent(name)}/findings`);
       setData(page);
+      setError(Array.isArray(page.read_warnings) ? page.read_warnings.filter((warning) => typeof warning === "string").join(" ") : "");
       setPhase("ready");
     } catch (e) {
       setPhase((prev) => (prev === "ready" ? prev : "error"));
@@ -447,7 +509,9 @@ export default function FindingsPanel({ name, run }: { name: string; run: RunDet
           (v.id || "").toLowerCase().includes(q) ||
           (v.endpoint || "").toLowerCase().includes(q) ||
           (v.target || "").toLowerCase().includes(q) ||
-          (v.cve || "").toLowerCase().includes(q)
+          (v.cve || "").toLowerCase().includes(q) ||
+          (v.finding_class || "").toLowerCase().includes(q) ||
+          detailValue(v.dependency_metadata).toLowerCase().includes(q)
         );
       }),
     [vulnerabilities, sevFilter, q]
@@ -490,7 +554,7 @@ export default function FindingsPanel({ name, run }: { name: string; run: RunDet
     );
   }
 
-  if (phase === "error") {
+  if (phase === "error" || (error && vulnerabilities.length === 0 && internal.length === 0)) {
     return (
       <div className="space-y-3 p-4">
         <div className="alert-error" role="alert">
@@ -528,6 +592,7 @@ export default function FindingsPanel({ name, run }: { name: string; run: RunDet
 
   return (
     <div className="space-y-4 p-4">
+      {error && <div className="alert-error" role="alert">{error}</div>}
       {/* header: counts + filters + search */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="micro-label">
@@ -645,7 +710,11 @@ export default function FindingsPanel({ name, run }: { name: string; run: RunDet
 
       {/* floating detail window */}
       {active && (
-        <FindingModal active={active} name={name} onClose={() => setActive(null)} />
+        <FindingModal
+          active={active.kind === "vuln" ? { kind: "vuln", v: vulnerabilities.find((v) => v.id === active.v.id) ?? active.v } : active}
+          name={name}
+          onClose={() => setActive(null)}
+        />
       )}
     </div>
   );

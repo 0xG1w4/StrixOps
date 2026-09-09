@@ -1,9 +1,9 @@
 StrixOps
 Copyright 2026 StrixOps authors
 
-This product includes software and content developed as a clean-room
-reimplementation that uses the open-source Strix project
-(https://github.com/usestrix/strix) as its behavioral specification.
+This product includes original StrixOps software and assets adapted from the
+open-source Strix project (https://github.com/usestrix/strix). Strix is a source
+and behavioral reference; its Python runtime is not required by StrixOps.
 
 The following assets are derived from Strix (Apache License 2.0,
 Copyright usestrix / Strix contributors) and are used under that license:
@@ -24,6 +24,9 @@ Copyright usestrix / Strix contributors) and are used under that license:
     and src/strixops/tools/reporting.py, child input-history inheritance,
     and image-history handling follow the corresponding Strix v1.6.0
     implementations. Sandbox image reading uses the OpenAI Agents SDK.
+  * Coverage, threat-model collaboration, bounded child delegation, and rich
+    dependency/source finding support follow selected reference behaviors,
+    implemented within StrixOps' existing run state and event contracts.
 
 The sandbox base image ghcr.io/usestrix/strix-sandbox is a third-party
 artifact extended with internal-network tools for the shared web/internal sandbox.

@@ -24,7 +24,7 @@ import {
 } from "recharts";
 import { RotateCw } from "lucide-react";
 import { Chip, EmptyState, MicroLabel, MetricCard, Panel, Spinner } from "@/components/ui";
-import { getJSON } from "@/lib/api";
+import { getJSON, runTargetLabel, runTargets } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { fmtTime } from "@/lib/format";
 
@@ -43,6 +43,8 @@ interface CategoryUsage {
 interface RunSkillUsage {
   run: string;
   target: string;
+  targets?: string[];
+  target_count?: number;
   status: string;
   start_time: string;
   skills: Record<string, number>;
@@ -292,7 +294,7 @@ export default function InsightsPage() {
                   {data.runs.map((r) => (
                     <tr key={r.run} className="table-row">
                       <td className="font-mono text-xs"><Link href={`/run?name=${encodeURIComponent(r.run)}&tab=report`} className="text-accent underline-offset-4 hover:underline">{r.run}</Link></td>
-                      <td className="max-w-[14rem] truncate font-mono text-xs">{r.target || "—"}</td>
+                      <td className="max-w-[14rem] truncate font-mono text-xs" title={runTargets(r).join("\n")}>{runTargetLabel(r)}</td>
                       <td>
                         <Chip
                           tone={

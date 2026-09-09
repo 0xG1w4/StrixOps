@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from strixops.engine.targets import normalize_targets
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -32,11 +34,18 @@ class ScanSpec:
     gsocket_key: str = ""
     instruction_text: str = ""
     report_language: str = "zh-CN"
+    targets: list[str] = field(default_factory=list)
+
+    def all_targets(self) -> list[str]:
+        """Return the complete ordered scope, including legacy single-target specs."""
+        return normalize_targets(self.target, self.targets)
 
     def validate(self) -> list[str]:
         problems: list[str] = []
-        if not self.target.strip():
-            problems.append("--target is empty")
+        try:
+            self.all_targets()
+        except ValueError as exc:
+            problems.append(str(exc))
         if self.scan_type not in (SCAN_WEB, SCAN_INTERNAL):
             problems.append(f"unknown --scan-type {self.scan_type!r}")
         if self.socks5_proxy and self.gsocket_key:
@@ -64,12 +73,16 @@ class ScanSpec:
         )
 
     def as_scan_config(self) -> dict:
+        targets = self.all_targets()
         cfg: dict = {
-            "target": self.target,
+            "target": targets[0],
             "scan_type": self.scan_type,
             "crypto_mode": self.crypto,
             "report_language": self.report_language,
         }
+        if len(targets) > 1:
+            cfg["targets"] = targets
+            cfg["target_count"] = len(targets)
         if self.instruction_file:
             cfg["instruction_file"] = self.instruction_file
         if self.socks5_proxy:
@@ -88,7 +101,24 @@ def target_type(target: str, scan_type: str) -> str:
 
 def authorized_target_line(spec: ScanSpec) -> str:
     ttype = target_type(spec.target, spec.scan_type)
-    return f"- {ttype}: {spec.target}"
+    return "\n".join(f"- {ttype}: {target}" for target in spec.all_targets())
+
+
+def multi_target_instruction(spec: ScanSpec) -> str:
+    if len(spec.all_targets()) < 2:
+        return ""
+    return (
+        "MULTI-TARGET COORDINATION\n"
+        "This is one assessment with a shared agent team and report for all listed targets. "
+        "Build an asset map containing every target and any evidenced relationships or shared components. "
+        "Keep coverage separate for each target; record its tested areas, blockers and untested areas. "
+        "Divide work by target and purpose within the existing agent limits, and share relevant evidence "
+        "to avoid duplicate work. A result on one target does not establish the same result on another. "
+        "Attribute each finding and evidence item to its affected target(s), and validate cross-target "
+        "relationships before relying on them. Only test relationships whose endpoints are in the "
+        "listed scope. Before completion, account for every target in the final report, including "
+        "targets that were unreachable or remained untested."
+    )
 
 
 @dataclass
@@ -136,10 +166,13 @@ class EngineContext:
 
 
 def build_root_task(spec: ScanSpec) -> str:
+    multi = len(spec.all_targets()) > 1
     parts = [
         "You are commencing an authorized penetration test.",
         "",
-        "SYSTEM-VERIFIED SCOPE — the only target you may test:",
+        "SYSTEM-VERIFIED SCOPE — the only targets you may test:"
+        if multi
+        else "SYSTEM-VERIFIED SCOPE — the only target you may test:",
         authorized_target_line(spec),
         "",
     ]
@@ -153,6 +186,8 @@ def build_root_task(spec: ScanSpec) -> str:
             parts.append("CRYPTO MODE: hunt for cryptocurrency-related assets, wallets, keys, and exposure.")
     else:
         parts.append("Mode: WEB application penetration test.")
+    if multi:
+        parts += ["", multi_target_instruction(spec)]
     if spec.instruction_text:
         parts += ["", "OPERATOR INSTRUCTIONS (follow precisely):", spec.instruction_text]
     parts += [

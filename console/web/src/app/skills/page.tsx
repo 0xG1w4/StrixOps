@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Eye,
   FileText,
+  FlaskConical,
   LibraryBig,
   Pencil,
   RotateCw,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Chip, EmptyState, MicroLabel, Panel, Spinner } from "@/components/ui";
+import { PromptProbeDialog } from "@/components/skills/PromptProbeDialog";
 import { getJSON, putText } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { fmtTime } from "@/lib/format";
@@ -59,6 +61,7 @@ export default function SkillsPage() {
   const [saving, setSaving] = React.useState(false);
   const [preview, setPreview] = React.useState(false);
   const [meta, setMeta] = React.useState<string>("");
+  const [probeOpen, setProbeOpen] = React.useState(false);
 
   const reload = React.useCallback(async () => {
     try {
@@ -151,12 +154,34 @@ export default function SkillsPage() {
           <p className="page-copy">{t("skills.copy")}</p>
         </div>
         <div className="hero-actions">
+          <button
+            type="button"
+            className="button-secondary button-compact"
+            disabled={phase !== "ready" || dirty || saving}
+            onClick={() => setProbeOpen(true)}
+            title={dirty ? (locale === "en" ? "Save your changes before testing." : "请先保存修改，再测试当前版本。") : undefined}
+          >
+            <FlaskConical className="h-3.5 w-3.5" />
+            {locale === "en" ? "Prompt test" : "Prompt 测试"}
+          </button>
           <MicroLabel>
             <LibraryBig className="mr-1 inline h-3 w-3" />
             {files.length} skills · {prompts.length} prompts
           </MicroLabel>
         </div>
       </header>
+      {dirty && (
+        <p className="mb-4 text-xs text-fg-muted">
+          {locale === "en" ? "Prompt tests use saved files. Save your changes to enable testing." : "Prompt 测试使用已保存的文件；请先保存当前修改，再开始测试。"}
+        </p>
+      )}
+      <PromptProbeDialog
+        open={probeOpen}
+        onOpenChange={setProbeOpen}
+        initialSelection={selected?.kind === "skill"
+          ? { kind: "skill", name: selected.path.replace(/\.md$/, "") }
+          : selected?.kind === "prompt" ? { kind: "prompt", name: selected.name } : null}
+      />
 
       {phase === "error" && (
         <div className="alert-error mb-4 flex items-center justify-between">

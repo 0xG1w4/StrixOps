@@ -30,6 +30,7 @@ from strixops.engine.sessions import (
     seed_initial_input,
     strip_all_images_from_session,
 )
+from strixops.engine.stream_cleanup import consume_stream
 from strixops.platform.events import EventWriter
 
 MAX_NUDGES = 5
@@ -178,8 +179,10 @@ async def _run_agent_cycles(
             )
             coordinator.attach_stream(context.agent_id, result)
             try:
-                async for stream_event in result.stream_events():
-                    events.sdk_event(context.agent_id, context.agent_name, stream_event)
+                await consume_stream(
+                    result,
+                    lambda event: events.sdk_event(context.agent_id, context.agent_name, event),
+                )
                 if getattr(result, "run_loop_exception", None) is not None:
                     raise result.run_loop_exception
             finally:

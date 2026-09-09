@@ -1,13 +1,24 @@
-# StrixOps
+# StrixOps v1.0.0
 
-StrixOps is an autonomous penetration-testing agent engine and the drop-in
-scan core for the Strix platform. It is written from scratch with the
-open-source [Strix](https://github.com/usestrix/strix) project (v1.6.0) as
-its behavioral specification; see `NOTICE` for attribution.
+Release date: 2026-09-09.
 
-The platform (`apps/api` + `apps/web`) spawns StrixOps exactly the way it
-spawned `strix` — same argv, same environment, same run-directory and
-event-stream contract — so **no platform code changes are required**:
+StrixOps is an integrated security assessment engine and web console for web
+and internal-network engagements. Its Python engine, FastAPI API, and Next.js
+frontend run as one product. The open-source
+[Strix](https://github.com/usestrix/strix) project is a reference for selected
+core behaviors and derived assets; see `NOTICE` for attribution.
+
+The normal CLI and Console use the built-in StrixOps engine. Installation and
+execution do not require a sibling Strix checkout, an external Strix Python
+package, or a second engine process. The shared Docker image still extends a
+Strix sandbox image; independence of the engine does not remove that image
+dependency.
+
+See [the v1.0.0 release notes](docs/v1.0.0.md) for installation and included
+features. The wheel includes the built frontend and all built-in runtime
+prompts and skills. Node.js is needed when building the frontend from source.
+
+The `strix` compatibility command and `strixops` both start the built-in engine:
 
 ```
 strix -t <target> --scan-type web|internal --crypto \
@@ -38,27 +49,60 @@ src/strixops/
 ├── report/           # run state: findings, run record, completion
 ├── runtime/          # docker sandbox backend
 ├── skills/           # skill corpus + registry
-├── console/          # 🖥 console: FastAPI server + web UI service
-└── testing/          # scripted (no-LLM) model for dry runs
+└── console/          # FastAPI server + web UI service
 console/web/          # Next.js console UI (static export, served by strixops-console)
 containers/           # shared sandbox image (Dockerfile.sandbox + build script)
-tests/{contract/, unit/, integration/}
 ```
 
 ## Console
 
-The StrixOps console is the built-in web UI — runs dashboard, live
-conversation view, agent tree, findings, reports, operator-hint composer,
-and a scan launcher:
+The StrixOps console includes the runs dashboard, live conversation, agent
+tree, findings, reports, operator hints, and scan launcher. From the source
+checkout, install dependencies and build the frontend and sandbox once:
 
 ```bash
-cd console/web && npm install && npm run build   # one-time UI build
-uv run strixops-console                          # http://127.0.0.1:8300
+uv sync --frozen --no-dev
+npm --prefix console/web ci
+npm --prefix console/web run build
+bash containers/build-images.sh
+uv run --no-dev strixops-console                 # http://127.0.0.1:8300
 ```
 
-One process serves both the API (`/api/*`) and the built UI. Launch scans
-from the UI (dry run needs no LLM key), watch the conversation stream live,
-send operator hints mid-scan, and browse findings/reports.
+One process serves both the API (`/api/*`) and the built UI. Configure a model
+profile, launch a scan, watch the conversation stream live, send operator
+hints mid-scan, and browse findings, assessment coverage, reports, and evidence.
+Normal scans require a compatible model service and the Docker sandbox image.
+
+The launch page defaults to the existing single-target form. Choose **Multi-target
+task** to enter 2–100 targets, one per line, or import a UTF-8 `.txt` file up to
+512 KiB. Blank lines and `#` comments are ignored and exact duplicates are merged.
+Each target displays its format and project-scope check; launch rechecks the full
+list against the current project scope. Switching back preserves the single-target
+draft. One task type, model route, and instruction set apply to the entire list.
+Web targets use the existing URL/domain/IP support; internal targets use hostnames,
+IPs, or CIDR networks.
+
+All targets belong to **one native StrixOps run**, with shared agent context,
+per-target assessment guidance, a common evidence archive, and one final report.
+Run details, reruns, project scope checks, search, and report aggregation preserve
+the full list. Legacy single-target runs and API requests remain supported.
+
+The project overview initially shows five skill entries. **Expand all** opens
+the complete recorded list; **Collapse** restores the compact view. Entries
+are ordered by recorded hit count, then skill ID. Counts combine dynamic load
+events and explicit agent-injection events; they do not measure skill
+effectiveness or enumerate every automatically preloaded instruction.
+
+The CLI also accepts repeated target flags and UTF-8 list files (up to 1 MiB each):
+
+```bash
+uv run strixops -t https://app.example.com -t https://api.example.com
+uv run strixops --target-list ./targets.txt
+```
+
+Flags and files combine into one ordered list of at most 100 distinct targets;
+each target is limited to 2048 characters. This does not add source repository or
+API-spec staging to the existing Web/internal target types.
 
 Model profiles share a provider URL and API key, with separate model, API type,
 and reasoning effort for Web and internal scans. Choose **Auto**, **Chat
@@ -106,16 +150,42 @@ and does not retry them or switch models to work around them.
 
 ## Development
 
-```bash
-uv sync                                   # create venv + install
-uv run pytest                             # unit + contract tests
-uv run strixops --dry-run -t https://example.com --scan-type web \
-    --instruction-file ./instruction.md   # no-LLM full-stack dry run
-```
+Frontend changes require another `npm --prefix console/web run build` before
+starting the Console. Python runtime dependencies are defined in `pyproject.toml`
+and the frozen `uv.lock`.
 
-Dry-run mode (`--dry-run` or `STRIXOPS_DRY_RUN=1`) swaps the LLM for a
-scripted model and the docker sandbox for a local-process backend, driving
-the entire stack — run dir, events, artifacts, exit code — with zero tokens.
+Regression suites, scripted model fixtures, and development verification
+records are available only in the local internal test workspace. They remain
+outside the published Git repository and distribution packages, together with
+external development instructions, credentials, scan output, and caches.
+All built-in runtime prompts and skills remain part of the product.
+
+## Run consistency and assessment
+
+Each run freezes prompt parts and skill content in `.state/prompt_resources.json`,
+with hashes in `.state/prompt_manifest.json`. Console edits apply to subsequent runs; running
+agents and children use their run's snapshot. Web children preload the basic
+tooling, browser, counterevidence, and severity guidance, and receive the
+engagement scope independently of inherited history.
+
+Children can delegate within configured limits. Defaults are depth 2 (root
+depth 0), 4 active agents, and 12 agents over the run's lifetime, including
+the root. Override with `STRIXOPS_AGENT_MAX_DEPTH`,
+`STRIXOPS_AGENT_MAX_ACTIVE`, and `STRIXOPS_AGENT_MAX_TOTAL`. Completion checks
+unsettled descendants. These limits bound orchestration; they are not a token
+or monetary budget.
+
+Coverage and threat-model tools share run-owned state in `assessment.json`,
+including author and revision history. Coverage is agent-reported and does
+not establish exhaustive target coverage. Older runs without these records
+display unknown coverage, including an unknown unresolved count. Completion
+of a scan is separate from coverage completeness and absence of findings.
+
+Dependency reports preserve package, installed version, manifest, advisory
+score, reachability evidence, and contextual CVSS separately from dynamic
+findings. Optional source locations, fix details, confidence rationale, and
+revision history survive JSON, Markdown, and Console display. Project report
+aggregation distinguishes findings from different dependency manifests.
 
 ## Context management
 
@@ -133,6 +203,33 @@ history. A SOCKS5 endpoint is network access, not a shell; agents must verify
 remote execution context before attributing commands to a target. Use
 `list_skills` to discover canonical IDs and `load_skill` for technique details.
 Missing or ambiguous requested skills fail explicitly.
+
+The Console's Skills page also offers **Prompt test**. Open the dialog, choose
+a saved model route and its Web/internal assignment, enter the task you want
+to test, select saved prompt parts or skills, then start the checks. A task is
+required; there is no default description question. Each selected file makes one streamed model
+request, with no tools or scan execution. The dialog shows progress, supports
+stopping, and separates ordinary responses, structured refusals, explicit policy
+blocks, provider errors, and inconclusive results. Model requests incur normal
+provider usage; opening the dialog alone sends no model request.
+
+Each request sends the saved file unchanged as system instructions and your
+exact task as the user message. All items in a batch receive the same task;
+editing it clears previous results. Template variables are not expanded, and
+the complete scan context is not assembled. **No refusal observed means no
+refusal signal was detected in this response; inspect the reply for task
+completion.** The result belongs to the fragment, task, and route together;
+it does not establish which input caused a refusal or predict a complete scan.
+Text-based refusal hints remain inconclusive, because wording alone cannot
+reliably establish a policy decision.
+Results include the task, original model reply (with credential redaction and
+an explicit flag if the 32,768-character display limit is exceeded), source
+and task hashes, route, model, API mode, reasoning effort, and time. Editing
+a file or route after loading the dialog requires refreshing the catalog.
+Results are scoped to the current dialog session. An explicit
+`cyber_policy` result stops the remaining batch because it may indicate an
+account or route access restriction; ordinary per-request content filters
+remain separate results.
 
 Only successful lifecycle tools can complete an agent; plain text or JSON
 declaring completion does not change trusted run state. Internal campaign
@@ -188,19 +285,30 @@ are replaced by text in inherited history. This follows Strix's snapshot
 rule: it does not include tool outputs generated later within that same SDK
 run cycle or subsequent parent updates.
 
+Final report synthesis uses the run's configured model with recorded findings,
+assessment information, and the agent's closing narrative. It adds model usage;
+the deterministic report composer remains the fallback when synthesis fails or
+is disabled. Original findings and evidence remain available alongside the report.
+
 Internal finding severity participates in the overall report's default rating.
 Large datasets use a complete attachment and one distinct finding, not one
 finding per row. Set `metadata.evidence_files` to filenames relative to
 `/workspace/output/` (or absolute paths within that directory).
 
-Evidence is collected before sandbox teardown on success, failure and ordinary
-interruption. Without `STRIX_HOST_WORKSPACE_DIR`, the engine retains a private
+Agents and sandbox writers are stopped before evidence is collected on success,
+failure and ordinary interruption. Successful completion is published only
+after report persistence and verified container cleanup. Cleanup failures are
+recorded as failures rather than successful scans. Without
+`STRIX_HOST_WORKSPACE_DIR`, the engine retains a private
 `<run_dir>/workspace` bind mount; operator-provided workspaces remain intact.
 Files are copied into `<run_dir>/evidence` with streamed SHA256, without the
 former 50 MiB cutoff. Both workspace originals and archive copies remain on disk.
 The manifest and `run.json` distinguish captured, persisted and deliverable
 files. Missing references, copy failures, symlinks and special files are marked
-incomplete rather than counted as delivered attachments. Forced process death
+incomplete rather than counted as delivered attachments. Directory references
+are checked against delivered files; adjacent Chinese punctuation is not treated
+as part of a filename. Evidence cleanup errors include delivery counts and
+unresolved references. Forced process death
 cannot generate a final manifest, but the persistent workspace remains available.
 
 ## Sandbox image

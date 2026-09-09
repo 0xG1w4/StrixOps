@@ -14,15 +14,18 @@ import argparse
 import asyncio
 import contextlib
 import json
+import mimetypes
 import os
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
+import weakref
 import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -32,13 +35,14 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import Response
+from starlette.responses import MalformedRangeHeader, RangeNotSatisfiable, Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
+from strixops import __version__
 from strixops.config.model_options import resolved_api_mode, validate_model_options
 from strixops.console import (
     model_catalog,
@@ -49,9 +53,11 @@ from strixops.console import (
     project_scope,
     project_skills,
     projects_store,
+    prompt_probe,
     proxy_status,
     settings_store,
 )
+from strixops.engine.targets import MAX_TARGETS, normalize_targets
 from strixops.platform.runname import generate_run_name
 
 RUN_SUFFIX_LENGTH = 4  # `<slug>_<4hex>`
@@ -88,13 +94,14 @@ class ConsoleState:
 
 state: ConsoleState = ConsoleState(_runs_root_from())
 
-app = FastAPI(title="StrixOps Console")
+app = FastAPI(title="StrixOps Console", version=__version__)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(prompt_probe.router)
 
 
 # ------------------------------------------------------------------ liveness
@@ -192,6 +199,13 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
     record = parser.json_load(run_dir / "run.json")
     scan_config = record.get("scan_config") or {}
     launch_meta = parser.json_load(run_dir / LAUNCH_SIDECAR)
+    target_config = scan_config if "target" in scan_config or "targets" in scan_config else launch_meta
+    try:
+        targets = parser.scan_targets(target_config)
+        target_error = ""
+    except ValueError as exc:
+        targets = []
+        target_error = str(exc)
     findings = parser.parse_findings(run_dir)
     severity_counts: dict[str, int] = {}
     for vuln in findings["vulnerabilities"]:
@@ -199,8 +213,15 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
         severity_counts[sev] = severity_counts.get(sev, 0) + 1
     summary: dict[str, Any] = {
         "name": run_dir.name,
-        "target": scan_config.get("target") or "",
-        "scan_type": scan_config.get("scan_type") or "web",
+        "target": targets[0] if targets else scan_config.get("target") or launch_meta.get("target") or "",
+        "targets": targets,
+        "target_count": len(targets),
+        **({"target_error": target_error} if target_error else {}),
+        "scan_type": scan_config.get("scan_type") or launch_meta.get("scan_type") or "web",
+        "engine": str(scan_config.get("engine") or launch_meta.get("engine") or "ops"),
+        "model_transport": str(
+            scan_config.get("model_transport") or launch_meta.get("model_transport") or ""
+        ),
         "project_id": _run_project_id(run_dir),
         "status": record.get("status") or "unknown",
         "start_time": record.get("start_time") or "",
@@ -231,6 +252,9 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
     llm_usage = record.get("llm_usage")
     if isinstance(llm_usage, dict):
         summary["llm_usage"] = llm_usage
+    for key in ("evidence", "workspace", "sandbox_runtime"):
+        if isinstance(record.get(key), dict):
+            summary[key] = record[key]
     return summary
 
 
@@ -255,6 +279,17 @@ def _run_summary(run_dir: Path, *, cache: bool = True) -> dict[str, Any]:
     return summary
 
 
+def _assert_run_scope(scope: dict[str, Any], summary: dict[str, Any]) -> None:
+    """Every recorded asset must fit the project, including secondary targets."""
+    if summary.get("target_error"):
+        raise ValueError("Run target metadata is invalid; assignment cannot be verified.")
+    targets = parser.scan_targets(summary)
+    if not targets:
+        raise ValueError("Run has no target metadata; assignment cannot be verified.")
+    for target in targets:
+        project_scope.assert_target_allowed(scope, target, summary.get("scan_type") or "web")
+
+
 def _iter_run_dirs() -> list[Path]:
     """Directories under runs_root that look like engine runs."""
     if not state.runs_root.is_dir():
@@ -271,7 +306,13 @@ def _iter_run_dirs() -> list[Path]:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True, "runs_root": str(state.runs_root), "live_runs": _live_run_count()}
+    return {
+        "ok": True,
+        "product": "StrixOps",
+        "version": __version__,
+        "runs_root": str(state.runs_root),
+        "live_runs": _live_run_count(),
+    }
 
 
 def _live_run_count() -> int:
@@ -348,6 +389,129 @@ def run_findings(name: str) -> dict:
     return parser.parse_findings(state.run_dir(name))
 
 
+def _valid_assessment_document(data: Any) -> bool:
+    """Validate the render boundary; corrupt records remain unknown, not clean."""
+    from strixops.report.assessment import OUTCOMES
+
+    def strings(item: Any, required: tuple = (), optional: tuple = ()) -> bool:
+        return (
+            isinstance(item, dict)
+            and all(isinstance(item.get(key), str) for key in required)
+            and all(item.get(key) is None or isinstance(item[key], str) for key in optional)
+        )
+
+    def history(item: dict) -> bool:
+        value = item.get("history")
+        return value is None or (isinstance(value, list) and all(isinstance(row, dict) for row in value))
+
+    if not (
+        isinstance(data, dict)
+        and type(data.get("schema_version")) is int
+        and data["schema_version"] == 1
+        and strings(data, optional=("generated_at", "interpretation"))
+    ):
+        return False
+    if not strings(data.get("lifecycle"), required=("status",)):
+        return False
+    coverage, models = data.get("coverage"), data.get("threat_models")
+    if not (
+        strings(coverage, required=("status",))
+        and strings(models, required=("status",))
+        and coverage.get("status") in {"unknown", "recorded"}
+        and models.get("status") in {"unknown", "recorded"}
+        and isinstance(coverage.get("entries"), list)
+        and isinstance(models.get("models"), list)
+    ):
+        return False
+    for entry in coverage["entries"]:
+        if not (
+            strings(
+                entry,
+                required=("surface", "risk_area", "outcome"),
+                optional=(
+                    "id",
+                    "entry_id",
+                    "evidence",
+                    "agent_id",
+                    "agent_name",
+                    "timestamp",
+                    "created_by",
+                    "created_by_name",
+                    "created_at",
+                    "updated_at",
+                ),
+            )
+            and entry["outcome"] in OUTCOMES
+            and history(entry)
+        ):
+            return False
+    count = coverage.get("unresolved_count")
+    if coverage["status"] == "unknown":
+        if coverage["entries"] or count is not None:
+            return False
+    elif (
+        not coverage["entries"]
+        or type(count) is not int
+        or count != sum(entry["outcome"] == "needs_follow_up" for entry in coverage["entries"])
+    ):
+        return False
+    if models["status"] == "unknown" and models["models"]:
+        return False
+    for model in models["models"]:
+        if not (
+            strings(
+                model,
+                required=("target", "content"),
+                optional=("written_by", "written_by_name", "updated_at"),
+            )
+            and history(model)
+        ):
+            return False
+        revision = model.get("revision")
+        if revision is not None and (type(revision) is not int or revision < 1):
+            return False
+        amendments = model.get("amendments")
+        if amendments is not None and not (
+            isinstance(amendments, list)
+            and all(
+                strings(item, required=("content",), optional=("agent_id", "agent_name", "timestamp"))
+                for item in amendments
+            )
+        ):
+            return False
+    return True
+
+
+@app.get("/api/runs/{name}/assessment")
+def run_assessment(name: str) -> dict:
+    """Read the run-owned assessment; missing history never means zero gaps."""
+    from strixops.report.assessment import empty_assessment
+
+    run_dir = state.run_dir(name)
+    status = str(parser.json_load(run_dir / "run.json").get("status") or "unknown")
+    source_status = "missing"
+    try:
+        with os.fdopen(_open_run_file(run_dir, "assessment.json"), "rb") as source:
+            raw = source.read(4 * 1024 * 1024 + 1)
+        if len(raw) > 4 * 1024 * 1024:
+            raise ValueError("assessment exceeds the read limit")
+
+        def invalid_constant(_value: str) -> None:
+            raise ValueError("invalid JSON constant")
+
+        data = json.loads(
+            raw.decode("utf-8"), parse_constant=invalid_constant, parse_float=parser.finite_json_float
+        )
+        if not _valid_assessment_document(data):
+            raise ValueError("unsupported assessment")
+        return {**data, "source_status": "available"}
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        source_status = "unreadable"
+    return {**empty_assessment(status), "source_status": source_status}
+
+
 @app.get("/api/runs/{name}/report")
 def run_report(name: str) -> dict:
     path = state.run_dir(name) / REPORT_FILENAME
@@ -368,24 +532,63 @@ def run_log(name: str) -> dict:
     return {"text": "\n".join(lines[-ENGINE_LOG_TAIL_LINES:])}
 
 
+def _relative_file_parts(relative: str) -> tuple[str, ...]:
+    path = Path(relative)
+    if not relative or path.is_absolute() or not path.parts or ".." in path.parts or "\x00" in relative:
+        raise ValueError("invalid artifact path")
+    return path.parts
+
+
+def _open_run_file(run_dir: Path, relative: str) -> int:
+    """Open a regular file beneath an anchored directory, never following links."""
+    parts = _relative_file_parts(relative)
+    directory = os.open(run_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise OSError("artifact is not a regular file")
+        return fd
+    finally:
+        os.close(directory)
+
+
+def _artifact_visible(relative: str, evidence_names: set[str]) -> bool:
+    parts = _relative_file_parts(relative)
+    if parts[0] == "evidence":
+        return Path(*parts[1:]).as_posix() in evidence_names
+    return not any(part.startswith(".") for part in parts)
+
+
 def _artifact_files(run_dir: Path) -> list[dict[str, Any]]:
-    """Operator-visible files under a run dir — dot-files/dirs excluded."""
-    base = run_dir.resolve()
+    """Visible regular files; hidden evidence is included only through its manifest."""
+    evidence_names = {entry["filename"] for entry in _evidence_entries(run_dir) if entry["deliverable"]}
     files: list[dict[str, Any]] = []
-    for path in base.rglob("*"):
-        if not path.is_file():
-            continue
-        try:
-            rel = path.relative_to(base)
-        except ValueError:
-            continue
-        if any(part.startswith(".") for part in rel.parts):
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        files.append({"path": str(rel), "size": stat.st_size, "mtime": stat.st_mtime})
+    try:
+        base_fd = os.open(run_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return files
+    try:
+        for root, dirs, names, directory in os.fwalk(".", dir_fd=base_fd, follow_symlinks=False):
+            for name in names:
+                relative = (Path(root) / name).as_posix()
+                if not _artifact_visible(relative, evidence_names):
+                    continue
+                try:
+                    info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISREG(info.st_mode):
+                    files.append({"path": relative, "size": info.st_size, "mtime": info.st_mtime})
+            # Hidden directories only need traversal beneath the evidence archive.
+            if Path(root).parts[:1] != ("evidence",):
+                dirs[:] = [name for name in dirs if not name.startswith(".")]
+    finally:
+        os.close(base_fd)
     # Shallow-first so the tree lists root artifacts before nested dirs.
     files.sort(key=lambda item: (item["path"].count("/"), item["path"].lower()))
     return files
@@ -397,14 +600,109 @@ def run_artifacts_index(name: str) -> dict:
 
 
 @app.get("/api/runs/{name}/artifacts/{path:path}")
-def run_artifact(name: str, path: str) -> FileResponse:
-    base = state.run_dir(name).resolve()
-    target = (base / path).resolve()
-    if not target.is_relative_to(base):
-        raise HTTPException(status_code=400, detail="path escapes run dir")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(target)
+def run_artifact(name: str, path: str, request: Request) -> Response:
+    run_dir = state.run_dir(name)
+    try:
+        evidence_names = {entry["filename"] for entry in _evidence_entries(run_dir) if entry["deliverable"]}
+        if not _artifact_visible(path, evidence_names):
+            raise ValueError("hidden artifact")
+        fd = _open_run_file(run_dir, path)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="artifact not found") from exc
+    return _file_stream(fd, mimetypes.guess_type(path)[0] or "application/octet-stream", request)
+
+
+class _OwnedFileStream(StreamingResponse):
+    """Close the descriptor even when response startup or sending is interrupted."""
+
+    def __init__(self, source, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._close_file = weakref.finalize(self, source.close)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._close_file()
+
+
+def _file_stream(fd: int, media_type: str, request: Request | None = None) -> Response:
+    """Retain FileResponse's headers/ranges while reading only the owned descriptor."""
+    source = os.fdopen(fd, "rb")
+    try:
+        info = os.fstat(source.fileno())
+        # Reuse Starlette's current header/range semantics, but never call this
+        # FileResponse: its path-opening and pathsend branches are not safe here.
+        metadata = FileResponse("", media_type=media_type, stat_result=info)
+        headers = dict(metadata.headers)
+        request_headers = request.headers if request is not None else {}
+        if_none_match = request_headers.get("if-none-match")
+        if if_none_match and any(
+            tag.strip() == "*" or tag.strip().removeprefix("W/") == headers["etag"]
+            for tag in if_none_match.split(",")
+        ):
+            source.close()
+            headers.pop("content-length", None)
+            return Response(status_code=304, headers=headers)
+
+        status_code = 200
+        ranges = [(0, info.st_size)]
+        range_header = request_headers.get("range")
+        if_range = request_headers.get("if-range")
+        if range_header and (if_range is None or metadata._should_use_range(if_range)):
+            try:
+                requested_ranges = metadata._parse_range_header(range_header, info.st_size)
+            except MalformedRangeHeader as exc:
+                source.close()
+                return Response(exc.content, status_code=400, media_type="text/plain")
+            except RangeNotSatisfiable:
+                source.close()
+                headers.update({"content-range": f"bytes */{info.st_size}", "content-length": "0"})
+                return Response(status_code=416, headers=headers)
+            if requested_ranges:
+                ranges = requested_ranges
+                status_code = 206
+                if len(ranges) == 1:
+                    start, end = ranges[0]
+                    headers["content-range"] = f"bytes {start}-{end - 1}/{info.st_size}"
+                    headers["content-length"] = str(end - start)
+
+        boundary = ""
+        header_generator = None
+        if len(ranges) > 1:
+            boundary = secrets.token_hex(13)
+            length, header_generator = metadata.generate_multipart(
+                ranges, boundary, info.st_size, headers["content-type"]
+            )
+            headers["content-type"] = f"multipart/byteranges; boundary={boundary}"
+            headers["content-length"] = str(length)
+
+        def chunks():
+            try:
+                if request is not None and request.method == "HEAD":
+                    return
+                for start, end in ranges:
+                    if header_generator is not None:
+                        yield header_generator(start, end)
+                    source.seek(start)
+                    remaining = end - start
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+                    if header_generator is not None:
+                        yield b"\r\n"
+                if header_generator is not None:
+                    yield f"--{boundary}--".encode("latin-1")
+            finally:
+                source.close()
+
+        return _OwnedFileStream(source, chunks(), status_code=status_code, headers=headers)
+    except BaseException:
+        source.close()
+        raise
 
 
 def _unlink_quiet(path: str) -> None:
@@ -414,16 +712,20 @@ def _unlink_quiet(path: str) -> None:
 
 @app.get("/api/runs/{name}/archive")
 def run_archive(name: str) -> FileResponse:
-    """Zip bundle of a run's artifacts (dot-files excluded) for download."""
+    """Zip visible artifacts using anchored descriptors, including delivered evidence."""
     run_dir = state.run_dir(name)
-    base = run_dir.resolve()
     fd, tmp_name = tempfile.mkstemp(suffix=".zip", prefix="strixops-archive-")
     os.close(fd)
     try:
         with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as bundle:
             for item in _artifact_files(run_dir):
-                bundle.write(base / item["path"], arcname=f"{run_dir.name}/{item['path']}")
-    except OSError as exc:
+                fd = _open_run_file(run_dir, item["path"])
+                with (
+                    os.fdopen(fd, "rb") as source,
+                    bundle.open(f"{run_dir.name}/{item['path']}", "w", force_zip64=True) as output,
+                ):
+                    shutil.copyfileobj(source, output, length=1024 * 1024)
+    except (OSError, ValueError) as exc:
         _unlink_quiet(tmp_name)
         raise HTTPException(status_code=500, detail=f"archive failed: {exc}") from exc
     return FileResponse(
@@ -784,7 +1086,8 @@ def set_integrations(body: IntegrationBody) -> dict:
 
 
 class ScanBody(BaseModel):
-    target: str
+    target: str = ""
+    targets: list[str] | None = Field(default=None, min_length=1, max_length=MAX_TARGETS)
     scan_type: str = "web"
     crypto: bool = False
     socks5: str = ""
@@ -799,6 +1102,15 @@ class ScanBody(BaseModel):
     strix_llm: str = ""
     llm_api_mode: str = "chat_completions"
     llm_reasoning_effort: str = "default"
+
+    @model_validator(mode="before")
+    @classmethod
+    def formal_execution_only(cls, value: Any) -> Any:
+        if isinstance(value, dict) and (
+            value.get("engine", "ops") != "ops" or any(str(key).startswith("prototype_") for key in value)
+        ):
+            raise ValueError("This release uses the integrated StrixOps scanner only.")
+        return value
 
 
 def _resolve_llm_env(body: ScanBody) -> dict[str, str]:
@@ -832,13 +1144,21 @@ def _resolve_llm_env(body: ScanBody) -> dict[str, str]:
     )
 
 
-def _validated_launch_project(body: ScanBody) -> dict[str, Any] | None:
-    """Validate target syntax and, when assigned, project containment."""
+def _requested_targets(body: ScanBody) -> list[str]:
     try:
-        project_scope.normalize_target(body.target, body.scan_type)
-    except project_scope.TargetValidationError as exc:
+        return normalize_targets(body.target, body.targets)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+def _validated_launch_project(body: ScanBody) -> dict[str, Any] | None:
+    """Validate every target before creating a run or starting any process."""
+    targets = _requested_targets(body)
+    for target in targets:
+        try:
+            project_scope.normalize_target(target, body.scan_type)
+        except project_scope.TargetValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"{target}: {exc}") from exc
     if not body.project_id:
         return None
     data = projects_store.load_projects()
@@ -846,11 +1166,9 @@ def _validated_launch_project(body: ScanBody) -> dict[str, Any] | None:
     if project is None:
         raise HTTPException(status_code=400, detail=f"unknown project {body.project_id!r}")
     try:
-        project_scope.assert_target_allowed(
-            projects_store.scope_for_project(project),
-            body.target,
-            body.scan_type,
-        )
+        scope = projects_store.scope_for_project(project)
+        for target in targets:
+            project_scope.assert_target_allowed(scope, target, body.scan_type)
     except (project_scope.ScopeValidationError, project_scope.TargetValidationError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except project_scope.TargetOutOfScopeError as exc:
@@ -858,10 +1176,53 @@ def _validated_launch_project(body: ScanBody) -> dict[str, Any] | None:
     return project
 
 
+class TargetsPreflightBody(BaseModel):
+    targets: list[str] = Field(min_length=1, max_length=MAX_TARGETS)
+    scan_type: Literal["web", "internal"] = "web"
+    project_id: str = ""
+
+
+@app.post("/api/scans/validate-targets")
+def validate_scan_targets(body: TargetsPreflightBody) -> dict:
+    """Read-only per-target syntax and project checks; no DNS or model requests."""
+    try:
+        targets = normalize_targets(targets=body.targets)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    project = None
+    scope = None
+    if body.project_id:
+        project = projects_store.find_project(projects_store.load_projects(), body.project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="unknown project")
+        try:
+            scope = projects_store.scope_for_project(project)
+        except project_scope.ScopeValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    items = []
+    for target in targets:
+        try:
+            normalized = project_scope.normalize_target(target, body.scan_type)
+            decision = project_scope.evaluate_target(scope, target, body.scan_type) if scope else None
+            allowed = decision.allowed if decision is not None else True
+            items.append({
+                "target": target, "valid": True, "allowed": allowed,
+                "normalized_target": normalized.value,
+                **({"error": decision.reason} if not allowed and decision else {}),
+            })
+        except project_scope.TargetValidationError as exc:
+            items.append({"target": target, "valid": False, "allowed": False, "error": str(exc)})
+    return {
+        "valid": all(item["valid"] and item["allowed"] for item in items),
+        "targets": targets, "target_count": len(targets), "items": items,
+        **({"scope_revision": int(project.get("scope_revision") or 1)} if project else {}),
+    }
+
+
 @app.post("/api/scans")
 def launch_scan(body: ScanBody) -> dict:
-    if not body.target.strip():
-        raise HTTPException(status_code=400, detail="target is required")
+    targets = _requested_targets(body)
+    primary_target = targets[0]
     project = _validated_launch_project(body)
     llm_env: dict[str, str] = {}
     if not body.dry_run:
@@ -871,7 +1232,7 @@ def launch_scan(body: ScanBody) -> dict:
         )
         if errors:
             raise HTTPException(status_code=400, detail="; ".join(errors))
-    run_name = generate_run_name(body.target, body.scan_type)
+    run_name = generate_run_name(primary_target, body.scan_type)
     if (state.runs_root / run_name).exists():  # ensure unique
         run_name = f"{run_name[:-RUN_SUFFIX_LENGTH]}{secrets.token_hex(2)}"
     run_dir = state.runs_root / run_name
@@ -893,6 +1254,9 @@ def launch_scan(body: ScanBody) -> dict:
     (run_dir / LAUNCH_SIDECAR).write_text(
         json.dumps(
             {
+                "target": primary_target,
+                "scan_type": body.scan_type,
+                **({"targets": targets, "target_count": len(targets)} if len(targets) > 1 else {}),
                 "dry_run": bool(body.dry_run),
                 "model": llm_env.get("strix_llm") or "",
                 "llm_api_mode": resolved_api_mode(llm_env["strix_llm"], llm_env["llm_api_mode"])
@@ -917,8 +1281,7 @@ def launch_scan(body: ScanBody) -> dict:
         sys.executable,
         "-m",
         "strixops.cli",
-        "-t",
-        body.target,
+        *[arg for target in targets for arg in ("-t", target)],
         "--scan-type",
         body.scan_type,
         "--instruction-file",
@@ -970,7 +1333,10 @@ def launch_scan(body: ScanBody) -> dict:
     (run_dir / ".console.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
 
     scan_id = uuid.uuid4().hex[:8]
-    state.scans[scan_id] = {"pid": proc.pid, "popen": proc, "run_name": run_name, "target": body.target}
+    state.scans[scan_id] = {
+        "pid": proc.pid, "popen": proc, "run_name": run_name,
+        "target": primary_target, "targets": targets, "target_count": len(targets),
+    }
     return {"ok": True, "scan_id": scan_id, "run_name": run_name, "pid": proc.pid}
 
 
@@ -985,6 +1351,8 @@ def list_scans() -> dict:
                 "pid": info.get("pid"),
                 "run_name": info.get("run_name"),
                 "target": info.get("target"),
+                "targets": info.get("targets", [info.get("target")]),
+                "target_count": info.get("target_count", 1),
                 "alive": _pid_alive(info.get("pid")),
                 "exit_code": popen.poll() if popen is not None else None,
             }
@@ -1108,12 +1476,9 @@ def update_project_scope(project_id: str, body: ProjectScopeBody) -> dict:
     for run_dir in projects_store.project_runs(project_id):
         summary = _run_summary(run_dir, cache=False)
         try:
-            allowed = project_scope.target_is_allowed(
-                normalized,
-                summary.get("target") or "",
-                summary.get("scan_type") or "web",
-            )
-        except project_scope.ScopeError:
+            _assert_run_scope(normalized, summary)
+            allowed = True
+        except (project_scope.ScopeError, ValueError):
             allowed = False
         if allowed:
             continue
@@ -1160,12 +1525,9 @@ def project_runs_endpoint(project_id: str) -> dict:
     for run_dir in projects_store.project_runs(project_id):
         summary = _run_summary(run_dir, cache=False)
         try:
-            summary["scope_match"] = project_scope.target_is_allowed(
-                projects_store.scope_for_project(project),
-                summary.get("target") or "",
-                summary.get("scan_type") or "web",
-            )
-        except project_scope.ScopeError:
+            _assert_run_scope(projects_store.scope_for_project(project), summary)
+            summary["scope_match"] = True
+        except (project_scope.ScopeError, ValueError):
             summary["scope_match"] = False
         runs.append(summary)
     runs.sort(key=lambda r: r.get("start_time") or "", reverse=True)
@@ -1282,12 +1644,8 @@ def assign_run_to_project(name: str, body: AssignBody) -> dict:
             raise HTTPException(status_code=400, detail="assign failed (unknown project)")
         summary = _run_summary(run_dir, cache=False)
         try:
-            project_scope.assert_target_allowed(
-                projects_store.scope_for_project(project),
-                summary.get("target") or "",
-                summary.get("scan_type") or "web",
-            )
-        except project_scope.ScopeError as exc:
+            _assert_run_scope(projects_store.scope_for_project(project), summary)
+        except (project_scope.ScopeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not projects_store.assign_run(run_dir, body.project_id):
         raise HTTPException(status_code=400, detail="assign failed (unknown project or unreadable run)")
@@ -1456,24 +1814,66 @@ def _size_human(size: int) -> str:
     return f"{size} B"
 
 
+def _evidence_entries(run_dir: Path) -> list[dict[str, Any]]:
+    """Read a trusted manifest without following paths supplied by the workspace.
+
+    Legacy entries without delivery flags are usable only when the attachment
+    still exists as a regular file. Explicit failed delivery is never upgraded.
+    """
+    try:
+        with os.fdopen(
+            _open_run_file(run_dir, "evidence/.evidence_index.json"), "r", encoding="utf-8"
+        ) as source:
+            raw = json.load(source)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    entries = []
+    seen = set()
+    for value in raw:
+        if not isinstance(value, dict) or not isinstance(value.get("filename"), str):
+            continue
+        try:
+            parts = _relative_file_parts(value["filename"])
+        except ValueError:
+            continue
+        filename = Path(*parts).as_posix()
+        if parts[-1] == ".evidence_index.json" or filename in seen:
+            continue
+        seen.add(filename)
+        entry = dict(value, filename=filename)
+        entry.pop("download_url", None)
+        delivered = entry.get("deliverable", entry.get("persisted", True)) is True
+        try:
+            with os.fdopen(_open_run_file(run_dir, f"evidence/{filename}"), "rb") as source:
+                info = os.fstat(source.fileno())
+            if isinstance(entry.get("size"), int) and entry["size"] != info.st_size:
+                raise OSError("evidence size changed after collection")
+            entry.setdefault("size", info.st_size)
+        except (OSError, ValueError) as exc:
+            if delivered:
+                entry["error"] = f"Attachment unavailable: {exc}"
+            delivered = False
+        entry["deliverable"] = delivered
+        entry["size"] = entry["size"] if isinstance(entry.get("size"), int) and entry["size"] >= 0 else 0
+        entry["category"] = str(entry.get("category") or "other")
+        entry["sha256"] = str(entry.get("sha256") or "")
+        entries.append(entry)
+    return entries
+
+
 @app.get("/api/runs/{name}/evidence")
 def run_evidence(name: str) -> dict:
-    run_dir = state.run_dir(name)
-    index_file = run_dir / "evidence" / ".evidence_index.json"
-    if not index_file.exists():
-        return {"evidence": [], "totals": {"count": 0, "total_bytes": 0}}
-
-    try:
-        entries = json.loads(index_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        entries = []
+    entries = _evidence_entries(state.run_dir(name))
 
     for entry in entries:
         entry["size_human"] = _size_human(entry.get("size", 0))
         entry["category_label"] = _CATEGORY_LABELS.get(entry.get("category", ""), "Other")
         sha = entry.get("sha256", "")
         entry["sha256_short"] = sha[:8] + "…" if len(sha) > 8 else sha
-        entry["download_url"] = f"/api/runs/{quote(name)}/evidence/{quote(entry['filename'])}"
+        if entry["deliverable"]:
+            entry["download_url"] = f"/api/runs/{quote(name, safe='')}/evidence/{quote(entry['filename'])}"
 
     return {
         "evidence": entries,
@@ -1486,14 +1886,18 @@ def run_evidence(name: str) -> dict:
 
 
 @app.get("/api/runs/{name}/evidence/{file_path:path}")
-def run_evidence_file(name: str, file_path: str) -> FileResponse:
+def run_evidence_file(name: str, file_path: str, request: Request) -> Response:
     run_dir = state.run_dir(name)
-    target = (run_dir / "evidence" / file_path).resolve()
-    if not target.is_relative_to(run_dir.resolve()) or not target.is_file():
-        raise HTTPException(status_code=404, detail="evidence file not found")
-    if target.name.startswith("."):
-        raise HTTPException(status_code=404, detail="hidden files not served")
-    return FileResponse(target, media_type="application/octet-stream")
+    try:
+        filename = Path(*_relative_file_parts(file_path)).as_posix()
+        if not any(
+            entry["filename"] == filename and entry["deliverable"] for entry in _evidence_entries(run_dir)
+        ):
+            raise ValueError("attachment is not deliverable")
+        fd = _open_run_file(run_dir, f"evidence/{filename}")
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="evidence file not found") from exc
+    return _file_stream(fd, "application/octet-stream", request)
 
 
 # ----------------------------------------------------------------- static UI

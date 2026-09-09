@@ -12,13 +12,15 @@ import asyncio
 import json
 import logging
 import uuid
+from contextlib import nullcontext
 from typing import Any
 
 from strixops import skills as skill_registry
 from strixops.agents.factory import build_child_agent
 from strixops.agents.prompts import engagement_context
-from strixops.engine.coordinator import STATUS_COMPLETED, AgentCoordinator
+from strixops.engine.coordinator import STATUS_COMPLETED, AdmissionError, AgentCoordinator
 from strixops.engine.loop import run_agent_loop
+from strixops.engine.prompt_resources import PromptResources
 from strixops.engine.scanconfig import EngineContext, EngineServices
 from strixops.engine.sessions import scrub_images_from_items
 from strixops.platform.events import EventWriter
@@ -40,6 +42,10 @@ def make_spawn_child(services: EngineServices):
         coordinator: AgentCoordinator = services.coordinator  # type: ignore[assignment]
         events: EventWriter = services.events  # type: ignore[assignment]
 
+        try:
+            coordinator.check_admission(parent.agent_id)
+        except AdmissionError as exc:
+            return {"ok": False, "error": str(exc), "error_code": exc.code}
         agent_id = uuid.uuid4().hex[:8]
         child_context = EngineContext(
             agent_id=agent_id,
@@ -53,20 +59,32 @@ def make_spawn_child(services: EngineServices):
         run_dir = getattr(services, "run_dir", None) or (
             services.run_state.run_dir if services.run_state is not None else None
         )
+        resources = PromptResources.for_run(run_dir, services.spec) if run_dir is not None else None
         try:
-            skills = list(dict.fromkeys(skill_registry.canonical_skill_id(skill) for skill in skills))
-            agent = build_child_agent(
-                name,
-                task,
-                model=model,
-                sandbox=services.sandbox is not None,
-                spec=services.spec,
-                skills=skills,
-                run_dir=run_dir,
-            )
-        except skill_registry.SkillResolutionError as exc:
+            with resources.activate() if resources is not None else nullcontext():
+                skills = list(dict.fromkeys(skill_registry.canonical_skill_id(skill) for skill in skills))
+                agent = build_child_agent(
+                    name,
+                    task,
+                    model=model,
+                    sandbox=services.sandbox is not None,
+                    spec=services.spec,
+                    skills=skills,
+                    run_dir=run_dir,
+                    agent_id=agent_id,
+                )
+        except (skill_registry.SkillResolutionError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        initial_input = _child_initial_input(services, name, agent_id, parent, task, parent_history)
+        with resources.activate() if resources is not None else nullcontext():
+            initial_input = _child_initial_input(
+                services,
+                name,
+                agent_id,
+                parent,
+                task,
+                parent_history,
+                frozen_spec=resources.spec if resources is not None else services.spec,
+            )
 
         async def _run_child() -> None:
             try:
@@ -119,6 +137,8 @@ def _child_initial_input(
     parent: EngineContext,
     task: str,
     parent_history: list[Any],
+    *,
+    frozen_spec: Any = None,
 ) -> list[dict[str, Any]]:
     """Keep inherited background and the new assignment in one user message.
 
@@ -140,7 +160,7 @@ def _child_initial_input(
         f"You are agent {name} ({agent_id}); your parent is {parent.agent_id}. "
         "Maintain your own identity. Call agent_finish when your task is complete."
     )
-    parts.append(engagement_context(services.spec))
+    parts.append(engagement_context(frozen_spec if frozen_spec is not None else services.spec))
     parts.append(task)
     parts.append(
         "Stay strictly within the authorized scope above. File validated findings "

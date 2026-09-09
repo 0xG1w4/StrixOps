@@ -22,24 +22,47 @@ from strixops import __version__
 from strixops.config.settings import EngineSettings
 from strixops.engine.runner import EXIT_FAILED, run_scan
 from strixops.engine.scanconfig import SCAN_INTERNAL, SCAN_WEB, ScanSpec
+from strixops.engine.targets import normalize_targets, read_target_list
 
-_INTERRUPT: dict[str, int] = {"signum": 0}
 
+async def _run_with_signal_handlers(spec: ScanSpec, settings: EngineSettings) -> int:
+    """Cancel only the scan driver; its shielded finalizer owns shared cleanup.
 
-def _install_signal_handlers() -> None:
-    """SIGTERM/SIGINT → KeyboardInterrupt inside asyncio.run, exit 143/130.
-
-    asyncio.run's cleanup then cancels the main task, which lets run_scan
-    record ``interrupted`` and tear the sandbox down before the process dies.
+    Raising KeyboardInterrupt from a signal handler makes asyncio.run cancel
+    every task, including the finalizer. Repeated signals therefore request
+    cancellation of this same driver and never escape into loop shutdown.
     """
+    loop = asyncio.get_running_loop()
+    scan_task = asyncio.create_task(run_scan(spec, settings), name="strixops-scan")
+    received_signal = 0
+    previous: dict[signal.Signals, object] = {}
 
-    def _handler(signum: int, _frame: object) -> None:
-        _INTERRUPT["signum"] = signum
-        raise KeyboardInterrupt
+    def handler(signum: int, _frame: object) -> None:
+        nonlocal received_signal
+        if not received_signal:
+            received_signal = signum
+        loop.call_soon_threadsafe(scan_task.cancel)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
-        with contextlib.suppress(ValueError, OSError):  # not main thread / unsupported
-            signal.signal(sig, _handler)
+        with contextlib.suppress(ValueError, OSError):
+            prior = signal.getsignal(sig)
+            signal.signal(sig, handler)
+            previous[sig] = prior
+    try:
+        try:
+            result = await scan_task
+        except asyncio.CancelledError:
+            if not received_signal:
+                raise
+            result = 128 + received_signal
+        if received_signal:
+            print(f"interrupted by signal {received_signal}", file=sys.stderr, flush=True)
+            return 128 + received_signal
+        return result
+    finally:
+        for sig, prior in previous.items():
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(sig, prior)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,7 +70,18 @@ def build_parser() -> argparse.ArgumentParser:
         prog="strix",
         description="StrixOps autonomous pentest engine (platform scan core)",
     )
-    parser.add_argument("-t", "--target", help="scan target (URL / host / IP)")
+    parser.add_argument(
+        "-t",
+        "--target",
+        action="append",
+        help="scan target (URL / host / IP); repeat for one multi-target scan",
+    )
+    parser.add_argument(
+        "--target-list",
+        action="append",
+        metavar="PATH",
+        help="UTF-8 target file, one per nonempty noncomment line; repeat or combine with --target",
+    )
     parser.add_argument(
         "--scan-type",
         choices=[SCAN_WEB, SCAN_INTERNAL],
@@ -85,8 +119,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    try:
+        targets = list(args.target or [])
+        for path in args.target_list or []:
+            targets.extend(read_target_list(path))
+        targets = normalize_targets(targets=targets)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr, flush=True)
+        return EXIT_FAILED
+
     spec = ScanSpec(
-        target=(args.target or "").strip(),
+        target=targets[0],
+        targets=targets if len(targets) > 1 else [],
         scan_type=args.scan_type,
         crypto=bool(args.crypto),
         instruction_file=args.instruction_file or "",
@@ -112,12 +156,11 @@ def main(argv: list[str] | None = None) -> int:
         settings = dataclasses.replace(settings, dry_run=True)
 
     try:
-        _install_signal_handlers()
-        return asyncio.run(run_scan(spec, settings))
+        return asyncio.run(_run_with_signal_handlers(spec, settings))
     except KeyboardInterrupt:
-        signum = _INTERRUPT["signum"] or int(signal.SIGINT)
-        print(f"interrupted by signal {signum}", file=sys.stderr, flush=True)
-        return 128 + signum  # 143 SIGTERM / 130 SIGINT
+        # Covers interruption before the coroutine installs its handlers.
+        print(f"interrupted by signal {int(signal.SIGINT)}", file=sys.stderr, flush=True)
+        return 128 + int(signal.SIGINT)
 
 
 if __name__ == "__main__":

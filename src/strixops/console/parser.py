@@ -8,9 +8,12 @@ tool events render with the right kind (shell/todo/finish/report/…).
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
+
+from strixops.engine.targets import normalize_targets
 
 _SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
@@ -27,6 +30,30 @@ def json_load(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def scan_targets(scan_config: dict[str, Any]) -> list[str]:
+    """Read a complete recorded scope without dropping malformed secondary targets.
+
+    Missing legacy targets are unknown, not an empty multi-target launch. A
+    present but invalid list raises so assignment and scope checks fail closed.
+    """
+    if not isinstance(scan_config, dict):
+        raise ValueError("scan_config must be an object")
+    primary = scan_config.get("target", "")
+    if "targets" not in scan_config:
+        if primary in ("", None):
+            return []
+        return normalize_targets(primary)
+    values = scan_config["targets"]
+    if not isinstance(values, list) or not values:
+        raise ValueError("recorded targets must be a nonempty list")
+    result = normalize_targets(primary, values)
+    if "target_count" in scan_config and (
+        type(scan_config["target_count"]) is not int or scan_config["target_count"] != len(result)
+    ):
+        raise ValueError("recorded target_count does not match targets")
+    return result
 
 
 def infer_tool_kind(args: dict[str, Any]) -> dict[str, Any]:
@@ -193,17 +220,91 @@ def _to_message(event: dict, index: int, pending_tool: dict) -> dict | None:
     return None
 
 
+def finite_json_float(value: str) -> float:
+    """Reject overflow syntax too, not only the nonstandard NaN/Infinity tokens."""
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("nonfinite JSON number")
+    return result
+
+
+def _displayable_vulnerability(value: Any) -> bool:
+    """Keep valid legacy records verbatim; do not coerce corrupt values into facts."""
+    if not isinstance(value, dict) or not isinstance(value.get("id"), str) or not value["id"].strip():
+        return False
+    text_fields = (
+        "title",
+        "severity",
+        "timestamp",
+        "target",
+        "description",
+        "impact",
+        "technical_analysis",
+        "poc_description",
+        "poc_script_code",
+        "remediation_steps",
+        "evidence",
+        "cvss_vector",
+        "endpoint",
+        "method",
+        "cve",
+        "cwe",
+        "confidence",
+        "confidence_rationale",
+        "severity_change_conditions",
+        "fix_effort",
+        "finding_class",
+        "fix_verification",
+        "fix_pr_body",
+        "updated_at",
+        "discovered_by_agent",
+        "discovered_by_agent_name",
+        "agent_id",
+        "agent_name",
+        "poc_language",
+    )
+    if any(value.get(key) is not None and not isinstance(value[key], str) for key in text_fields):
+        return False
+    score = value.get("cvss")
+    if score is not None and (type(score) not in (int, float) or not 0 <= score <= 10):
+        return False
+    # Older metadata can be a string; the detail renderer safely preserves it
+    # and the project aggregator treats non-object metadata as unknown identity.
+    for field in ("code_locations", "update_history"):
+        items = value.get(field)
+        if items is not None and not (
+            isinstance(items, list) and all(isinstance(item, dict) for item in items)
+        ):
+            return False
+    return True
+
+
 def parse_findings(run_dir: Path) -> dict[str, Any]:
     """Vulnerabilities (json) + internal findings (md headers)."""
     vulns: list[dict[str, Any]] = []
+    warnings: list[str] = []
     vulns_file = run_dir / "vulnerabilities.json"
     if vulns_file.exists():
         try:
-            data = json.loads(vulns_file.read_text(encoding="utf-8"))
+
+            def reject_constant(_value: str) -> None:
+                raise ValueError("invalid JSON constant")
+
+            data = json.loads(
+                vulns_file.read_text(encoding="utf-8"),
+                parse_float=finite_json_float,
+                parse_constant=reject_constant,
+            )
             if isinstance(data, list):
-                vulns = data
-        except (OSError, json.JSONDecodeError):
-            pass
+                vulns = [entry for entry in data if _displayable_vulnerability(entry)]
+                if len(vulns) != len(data):
+                    warnings.append(
+                        "Some finding records could not be displayed; the original artifacts are unchanged."
+                    )
+            else:
+                warnings.append("The finding artifact has an unsupported format; results are unknown.")
+        except (OSError, UnicodeError, ValueError, RecursionError):
+            warnings.append("The finding artifact could not be read; results are unknown.")
 
     internal: list[dict[str, Any]] = []
     internal_dir = run_dir / "internal_findings"
@@ -211,7 +312,10 @@ def parse_findings(run_dir: Path) -> dict[str, Any]:
         for path in sorted(internal_dir.glob("*.md")):
             internal.append(_parse_internal_md(path))
 
-    return {"vulnerabilities": vulns, "internal": internal}
+    result: dict[str, Any] = {"vulnerabilities": vulns, "internal": internal}
+    if warnings:
+        result["read_warnings"] = warnings
+    return result
 
 
 def _parse_internal_md(path: Path) -> dict[str, Any]:

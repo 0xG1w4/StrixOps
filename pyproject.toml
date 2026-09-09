@@ -1,7 +1,7 @@
 [project]
 name = "strixops"
-version = "0.1.0"
-description = "StrixOps — autonomous pentest engine, drop-in core for the Strix platform"
+version = "1.0.0"
+description = "StrixOps — integrated security assessment engine and web console"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -44,6 +44,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/strixops"]
+exclude = ["/src/strixops/testing"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/console/web", "/containers", "/docs", "/README.md", "/CHANGELOG.md", "/NOTICE", "/LICENSE", "/pyproject.toml", "/uv.lock"]
+exclude = ["/tests", "/src/strixops/testing", "/docs/*-validation.md", "/experiments", "/console/web/node_modules", "/console/web/.next", "**/__pycache__", "**/*.pyc", "**/*.tsbuildinfo", "**/.DS_Store", "**/.env*"]
+
+[tool.hatch.build.targets.sdist.force-include]
+"console/web/out" = "console/web/out"
 
 [tool.hatch.build.targets.wheel.force-include]
 "console/web/out" = "strixops/console/web"

@@ -153,6 +153,13 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
         lines.append(
             f"**Endpoint:** {report['endpoint']}" + (f" ({report['method']})" if report.get("method") else "")
         )
+    for key, label in (
+        ("finding_class", "Finding Class"),
+        ("confidence", "Confidence"),
+        ("fix_effort", "Fix Effort"),
+    ):
+        if report.get(key):
+            lines.append(f"**{label}:** {report[key]}")
 
     _section(lines, "Description", report.get("description"))
     _section(lines, "Impact", report.get("impact"))
@@ -162,27 +169,45 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:
     _section(lines, "Technical Analysis", report.get("technical_analysis"))
     _section(lines, "Remediation", report.get("remediation_steps"))
     _section(lines, "Evidence", report.get("evidence"))
+    _section(lines, "Assumptions", report.get("assumptions"))
+    _section(lines, "Dependency Metadata", report.get("dependency_metadata"))
+    _section(lines, "Code Locations and Fixes", report.get("code_locations"))
+    _section(lines, "Fix Verification", report.get("fix_verification"))
+    _section(lines, "Suggested Pull Request", report.get("fix_pr_body"))
 
     cvss = report.get("cvss")
     if cvss is not None:
         lines.append("\n## Contextual CVSS\n")
         lines.append(f"**CVSS:** {cvss}")
+        if report.get("cvss_vector"):
+            lines.append(f"**Vector:** {report['cvss_vector']}")
+        _section(lines, "CVSS Metrics", report.get("cvss_breakdown"))
     if report.get("poc_description") or report.get("poc_script_code"):
         lines.append("\n## Proof of Concept\n")
         if report.get("poc_description"):
             lines.append(f"{report['poc_description']}\n")
         if report.get("poc_script_code"):
-            lines.append("```python")
-            lines.append(str(report["poc_script_code"]))
-            lines.append("```\n")
+            lines.append(_code_block(str(report["poc_script_code"])))
+    _section(lines, "Update History", report.get("update_history"))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _code_block(value: str, language: str = "") -> str:
+    # Preserve arbitrary evidence/code containing its own Markdown fences.
+    fence = "```"
+    while fence in value:
+        fence += "`"
+    return f"{fence}{language}\n{value}\n{fence}"
 
 
 def _section(lines: list[str], title: str, value: Any) -> None:
     if value in (None, "", []):
         return
     lines.append(f"\n## {title}\n")
-    lines.append(str(value))
+    if isinstance(value, (dict, list)):
+        lines.append(_code_block(json.dumps(value, ensure_ascii=False, indent=2, default=str), "json"))
+    else:
+        lines.append(str(value))
 
 
 # -------------------------------------------------------- internal findings

@@ -5,6 +5,7 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-upstream/
 venv/
 
 # Tooling
@@ -78,6 +79,11 @@ GEMINI.md
 
 # Standalone design experiments
 /design/
+
+# Local validation code, fixtures, and verification records
+/tests/
+/src/strixops/testing/
+/docs/*-validation.md
 
 # OS
 .DS_Store
