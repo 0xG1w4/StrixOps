@@ -1,330 +1,686 @@
-# StrixOps v1.0.0
+# StrixOps
 
-Release date: 2026-09-09.
+**A security assessment engine and web console for web applications and internal networks.**
 
-StrixOps is an integrated security assessment engine and web console for web
-and internal-network engagements. Its Python engine, FastAPI API, and Next.js
-frontend run as one product. The open-source
-[Strix](https://github.com/usestrix/strix) project is a reference for selected
-core behaviors and derived assets; see `NOTICE` for attribution.
+**English** · [简体中文](README.zh-CN.md)
 
-The normal CLI and Console use the built-in StrixOps engine. Installation and
-execution do not require a sibling Strix checkout, an external Strix Python
-package, or a second engine process. The shared Docker image still extends a
-Strix sandbox image; independence of the engine does not remove that image
-dependency.
+Version **1.0.0** · [Release notes](docs/v1.0.0.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
-See [the v1.0.0 release notes](docs/v1.0.0.md) for installation and included
-features. The wheel includes the built frontend and all built-in runtime
-prompts and skills. Node.js is needed when building the frontend from source.
+StrixOps brings model-driven agents, Docker-based assessment tools, live task
+monitoring, findings, and evidence into one workflow. Start an engagement from
+the browser or CLI, follow agent activity, add operator guidance, and review a
+report alongside the records that produced it.
 
-The `strix` compatibility command and `strixops` both start the built-in engine:
+The Python engine, FastAPI service, and Next.js console are part of the same
+product. The Console starts a native engine process for each task; both `strixops`
+and the compatibility command `strix` invoke that engine. An external Strix
+checkout or Python package is not required. The sandbox image does extend an
+upstream Strix image; see [Sandbox deployment](#sandbox-deployment) and [NOTICE](NOTICE).
 
+Use StrixOps for systems you are authorized to assess. Model output and reported
+coverage require review; a completed task is not a guarantee that a target is secure.
+
+## Contents
+
+- [What you can do](#what-you-can-do)
+- [Architecture and task lifecycle](#architecture-and-task-lifecycle)
+- [Requirements](#requirements)
+- [Quick start from source](#quick-start-from-source)
+- [Install a built wheel](#install-a-built-wheel)
+- [Configure model routes](#configure-model-routes)
+- [Run your first assessment](#run-your-first-assessment)
+- [CLI usage](#cli-usage)
+- [Server deployment](#server-deployment)
+- [Sandbox deployment](#sandbox-deployment)
+- [Configuration reference](#configuration-reference)
+- [Reports, evidence, and storage](#reports-evidence-and-storage)
+- [Prompts, skills, and agent behavior](#prompts-skills-and-agent-behavior)
+- [Troubleshooting](#troubleshooting)
+- [Development and packaging](#development-and-packaging)
+- [License and attribution](#license-and-attribution)
+
+## What you can do
+
+| Area | Included capabilities | Practical use |
+|---|---|---|
+| Web assessments | URL, domain, and IP targets; browser and HTTP tooling; Caido interception in the sandbox | Investigate application behavior and record reproducible findings |
+| Internal assessments | Host, IP, and CIDR targets; shared network-tool image; optional SOCKS5 or GSocket access | Assess an authorized internal environment with explicit scope and access instructions |
+| Multi-target tasks | Up to 100 distinct targets in one run | Keep related services under one context, evidence archive, and final report |
+| Live Console | Task dashboard, conversation stream, agent tree, operator hints, findings, and downloads | Follow execution and provide additional guidance during a task |
+| Projects | Scope validation, task grouping, report aggregation, and skill-use analytics | Organize repeated assessments of the same environment |
+| Model profiles | Custom OpenAI-compatible or OpenRouter routes; separate Web/internal models, API types, and reasoning effort | Reuse and compare model configurations without changing engine code |
+| Prompt and skill editing | Built-in Markdown library, editor, preview, and per-run snapshots | Maintain instructions while preserving the exact resources used by an existing run |
+| Model diagnostics | Tool-call round-trip checks and separate per-file prompt tests | Check route behavior before committing to a full assessment |
+| Shared assessment state | Coverage, threat models, authors, and revision history | Keep findings and assessment notes coordinated across agents |
+| Reporting | Dynamic and dependency findings, CVSS validation, source/fix metadata, project reports | Review evidence and remediation details together |
+| Evidence | Retained workspaces, SHA256 metadata, binary downloads, and ZIP export | Preserve the files referenced by findings and final reports |
+
+The Console is a **single-user application**. It does not provide user accounts,
+tenant isolation, or an authentication boundary. Remote deployment should keep
+it behind an SSH tunnel or an authenticated access layer.
+
+## Architecture and task lifecycle
+
+```mermaid
+flowchart LR
+    Operator[Operator] --> UI[Web Console]
+    UI --> API[FastAPI service]
+    API --> Profiles[(Model profiles and projects)]
+    API --> Engine[Native StrixOps engine per task]
+    CLI[strixops / strix CLI] --> Engine
+    Engine --> Agents[Root and child agents]
+    Agents <--> Model[Configured model service]
+    Agents <--> Sandbox[Docker sandbox]
+    Sandbox --> Targets[Authorized targets]
+    Engine --> Runs[(Run state, findings, and evidence)]
+    Runs --> API
 ```
-strix -t <target> --scan-type web|internal --crypto \
-      --instruction-file <path> [--socks5 <val> | --gsocket <val>]
+
+The built frontend and API share one Console process and origin. A local Docker
+daemon provides the assessment environment; no Postgres, Redis, or separate
+frontend server is needed for the normal deployment. The model service is
+configured separately and receives the context needed by the agent requests.
+
+```mermaid
+flowchart TD
+    Scope[Choose scope, model route, and instructions] --> Validate[Validate target list and project scope]
+    Validate --> Snapshot[Create run and freeze prompts and skills]
+    Snapshot --> Sandbox[Prepare Docker sandbox]
+    Sandbox --> Assess[Agents assess targets and record findings]
+    Assess --> Guidance[Operator hints and shared assessment state]
+    Guidance --> Assess
+    Assess --> Finalize[Stop agents and sandbox writers]
+    Finalize --> Evidence[Persist reports and collect evidence]
+    Evidence --> Cleanup[Verify sandbox cleanup]
+    Cleanup --> Outcome[Publish final run status]
 ```
 
-## Contract surface
+Failures and ordinary interruptions also enter cleanup and evidence handling.
+Forced process termination or host failure may leave recovery work to the
+operator. Successful completion is published only after report persistence and
+verified container cleanup.
 
-| Interface | Behavior |
-|---|---|
-| Binary | console script `strix` (drop-in) and `strixops` |
-| Env | `LLM_API_BASE`, `LLM_API_KEY`, `STRIX_LLM` (LiteLLM-prefixed), `STRIX_RUNS`, `STRIX_OPERATOR_HINTS_DIR`, `STRIX_HOST_WORKSPACE_DIR` |
-| Run dir | `<STRIX_RUNS>/<slug>_<4hex>/` created (with an empty `events.jsonl` and a `run.configured` event) before any slow work |
-| Events | `events.jsonl` — see `src/strixops/platform/events.py` |
-| Artifacts | `penetration_test_report.md`, `vulnerabilities.json`/`.csv`/`vuln-NNNN.md`, `internal_findings/int-NNNN.md`, `run.json`, `.state/agents.json` |
-| Exit codes | `0` clean scan · non-zero failure (platform maps: events+0 → reporting, events+nonzero → partial reporting, no events → failed) |
+## Requirements
 
-## Layout
+| Component | Requirement | When needed |
+|---|---|---|
+| Host OS | Linux or macOS / POSIX environment | Engine, CLI, and Console |
+| Python | 3.12 or newer | Engine, CLI, and Console |
+| Docker | Running Linux-container daemon accessible to the account running StrixOps | Real assessments |
+| Sandbox image | `strixops-sandbox:1.3.0`, or a compatible image selected with `STRIXOPS_IMAGE` | Real assessments |
+| Model service | OpenAI-compatible API with the selected protocol, streaming, and function tools | Assessments and model diagnostics |
+| Git and uv | Source checkout and frozen Python dependency installation | Source deployment |
+| Node.js and npm | Node.js 20.9+ for the current locked frontend dependencies | Frontend source builds only |
+| Network and disk | Access to the model service, authorized targets, image/build sources, and space for workspaces and evidence | Depends on the engagement |
 
-```
-src/strixops/
-├── cli.py            # argv surface, exit codes
-├── config/           # env settings, LLM provider routing
-├── platform/         # the outward contract: run naming, events, artifacts, hints
-├── engine/           # agent loop, coordinator, spawn, scan orchestration
-├── agents/           # agent factory + system prompts
-├── tools/            # agent function tools
-├── report/           # run state: findings, run record, completion
-├── runtime/          # docker sandbox backend
-├── skills/           # skill corpus + registry
-└── console/          # FastAPI server + web UI service
-console/web/          # Next.js console UI (static export, served by strixops-console)
-containers/           # shared sandbox image (Dockerfile.sandbox + build script)
-```
+The host runs the Console and Python engine; assessment tools run in the Docker
+sandbox. Image tool availability can differ by CPU architecture. Some optional
+internal tools are installed on a best-effort basis; inspect the image if your
+engagement depends on a particular tool.
 
-## Console
+The Console uses POSIX facilities such as `fcntl`; native Windows execution is
+not supported by this implementation. Windows users need a Linux environment
+with working Docker access and compatible workspace bind mounts.
 
-The StrixOps console includes the runs dashboard, live conversation, agent
-tree, findings, reports, operator hints, and scan launcher. From the source
-checkout, install dependencies and build the frontend and sandbox once:
+## Quick start from source
+
+Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-uv sync --frozen --no-dev
+git clone --branch v1.0.0 https://github.com/0xG1w4/StrixOps.git
+cd StrixOps
+
 npm --prefix console/web ci
 npm --prefix console/web run build
+uv sync --frozen --no-dev
 bash containers/build-images.sh
-uv run --no-dev strixops-console                 # http://127.0.0.1:8300
+
+uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 ```
 
-One process serves both the API (`/api/*`) and the built UI. Configure a model
-profile, launch a scan, watch the conversation stream live, send operator
-hints mid-scan, and browse findings, assessment coverage, reports, and evidence.
-Normal scans require a compatible model service and the Docker sandbox image.
+Open **[http://127.0.0.1:8300](http://127.0.0.1:8300)**.
 
-The launch page defaults to the existing single-target form. Choose **Multi-target
-task** to enter 2–100 targets, one per line, or import a UTF-8 `.txt` file up to
-512 KiB. Blank lines and `#` comments are ignored and exact duplicates are merged.
-Each target displays its format and project-scope check; launch rechecks the full
-list against the current project scope. Switching back preserves the single-target
-draft. One task type, model route, and instruction set apply to the entire list.
-Web targets use the existing URL/domain/IP support; internal targets use hostnames,
-IPs, or CIDR networks.
+Build the frontend before `uv sync`: the Python package includes
+`console/web/out`, which does not exist in a fresh clone until the frontend
+build finishes.
 
-All targets belong to **one native StrixOps run**, with shared agent context,
-per-target assessment guidance, a common evidence archive, and one final report.
-Run details, reruns, project scope checks, search, and report aggregation preserve
-the full list. Legacy single-target runs and API requests remain supported.
+1. Open **Settings** and create a model profile with its provider URL, API key,
+   and Web/internal model assignments.
+2. Choose an API mode and reasoning effort, then use **Test model** to check the
+   streaming tool-call and tool-result flow.
+3. Open the scan launcher, supply an authorized target and instructions, and
+   start the task.
+4. Use the run page to inspect conversation, agents, findings, reports, and evidence.
 
-The project overview initially shows five skill entries. **Expand all** opens
-the complete recorded list; **Collapse** restores the compact view. Entries
-are ordered by recorded hit count, then skill ID. Counts combine dynamic load
-events and explicit agent-injection events; they do not measure skill
-effectiveness or enumerate every automatically preloaded instruction.
+Use an **absolute runs path**, as shown above. The Console starts engine processes
+with its own working directory; a relative runs path can resolve differently
+between the Console and engine, especially in a wheel installation.
 
-The CLI also accepts repeated target flags and UTF-8 list files (up to 1 MiB each):
+The clone command selects the maintained `v1.0.0` **branch**. To inspect the exact
+original release snapshot instead, use `git switch --detach refs/tags/v1.0.0`.
+The branch can receive documentation updates after the release tag.
+
+After installation, subsequent starts only require:
 
 ```bash
-uv run strixops -t https://app.example.com -t https://api.example.com
-uv run strixops --target-list ./targets.txt
+cd /path/to/StrixOps
+uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 ```
 
-Flags and files combine into one ordered list of at most 100 distinct targets;
-each target is limited to 2048 characters. This does not add source repository or
-API-spec staging to the existing Web/internal target types.
+A health check verifies the Console service, without starting a scan or making a
+model request:
 
-Model profiles share a provider URL and API key, with separate model, API type,
-and reasoning effort for Web and internal scans. Choose **Auto**, **Chat
-Completions**, or **Responses** beside each model. Auto uses Responses for the
-documented Astra, GPT-5.4 Pro, GPT-5.5, and GPT-5.6 routes; other names use Chat
-Completions. Deployment aliases can be configured explicitly. **Provider
-default** omits the reasoning parameter, while **none** sends an explicit value;
-available effort levels depend on the model. Manual API choices are honored for
-all model names, including GPT: native OpenAI API/tool compatibility restrictions
-are shown as advisory notices because gateways may translate requests. Check
-the gateway's support with **Test model**. Invalid option values and unsupported
-reasoning effort levels are still rejected. Empty model slots inherit the other
-slot's model, API, and effort together.
+```bash
+curl --fail http://127.0.0.1:8300/api/health
+```
 
-**Duplicate** opens a new editable profile draft. Its saved key is reused on the
-server only for the same provider and API URL; changing the destination requires
-a new key. Creating the copy does not replace or activate it over the original.
-**Test model** makes two short streamed requests using a harmless function,
-checking the selected API, effort, and function-result round trip without
-starting a scan. This uses the provider's normal model quota. A model catalog
-listing alone does not establish tool compatibility.
+The health endpoint does not validate Docker, a model key, or target reachability.
 
-CLI launches can select the same options with `LLM_API_MODE` (`auto`,
-`chat_completions`, or `responses`) and `LLM_REASONING_EFFORT` (`default`, `none`,
-`minimal`, `low`, `medium`, `high`, `xhigh`, or `max`, subject to model support).
-Missing API settings retain the legacy Chat Completions route. New profiles
-start with Auto. Explicit route effort applies to agents and their summary and
-deduplication requests. Runs record the requested/resolved API and selected
-effort for diagnosis; failed requests do not silently switch protocol or effort.
+## Install a built wheel
 
-For Responses stream failures, the run log and model test retain safe error
-codes, parameters, and request IDs when the provider supplies them. Use the
-request ID to find the underlying error in the gateway/provider logs. A generic
-LiteLLM `Response API in-stream error` does not identify the cause. Agent runs
-apply the existing bounded retry policy to explicitly transient stream errors
-only before output begins; unknown errors, rejected parameters, and errors after
-text or tool output are not automatically replayed.
+A wheel contains the built Console and runtime prompt/skill library. It does
+not contain the Docker sandbox image. Use this route when you already have a
+trusted `strixops-1.0.0-py3-none-any.whl`; it does not assume a PyPI publication or
+an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
 
-An explicit `cyber_policy` rejection requires checking the provider's approval
-for security work on the actual API organization/project behind the route.
-Changing API type or reasoning effort does not grant that access. Some gateways
-hide policy errors inside a generic streamed 500; inspect their server logs for
-the original error. StrixOps reports recognizable policy rejections separately
-and does not retry them or switch models to work around them.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install ./strixops-1.0.0-py3-none-any.whl
+.venv/bin/strixops --version
+.venv/bin/strixops-console --runs-root "$PWD/strix_runs"
+```
 
-## Development
+Node.js is not required to run this wheel. Build the sandbox using the
+`containers/` files from the matching source checkout, or provision a compatible
+image separately. The service account needs access to Docker and write access to
+its state directories. Console prompt/skill edits also require write access to
+the installed package's resource directories.
 
-Frontend changes require another `npm --prefix console/web run build` before
-starting the Console. Python runtime dependencies are defined in `pyproject.toml`
-and the frozen `uv.lock`.
+## Configure model routes
 
-Regression suites, scripted model fixtures, and development verification
-records are available only in the local internal test workspace. They remain
-outside the published Git repository and distribution packages, together with
-external development instructions, credentials, scan output, and caches.
-All built-in runtime prompts and skills remain part of the product.
+A profile contains one provider URL and API key, plus separate model assignments
+for Web and internal tasks. An empty model slot inherits the other slot's model,
+API type, and reasoning effort together.
 
-## Run consistency and assessment
-
-Each run freezes prompt parts and skill content in `.state/prompt_resources.json`,
-with hashes in `.state/prompt_manifest.json`. Console edits apply to subsequent runs; running
-agents and children use their run's snapshot. Web children preload the basic
-tooling, browser, counterevidence, and severity guidance, and receive the
-engagement scope independently of inherited history.
-
-Children can delegate within configured limits. Defaults are depth 2 (root
-depth 0), 4 active agents, and 12 agents over the run's lifetime, including
-the root. Override with `STRIXOPS_AGENT_MAX_DEPTH`,
-`STRIXOPS_AGENT_MAX_ACTIVE`, and `STRIXOPS_AGENT_MAX_TOTAL`. Completion checks
-unsettled descendants. These limits bound orchestration; they are not a token
-or monetary budget.
-
-Coverage and threat-model tools share run-owned state in `assessment.json`,
-including author and revision history. Coverage is agent-reported and does
-not establish exhaustive target coverage. Older runs without these records
-display unknown coverage, including an unknown unresolved count. Completion
-of a scan is separate from coverage completeness and absence of findings.
-
-Dependency reports preserve package, installed version, manifest, advisory
-score, reachability evidence, and contextual CVSS separately from dynamic
-findings. Optional source locations, fix details, confidence rationale, and
-revision history survive JSON, Markdown, and Console display. Project report
-aggregation distinguishes findings from different dependency manifests.
-
-## Context management
-
-Each agent keeps a separate SDK session in the run's `.state/agents.db`.
-Following Strix v1.6.0, the engine checks context usage before each run cycle,
-summarizes older history through the task's configured model, and preserves
-a recent token-sized window with tool calls and results kept together.
-Context overflow can trigger at most two forced compactions per cycle.
-This stores conversation state; it does not add a resume command.
-
-For internal scans, the root preloads a compact engagement contract and
-methodology. Every child receives the authorized scope, declared access,
-operator instructions and the required contract independently of inherited
-history. A SOCKS5 endpoint is network access, not a shell; agents must verify
-remote execution context before attributing commands to a target. Use
-`list_skills` to discover canonical IDs and `load_skill` for technique details.
-Missing or ambiguous requested skills fail explicitly.
-
-The Console's Skills page also offers **Prompt test**. Open the dialog, choose
-a saved model route and its Web/internal assignment, enter the task you want
-to test, select saved prompt parts or skills, then start the checks. A task is
-required; there is no default description question. Each selected file makes one streamed model
-request, with no tools or scan execution. The dialog shows progress, supports
-stopping, and separates ordinary responses, structured refusals, explicit policy
-blocks, provider errors, and inconclusive results. Model requests incur normal
-provider usage; opening the dialog alone sends no model request.
-
-Each request sends the saved file unchanged as system instructions and your
-exact task as the user message. All items in a batch receive the same task;
-editing it clears previous results. Template variables are not expanded, and
-the complete scan context is not assembled. **No refusal observed means no
-refusal signal was detected in this response; inspect the reply for task
-completion.** The result belongs to the fragment, task, and route together;
-it does not establish which input caused a refusal or predict a complete scan.
-Text-based refusal hints remain inconclusive, because wording alone cannot
-reliably establish a policy decision.
-Results include the task, original model reply (with credential redaction and
-an explicit flag if the 32,768-character display limit is exceeded), source
-and task hashes, route, model, API mode, reasoning effort, and time. Editing
-a file or route after loading the dialog requires refreshing the catalog.
-Results are scoped to the current dialog session. An explicit
-`cyber_policy` result stops the remaining batch because it may indicate an
-account or route access restriction; ordinary per-request content filters
-remain separate results.
-
-Only successful lifecycle tools can complete an agent; plain text or JSON
-declaring completion does not change trusted run state. Internal campaign
-observations and cleanup resources are shared through `record_internal_event`
-and `get_internal_campaign`, persisted in `run.json`, and audited through
-`campaign.internal_event`. Cleanup records refer to exact resources created or
-modified by this engagement and preserve pre-existing logs and configuration.
-
-The original environment settings and defaults apply:
-
-| Setting | Default |
+| Option | StrixOps behavior |
 |---|---|
-| `STRIX_CONTEXT_AUTO_COMPACT` | `true` |
-| `STRIX_CONTEXT_BUFFER_TOKENS` | `20000` |
-| `STRIX_CONTEXT_KEEP_TOKENS` | `8000` |
-| `STRIX_CONTEXT_FALLBACK_TOKENS` | `200000` |
-| `STRIX_CONTEXT_SUMMARY_TOKENS` | `4096` |
-| `STRIX_TOOL_OUTPUT_MAX_TOKENS` | `8000` |
-| `STRIX_TOOL_OUTPUT_MAX_LINES` | `2000` |
-| `STRIX_TOOL_OUTPUT_MAX_BYTES` | `51200` |
-| `STRIX_MAX_CONTEXT_IMAGES` | `3` |
+| Custom route | Use the supplied OpenAI-compatible Base URL, API key, and model ID |
+| OpenRouter | Use the built-in OpenRouter endpoint and provider catalog model ID |
+| `Chat Completions` | Send the Chat Completions request format to the Base URL's `/chat/completions` endpoint |
+| `Responses` | Send the Responses request format to the Base URL's `/responses` endpoint |
+| `Auto` | Select a protocol using the model-name rules shipped with StrixOps; it does not probe or negotiate support |
+| `Provider default` effort | Omit the reasoning-effort override |
+| `none` effort | Send an explicit value; it is different from omitting the parameter |
+| Duplicate | Open a new profile draft; reuse the saved key only for the same provider and endpoint |
+| Test model | Make two short streamed requests using a harmless function and its returned result |
 
-Model metadata supplies the context/output limits when available. Unknown
-model names use the fallback context setting; set it to the model's actual
-limit when needed. Compaction makes an additional model request, adding
-latency and token usage. Tool output exceeding the
-line/byte limits is previewed with a head/tail excerpt and saved in full to
-`/workspace/.tool-output/` in the sandbox when storage succeeds.
+For example, a Base URL of `https://gateway.example/v1` produces
+`https://gateway.example/v1/chat/completions` or
+`https://gateway.example/v1/responses`. Enter the API base, not the complete
+completion endpoint. Use the model ID recognized by that particular gateway.
 
-Sandbox agents can inspect workspace screenshots with `view_image`. The
-existing compatible/OpenRouter route sends the image content to the selected
-model, which must support image input. At each run cycle, the engine keeps
-the newest three image tool outputs by default and replaces older image
-blocks with text. Following the reference, input rejection (400/404/422)
-can trigger image removal and retry, at most three times per cycle.
+In 1.0.0, Auto chooses Responses for the recognized Astra, GPT-5.4 Pro, GPT-5.5,
+and GPT-5.6 names; other names use Chat Completions. Set deployment aliases
+explicitly. Manual API choices are honored; native-model compatibility notes
+are advisory. Unsupported option values and known unsupported effort levels
+are still rejected. Provider support ultimately determines whether a request works.
 
-## Reports and child context
+Both modes use OpenAI-compatible formats, but a gateway may implement only one
+of them or support only a subset of tools, images, and reasoning settings.
+A model appearing in the catalog does not prove compatibility. Failed requests
+do not silently switch API, effort, or model. Model tests use normal provider quota.
 
-Vulnerability creation and updates validate the original eight CVSS keys:
-`attack_vector`, `attack_complexity`, `privileges_required`, `user_interaction`,
-`scope`, `confidentiality`, `integrity`, and `availability`. Invalid metrics
-are rejected before changing a report; valid updates replace the score,
-severity and vector together.
+New Console profiles default to Auto. CLI requests without `LLM_API_MODE` retain
+Chat Completions for backward compatibility. CLI environment configuration and
+saved Console profiles are separate: configure a saved profile for Console launches.
 
-When reports already exist, deduplication uses the task's configured model
-and the original comparison rules for endpoints, parameters and root causes.
-This adds a model request. As in Strix, a failed or unusable deduplication
-response allows the candidate through.
+## Run your first assessment
 
-With `inherit_context=true`, a child receives its parent's SDK input-history
-snapshot as background, followed by its own identity and assignment. Images
-are replaced by text in inherited history. This follows Strix's snapshot
-rule: it does not include tool outputs generated later within that same SDK
-run cycle or subsequent parent updates.
+| Step | What to provide or inspect |
+|---|---|
+| 1. Scope | Web or internal task type, authorized target(s), and optional project |
+| 2. Access | Relevant credentials/access instructions; internal tunnel settings if needed |
+| 3. Instructions | Assessment objectives, boundaries, exclusions, and report language |
+| 4. Route | Saved model profile and its matching Web/internal assignment |
+| 5. Execution | Live conversation, agent tree, recorded coverage, findings, and operator hints |
+| 6. Review | Final report, finding details, unresolved coverage, and evidence delivery status |
 
-Final report synthesis uses the run's configured model with recorded findings,
-assessment information, and the agent's closing narrative. It adds model usage;
-the deterministic report composer remains the fallback when synthesis fails or
-is disabled. Original findings and evidence remain available alongside the report.
+The Console keeps the single-target form as its default. **Multi-target task**
+creates one native run rather than a queue of independent scans.
 
-Internal finding severity participates in the overall report's default rating.
-Large datasets use a complete attachment and one distinct finding, not one
-finding per row. Set `metadata.evidence_files` to filenames relative to
-`/workspace/output/` (or absolute paths within that directory).
+| Limit | Console | CLI |
+|---|---|---|
+| Target count | 1 in single-target mode; 2–100 in multi-target mode | 1–100 distinct targets |
+| Text import | UTF-8 `.txt`, up to 512 KiB | `--target-list`, up to 1 MiB per file |
+| Target length | Up to 2,048 characters | Up to 2,048 characters |
+| Normalization | Ignore blank lines and full-line `#` comments; merge exact duplicates | Same |
+| Shared settings | One task type, model route, and instruction set | Same |
 
-Agents and sandbox writers are stopped before evidence is collected on success,
-failure and ordinary interruption. Successful completion is published only
-after report persistence and verified container cleanup. Cleanup failures are
-recorded as failures rather than successful scans. Without
-`STRIX_HOST_WORKSPACE_DIR`, the engine retains a private
-`<run_dir>/workspace` bind mount; operator-provided workspaces remain intact.
-Files are copied into `<run_dir>/evidence` with streamed SHA256, without the
-former 50 MiB cutoff. Both workspace originals and archive copies remain on disk.
-The manifest and `run.json` distinguish captured, persisted and deliverable
-files. Missing references, copy failures, symlinks and special files are marked
-incomplete rather than counted as delivered attachments. Directory references
-are checked against delivered files; adjacent Chinese punctuation is not treated
-as part of a filename. Evidence cleanup errors include delivery counts and
-unresolved references. Forced process death
-cannot generate a final manifest, but the persistent workspace remains available.
+All targets share agent context, assessment state, evidence, and the final report.
+Project scope is checked for the full target list again at launch. Reruns, search,
+and report aggregation preserve that list. Importing targets does not stage a
+source repository or an API specification.
 
-## Sandbox image
+## CLI usage
 
-Both web and internal scans use `strixops-sandbox:1.3.0`. This shared image
-extends `ghcr.io/usestrix/strix-sandbox:1.3.0` with the internal-network tool
-layer, so both modes have the same installed tools (see
-`containers/Dockerfile.sandbox`). Build it once before starting scans:
+The CLI reads model configuration from the environment. Replace the placeholders
+with your own route and an authorized lab target before executing these examples:
+
+```bash
+export LLM_API_BASE="https://gateway.example/v1"
+export LLM_API_KEY="YOUR_API_KEY"
+export STRIX_LLM="YOUR_MODEL_ID"
+export LLM_API_MODE="auto"
+export LLM_REASONING_EFFORT="default"
+export STRIX_RUNS="$PWD/strix_runs"
+
+uv run --no-dev strixops \
+  --target https://app.lab.example \
+  --scan-type web \
+  --instruction-file ./engagement.md \
+  --report-language en
+```
+
+Multiple targets, including a list file, are combined into one ordered scope:
+
+```bash
+uv run --no-dev strixops \
+  -t https://app.lab.example \
+  -t https://api.lab.example \
+  --target-list ./targets.txt \
+  --instruction-file ./engagement.md
+```
+
+An internal-network example:
+
+```bash
+uv run --no-dev strixops \
+  --target 192.0.2.10 \
+  --scan-type internal \
+  --socks5 socks5://proxy.lab.example:1080 \
+  --instruction-file ./engagement.md
+```
+
+`192.0.2.10` and `proxy.lab.example` are documentation placeholders. The SOCKS5
+address must be reachable from the Docker sandbox; a proxy bound only to the
+host's loopback is not automatically reachable from the container. Replace the
+example with your reachable proxy address. A tunnel provides network access and
+does not itself establish a remote shell.
+
+| Flag | Purpose |
+|---|---|
+| `-t`, `--target` | Add a target; can be repeated |
+| `--target-list` | Add targets from a UTF-8 file; can be repeated |
+| `--scan-type web\|internal` | Select the assessment workflow |
+| `--instruction-file` | Load operator instructions from Markdown |
+| `--instruction` | Inline fallback when no instruction file is supplied |
+| `--socks5` / `--gsocket` | Select internal reachability settings; do not combine them |
+| `--crypto` | Enable the optional internal crypto-asset assessment emphasis |
+| `--report-language en\|zh-CN` | Select report/finding language; default is `zh-CN` |
+| `--version`, `--help` | Inspect the installed version and CLI surface |
+
+For a wheel installation, replace `uv run --no-dev strixops` with
+`.venv/bin/strixops`. A successful run returns exit code `0`; failures return a
+nonzero code, with details in the run directory. There is no resume command;
+a rerun starts a new assessment.
+
+## Server deployment
+
+### Linux service
+
+The following is an example deployment layout, not a bundled installer:
+
+| Path | Contents |
+|---|---|
+| `/opt/StrixOps` | Source checkout, installed `.venv`, and built Console |
+| `/var/lib/strixops/console.json` | Model profiles and integration settings |
+| `/var/lib/strixops/projects.json` | Project metadata |
+| `/var/lib/strixops/project_reports` | Aggregated project reports |
+| `/var/lib/strixops/runs` | Run state, findings, workspaces, and evidence |
+
+Prepare a `strixops` service account, install and build the source checkout at
+`/opt/StrixOps` using the quick-start steps, and make these directories writable
+by that account. Grant it access to the Docker daemon according to your host's
+administration policy. Docker access is privileged host access. If you use the
+Console editor, the account also needs write permission to
+`src/strixops/agents/prompt_parts` and `src/strixops/skills/content`.
+
+Save the following as `/etc/systemd/system/strixops-console.service`:
+
+```ini
+[Unit]
+Description=StrixOps Console
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=strixops
+Group=strixops
+WorkingDirectory=/opt/StrixOps
+Environment=HOME=/var/lib/strixops
+Environment=STRIXOPS_CONSOLE_CONFIG=/var/lib/strixops/console.json
+Environment=STRIXOPS_PROJECTS_FILE=/var/lib/strixops/projects.json
+Environment=STRIXOPS_PROJECT_REPORTS_DIR=/var/lib/strixops/project_reports
+ExecStart=/opt/StrixOps/.venv/bin/strixops-console --host 127.0.0.1 --port 8300 --runs-root /var/lib/strixops/runs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=300
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable the service and inspect its logs:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now strixops-console
+sudo systemctl status strixops-console
+sudo journalctl -u strixops-console -f
+```
+
+The timeout above is a deployment example, not a guarantee that every cleanup
+finishes in five minutes. Stop active tasks through the Console and wait for
+finalization before planned service restarts, upgrades, or host shutdowns.
+
+### Remote access
+
+Keep the default loopback listener and open an SSH tunnel from your workstation:
+
+```bash
+ssh -N -L 18300:127.0.0.1:8300 user@your-server
+```
+
+Open [http://127.0.0.1:18300](http://127.0.0.1:18300) locally. If using a reverse
+proxy instead, provide authentication and TLS at that layer, forward both the
+UI and `/api/*`, and preserve long-lived streaming responses without buffering.
+Do not expose `--host 0.0.0.0` directly as a public unauthenticated service.
+
+### Backups and upgrades
+
+1. Stop active assessments and let their evidence/cleanup finish.
+2. Back up the run directory and Console/project/report settings paths above.
+3. Back up edited prompt and skill files from the source checkout or installed
+   package; package upgrades or checkout changes can overwrite them.
+4. Update the intended branch or install the intended wheel. For source updates,
+   rerun `npm --prefix console/web ci`, `npm --prefix console/web run build`,
+   and `uv sync --frozen --no-dev`.
+5. Rebuild the sandbox when its Dockerfile, base, or selected image changes.
+6. Restart the Console and check `/api/health`, then verify the model route
+   before starting another assessment.
+
+Run snapshots preserve historical prompt/skill inputs; they do not automatically
+restore the editable library or resume a stopped scan. Keep backups private:
+settings contain provider credentials, and assessment output may contain
+sensitive evidence.
+
+## Sandbox deployment
+
+Web and internal tasks use the same default image:
+
+| Layer | Image / behavior |
+|---|---|
+| Upstream base | `ghcr.io/usestrix/strix-sandbox:1.3.0` |
+| StrixOps image | `strixops-sandbox:1.3.0` |
+| Additions | Internal-network tooling, tunnel utilities, workspace layout, and tool paths |
+| Web workflow | Enables Caido proxy interception |
+| Internal workflow | Disables Caido and applies requested tunnel settings |
+
+Build and inspect it on the Docker host:
 
 ```bash
 bash containers/build-images.sh
+docker image inspect strixops-sandbox:1.3.0
 ```
 
-The optional first argument selects the image tag. `BASE_IMAGE` overrides
-the upstream base for the build; `STRIXOPS_IMAGE` selects a custom runtime
-image for both scan modes. The engine checks image presence at run time.
-`scan_type` still selects the scan workflow and sandbox environment: web
-scans enable Caido proxy interception; internal scans disable Caido and
-apply the requested tunnel settings.
+To use a custom local tag while retaining the current upstream base:
+
+```bash
+BASE_IMAGE=ghcr.io/usestrix/strix-sandbox:1.3.0 \
+  bash containers/build-images.sh custom
+export STRIXOPS_IMAGE="strixops-sandbox:custom"
+```
+
+The script's positional tag also determines its default upstream base tag,
+so set `BASE_IMAGE` explicitly when your local tag differs. To use your own
+compatible registry image, set `STRIXOPS_IMAGE` to that image reference in the
+Console/CLI environment. StrixOps requires a local build for the
+`strixops-sandbox` image name; other missing configured images are pulled through
+Docker. Registry access and authentication must already be available.
+
+The repository provides a **sandbox Dockerfile**, not a complete Console
+Docker/Compose deployment. The wheel and frontend build do not build or package
+that image. See [the Dockerfile](containers/Dockerfile.sandbox) for the actual
+tool inventory and architecture-specific best-effort installs.
+
+Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
+remote `DOCKER_HOST` alone does not make local workspace directories available on
+that remote host. The product version `1.0.0` and sandbox tag `1.3.0` are separate
+version numbers.
+
+## Configuration reference
+
+### Model and persistent state
+
+| Variable | Default / meaning |
+|---|---|
+| `LLM_API_BASE` | Required for CLI assessments; API base URL |
+| `LLM_API_KEY` | Required for CLI assessments; provider credential |
+| `STRIX_LLM` | Required for CLI assessments; route's model ID |
+| `LLM_API_MODE` | `chat_completions`; also accepts `auto` and `responses` |
+| `LLM_REASONING_EFFORT` | `default`; selectable values include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, subject to model support |
+| `STRIX_RUNS` | `<current working directory>/strix_runs`; prefer an absolute path; Console `--runs-root` takes precedence |
+| `STRIXOPS_CONSOLE_CONFIG` | `~/.strixops/console.json` |
+| `STRIXOPS_PROJECTS_FILE` | `~/.strixops/projects.json` |
+| `STRIXOPS_PROJECT_REPORTS_DIR` | `~/.strixops/project_reports` |
+| `STRIXOPS_IMAGE` | `strixops-sandbox:1.3.0` for both scan types |
+| `STRIX_HOST_WORKSPACE_DIR` | Optional operator-provided workspace bind mount; otherwise retained per-run workspace |
+| `STRIX_OPERATOR_HINTS_DIR` | Optional hint directory; Console launches provide a run-owned path |
+| `STRIXOPS_REPORT_LANG` | `zh-CN`; CLI `--report-language` takes precedence |
+| `STRIXOPS_REPORT_SYNTHESIS` | Enabled; `0` disables model-assisted final report synthesis |
+| `PERPLEXITY_API_KEY` | Optional web-search integration; can be saved in Console Settings → Integrations |
+
+The CLI reads environment variables, not a project `.env` file automatically.
+The Console writes profile settings server-side and masks keys in API readback;
+the settings file is stored with mode `0600`. Masking is not encryption at rest.
+
+### Agent and context limits
+
+| Variable | Default | Controls |
+|---|---|---|
+| `STRIXOPS_AGENT_MAX_DEPTH` | `2` | Maximum delegation depth; root is depth 0 |
+| `STRIXOPS_AGENT_MAX_ACTIVE` | `4` | Active agents |
+| `STRIXOPS_AGENT_MAX_TOTAL` | `12` | Lifetime agents, including the root |
+| `STRIX_CONTEXT_AUTO_COMPACT` | `true` | Automatic conversation compaction |
+| `STRIX_CONTEXT_BUFFER_TOKENS` | `20000` | Context reserve |
+| `STRIX_CONTEXT_KEEP_TOKENS` | `8000` | Recent history retained around compaction |
+| `STRIX_CONTEXT_FALLBACK_TOKENS` | `200000` | Context limit when model metadata is unavailable |
+| `STRIX_CONTEXT_SUMMARY_TOKENS` | `4096` | Summary output budget |
+| `STRIX_TOOL_OUTPUT_MAX_TOKENS` | `8000` | Tool-output token budget |
+| `STRIX_TOOL_OUTPUT_MAX_LINES` | `2000` | Tool-output line limit |
+| `STRIX_TOOL_OUTPUT_MAX_BYTES` | `51200` | Tool-output byte limit |
+| `STRIX_MAX_CONTEXT_IMAGES` | `3` | Recent image outputs retained |
+
+These limits are **not monetary budgets**. Model calls also occur during
+compaction, finding deduplication, report synthesis, and diagnostics. Set the
+fallback context limit to the actual model's capacity when metadata is missing.
+
+## Reports, evidence, and storage
+
+Each task creates `<runs-root>/<slug>_<4hex>/` before slow initialization. The
+Console can show launch errors even when the sandbox or model fails early.
+
+```text
+<run>/
+├── run.json                      Run metadata and status
+├── events.jsonl                  Structured lifecycle and agent events
+├── engine.log                    Console-launched engine stdout/stderr
+├── assessment.json               Shared coverage and threat-model state
+├── penetration_test_report.md    Final assessment report
+├── vulnerabilities.json / .csv   Structured vulnerability findings
+├── vuln-NNNN.md                  Individual vulnerability records
+├── internal_findings/            Internal assessment findings
+├── evidence/                     Archived evidence files and delivery metadata
+├── workspace/                    Default retained sandbox workspace
+├── operator_hints/               Guidance supplied during the run
+└── .state/
+    ├── agents.db                 Per-agent conversation sessions
+    ├── agents.json               Agent state
+    ├── prompt_resources.json     Frozen prompt and skill contents
+    ├── prompt_manifest.json      Resource hashes
+    └── prompt_*.md               Agent prompt snapshots
+```
+
+Files depend on task progress and outputs; not every run produces every artifact.
+An operator-supplied workspace replaces the default workspace location. See the
+[platform code](src/strixops/platform) for the event and artifact contracts.
+
+- Findings validate CVSS metrics and preserve dynamic findings separately from
+  dependency context such as package/version, manifest, advisory score,
+  reachability evidence, source location, and fix details.
+- Final synthesis uses the configured model, recorded findings, assessment state,
+  and closing narrative. Deterministic report composition is the fallback if
+  synthesis fails or is disabled.
+- Agents and sandbox writers stop before evidence is captured. Files are copied
+  with streamed SHA256 and no fixed 50 MiB cutoff; both workspace originals and
+  archive copies can occupy disk space.
+- Missing references, failed copies, symlinks, and special files are recorded as
+  incomplete rather than delivered. Review delivery status alongside the report.
+- Coverage is agent-reported. Older runs without assessment records display
+  unknown coverage; completion and absence of findings do not imply full coverage.
+
+## Prompts, skills, and agent behavior
+
+### Editing and consistency
+
+The **Skills** page lists system prompt parts and skill Markdown files. Edit,
+preview, and save there; changes affect **subsequent runs**. A running task and
+its children use its frozen resource snapshot, rather than later library edits.
+Built-in prompts live in [prompt_parts](src/strixops/agents/prompt_parts), and
+skills in [skills/content](src/strixops/skills/content).
+
+Children receive their scope and assignment explicitly and may delegate within
+the configured limits. Shared coverage and threat-model tools keep revisions and
+authors. When parent context is inherited, it is a snapshot, not a live feed of
+later parent messages. Only successful lifecycle tools can complete an agent.
+
+Each agent has its own conversation session. Context compaction preserves recent
+history and keeps tool calls/results together; overflow can trigger up to two
+forced compactions per cycle. Oversized tool output is previewed and saved in
+full under `/workspace/.tool-output/` when storage succeeds. Image use requires
+a model route that accepts image inputs.
+
+### Prompt diagnostics versus route diagnostics
+
+| Check | Input and behavior | What the result establishes |
+|---|---|---|
+| Settings → Test model | Two short streamed requests with a harmless function and function result | Whether that route can complete the tested tool round trip |
+| Skills → Prompt test | One streamed request per selected saved file, using it unchanged as system instructions and your required task as the user message; no tools | The observed reply/refusal behavior for that file, task, and route |
+
+Prompt tests do not assemble a full scan prompt or expand template variables.
+Results distinguish ordinary responses, structured refusals, explicit policy
+blocks, provider errors, and inconclusive results. **No refusal observed** means
+no refusal signal was detected; read the reply to evaluate task completion.
+A passing fragment test does not predict a full assessment's acceptance.
+
+The dialog supports progress and cancellation, and records the task, reply,
+source/task hashes, route, model, API, effort, and time. Replies have credential
+redaction and an explicit truncation flag beyond the 32,768-character display
+limit. Results last for the current dialog session. Refresh the catalog after
+changing files or routes. An explicit `cyber_policy` result stops the remaining
+batch; opening the dialog alone makes no model request.
+
+Project skill analytics count recorded dynamic loads and explicit agent-injection
+events. The overview starts with five entries and can expand to the full list.
+Counts do not measure skill effectiveness or enumerate every automatic preload.
+
+## Troubleshooting
+
+| Symptom | Check / action |
+|---|---|
+| Console is reachable but the UI is missing or outdated | Rebuild `console/web/out` with `npm --prefix console/web run build`; use `strixops-console` to serve the static export |
+| Prompt save returns 404 | Update to a build with the `PUT` save fix and refresh the browser; both Prompt and Skill writes use `PUT` |
+| Prompt/skill save fails after wheel installation | Check write permissions on the installed package's resource directories |
+| Task appears in a different runs directory | Use an absolute `--runs-root` and inspect the Console's reported root |
+| Sandbox image is missing | Build `strixops-sandbox:1.3.0`; confirm the Console account sees the same Docker daemon and image |
+| Docker connection or socket error | Check that Docker is running and accessible to the service account; inspect the underlying daemon error |
+| Model is listed but the task fails immediately | Test the exact route/model/API/effort combination; model listing alone is insufficient |
+| Chat request rejects tools with reasoning | Check the upstream model and gateway's supported combinations, then configure a compatible API/effort explicitly |
+| `Response API in-stream error` | Inspect safe error codes and request/gateway IDs in the run log and correlate them with provider logs |
+| Explicit `cyber_policy` rejection | Check the actual upstream API organization/project's authorization with the provider; protocol or effort changes do not grant access |
+| Unknown model reaches context limits | Set `STRIX_CONTEXT_FALLBACK_TOKENS` to that model's capacity and review compaction settings |
+| Coverage or attachments are incomplete | Inspect assessment/delivery records and retained workspace; do not infer completeness from a finished status |
+| Live updates stall behind a proxy | Check streaming support, buffering, and idle timeouts on the access layer |
+
+Retries are bounded and only apply to eligible transient failures. A generic
+streamed `500` can hide a more specific upstream rejection; errors after output
+has begun and explicit policy rejections are not automatically replayed.
+
+## Development and packaging
+
+### Repository layout
+
+```text
+src/strixops/
+├── cli.py          CLI arguments and exit codes
+├── config/         Model routing, reasoning, and context settings
+├── platform/       Run names, events, artifacts, and hints
+├── engine/         Orchestration, agents, sessions, and lifecycle
+├── agents/         Agent factory and prompt parts
+├── tools/          Agent function tools
+├── report/         Findings, report state, and synthesis
+├── runtime/        Docker sandbox integration
+├── skills/         Built-in skill corpus and registry
+└── console/        FastAPI Console service
+console/web/        Next.js frontend, exported to static files
+containers/         Sandbox Dockerfile and build script
+docs/               Release documentation
+```
+
+For frontend development, run the API and Next development server separately:
+
+```bash
+# Terminal 1, from the repository root
+uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
+
+# Terminal 2, from the repository root
+npm --prefix console/web run dev
+```
+
+The development UI runs on port `3100` and calls `http://127.0.0.1:8300` from the
+browser. Use a local browser or tunnel both ports. Production serves the static
+export through the Console; `npm start` does not launch a Next production server.
+Rebuild after frontend changes before using the production Console.
+
+### Packaging
+
+Build the frontend **before** the Python distribution so Hatch can include it:
+
+```bash
+npm --prefix console/web ci
+npm --prefix console/web run build
+uv sync --frozen --no-dev
+uv build
+```
+
+Artifacts are written to `dist/`. The wheel bundles the frontend under
+`strixops/console/web` plus runtime prompt/skill files. The source distribution
+also includes the frontend source, container build files, and documentation.
+The Docker image remains a separate deployment artifact.
+
+Runtime dependencies are defined in [pyproject.toml](pyproject.toml) and the
+frozen [uv.lock](uv.lock); frontend dependencies use
+[package-lock.json](console/web/package-lock.json). This repository does not ship
+a release CI workflow. Internal regression suites, scripted fixtures, and
+verification records are kept outside the published repository/packages, as
+are credentials, scan output, and local development instructions.
+
+## License and attribution
+
+StrixOps is licensed under [Apache License 2.0](LICENSE). Selected assets and
+behaviors are derived from the open-source [Strix](https://github.com/usestrix/strix)
+project, including skill content and parts of prompt, context, and sandbox design.
+See [NOTICE](NOTICE) for the attribution scope. The upstream sandbox image and
+its installed tools retain their own licenses and distribution requirements.

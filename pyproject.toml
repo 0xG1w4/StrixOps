@@ -47,7 +47,7 @@ packages = ["src/strixops"]
 exclude = ["/src/strixops/testing"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/console/web", "/containers", "/docs", "/README.md", "/CHANGELOG.md", "/NOTICE", "/LICENSE", "/pyproject.toml", "/uv.lock"]
+include = ["/src", "/console/web", "/containers", "/docs", "/README.md", "/README.zh-CN.md", "/CHANGELOG.md", "/NOTICE", "/LICENSE", "/pyproject.toml", "/uv.lock"]
 exclude = ["/tests", "/src/strixops/testing", "/docs/*-validation.md", "/experiments", "/console/web/node_modules", "/console/web/.next", "**/__pycache__", "**/*.pyc", "**/*.tsbuildinfo", "**/.DS_Store", "**/.env*"]
 
 [tool.hatch.build.targets.sdist.force-include]
