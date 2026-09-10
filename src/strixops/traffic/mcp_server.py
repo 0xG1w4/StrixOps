@@ -63,7 +63,7 @@ def build_server() -> FastMCP:
 
     @tool(idempotent=True)
     def traffic_start_capture(task_id: str) -> dict:
-        """Start this task's owned proxy container and return its loopback listener address."""
+        """Start this task's owned proxy container and return its configured listener address."""
         return get_service().start(task_id)
 
     @tool(idempotent=True)
@@ -202,8 +202,9 @@ def build_server() -> FastMCP:
 
 
 def install(app) -> None:
-    from strixops.traffic.api import router
+    from strixops.traffic.api import access_router, router
 
+    app.include_router(access_router)
     app.include_router(router)
     active = {}
     prior = app.router.lifespan_context

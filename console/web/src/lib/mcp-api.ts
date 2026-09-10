@@ -17,6 +17,8 @@ export interface McpSession {
   id: string;
   status: string;
   proxy_host?: string;
+  proxy_bind_host?: string;
+  proxy_auth_required?: boolean;
   proxy_port?: number;
   ca_ready?: boolean;
   ca_shared?: boolean;
@@ -153,34 +155,105 @@ export interface McpCaInfo {
   [key: string]: unknown;
 }
 
+export interface McpAccess {
+  allowed: boolean;
+  token_configured: boolean;
+  reason: "" | "token_required" | "token_not_configured" | "origin_rejected";
+  message: string;
+}
+
 export class McpApiError extends Error {
   constructor(message: string, readonly status: number) { super(message); this.name = "McpApiError"; }
 }
 
-async function mcpRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  // MCP's access boundary requires same-origin browser requests in dev and production.
-  const response = await fetch(`/api/mcp${path}`, { cache: "no-store", ...init });
-  if (!response.ok) {
-    let message = `${response.status} ${response.statusText}`;
-    try {
-      const text = await response.text();
-      if (text) {
-        try {
-          const payload: { detail?: unknown; error?: unknown } = JSON.parse(text);
-          const detail = payload.detail ?? payload.error ?? payload;
-          message = typeof detail === "string" ? detail : JSON.stringify(detail);
-        } catch { message = text; }
-      }
-    } catch { /* Preserve the response status when its body is unavailable. */ }
-    throw new McpApiError(message.slice(0, 1800), response.status);
-  }
-  return await response.json() as T;
+const TOKEN_KEY = "strixops:mcp:token";
+const AUTH_EVENT = "strixops:mcp:access-required";
+let memoryToken: string | null | undefined;
+let authGeneration = 0;
+const pendingRequests = new Set<AbortController>();
+
+function currentToken(): string | null {
+  if (memoryToken !== undefined) return memoryToken;
+  if (typeof window === "undefined") return null;
+  try { memoryToken = window.sessionStorage.getItem(TOKEN_KEY); } catch { memoryToken = null; }
+  return memoryToken;
 }
+
+function replaceToken(token: string | null) {
+  memoryToken = token;
+  authGeneration += 1;
+  for (const controller of pendingRequests) controller.abort();
+  pendingRequests.clear();
+  try {
+    if (token) window.sessionStorage.setItem(TOKEN_KEY, token);
+    else window.sessionStorage.removeItem(TOKEN_KEY);
+  } catch { /* A blocked session store falls back to this page's memory. */ }
+}
+
+export const mcpAuth = {
+  hasToken: () => Boolean(currentToken()),
+  save: (token: string) => replaceToken(token),
+  clear: (notify = true) => {
+    replaceToken(null);
+    if (notify && typeof window !== "undefined") window.dispatchEvent(new Event(AUTH_EVENT));
+  },
+  onRequired: (listener: () => void) => {
+    window.addEventListener(AUTH_EVENT, listener);
+    return () => window.removeEventListener(AUTH_EVENT, listener);
+  },
+};
+
+function assertCurrent(generation: number, signal: AbortSignal) {
+  if (generation !== authGeneration || signal.aborted) throw new DOMException("MCP request cancelled", "AbortError");
+}
+
+async function mcpFetch<T>(path: string, init: RequestInit, decode: (response: Response) => Promise<T>, tokenOverride?: string): Promise<T> {
+  const generation = authGeneration;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (init.signal?.aborted) abort();
+  else init.signal?.addEventListener("abort", abort, { once: true });
+  pendingRequests.add(controller);
+  const headers = new Headers(init.headers);
+  const token = tokenOverride === undefined ? currentToken() : tokenOverride;
+  if (token) headers.set("X-MCP-Token", token);
+  try {
+    // Tokens are confined to same-origin MCP requests, including binary downloads.
+    const response = await fetch(`/api/mcp${path}`, { cache: "no-store", ...init, headers, signal: controller.signal, credentials: "same-origin", redirect: "error" });
+    assertCurrent(generation, controller.signal);
+    if (!response.ok && !(path === "/access" && response.status === 403)) {
+      let message = `${response.status} ${response.statusText}`;
+      try {
+        const text = await response.text();
+        if (text) {
+          try {
+            const payload: { detail?: unknown; error?: unknown } = JSON.parse(text);
+            const detail = payload.detail ?? payload.error ?? payload;
+            message = typeof detail === "string" ? detail : JSON.stringify(detail);
+          } catch { message = text; }
+        }
+      } catch { /* Preserve the response status when its body is unavailable. */ }
+      assertCurrent(generation, controller.signal);
+      if (response.status === 403 && path !== "/access") mcpAuth.clear();
+      throw new McpApiError(message.slice(0, 1800), response.status);
+    }
+    const result = await decode(response);
+    // A response started before disconnect must never restore old task contents.
+    assertCurrent(generation, controller.signal);
+    return result;
+  } finally {
+    init.signal?.removeEventListener("abort", abort);
+    pendingRequests.delete(controller);
+  }
+}
+
+const mcpRequest = <T,>(path: string, init: RequestInit = {}) => mcpFetch<T>(path, init, response => response.json());
 
 const taskPath = (id: string) => `/tasks/${encodeURIComponent(id)}`;
 const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const mcpApi = {
+  access: (signal?: AbortSignal, token?: string) => mcpFetch<McpAccess>("/access", { signal }, response => response.json(), token),
   catalog: (signal?: AbortSignal) => mcpRequest<McpCatalog>("/catalog", { signal }),
   tasks: (signal?: AbortSignal) => mcpRequest<{ tasks: McpTask[] }>("/tasks", { signal }),
   createTask: (body: McpTaskInput) => mcpRequest<{ task: McpTask }>("/tasks", json("POST", body)),
@@ -203,8 +276,7 @@ export const mcpApi = {
   reports: (id: string, signal?: AbortSignal) => mcpRequest<{ reports: McpReport[] }>(`${taskPath(id)}/reports`, { signal }),
   createReport: (id: string) => mcpRequest<{ report: McpReport }>(`${taskPath(id)}/reports`, json("POST", {})),
   report: (id: string, reportId: string, signal?: AbortSignal) => mcpRequest<{ report: McpReport }>(`${taskPath(id)}/reports/${encodeURIComponent(reportId)}`, { signal }),
-  caURL: (id: string) => `/api/mcp${taskPath(id)}/ca`,
-  sharedCaURL: () => "/api/mcp/ca",
+  ca: (id?: string) => mcpFetch<Blob>(id ? `${taskPath(id)}/ca` : "/ca", {}, response => response.blob()),
   sharedCaInfo: (signal?: AbortSignal) => mcpRequest<McpCaInfo>("/ca/info", { signal }),
 };
 

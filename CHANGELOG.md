@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.1 — 2026-09-10
+
+- Complete remote browser access to MCP tasks: enter the configured server
+  token in the workbench, keep it within the current tab, and authenticate
+  task operations and CA downloads. Clear saved credentials and workbench state
+  when access expires, while retaining existing local and Web/internal behavior.
+- Add explicit proxy bind and advertised addresses for remote capture. Require
+  separate proxy credentials for non-loopback listeners, preserve the loopback
+  default, and exclude proxy authorization from saved traffic.
+- Document IP-based deployment and token authentication behind reverse proxies,
+  including forwarded client addresses and the distinction between Console and
+  capture-proxy credentials.
+
+Upgrade and configuration: [v1.1.1 release notes](docs/v1.1.1.md).
+
 ## 1.1.0 — 2026-09-10
 
 - Add an independent MCP traffic workbench with task-owned proxy containers,

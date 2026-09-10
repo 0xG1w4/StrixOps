@@ -50,7 +50,7 @@ npm --prefix console/web run dev
 4. 下載平台共用的公開 CA，匯入該測試瀏覽器的受信任憑證庫，並勾選信任此 CA 識別網站。相同 MCP 資料目錄下的所有任務共用此 CA，只需匯入一次。
 5. 以該瀏覽器登入、切換頁面及操作功能。範圍內的實際網路流量會持續顯示在工作台。
 
-代理預設只公布在 Console 主機的 `127.0.0.1`，每個工作階段使用不同的可用連接埠。若瀏覽器在另一台電腦，先建立 SSH 通道。例如工作階段顯示的伺服器連接埠為 `49152`：
+代理預設只公布在 Console 主機的 `127.0.0.1`，每個工作階段使用不同的可用連接埠。遠端瀏覽器可依下方「直接連接主機 IP」配置監聽位址與代理帳密，或保留 loopback 並建立 SSH 通道。例如工作階段顯示的伺服器連接埠為 `49152`：
 
 ```bash
 ssh -N -L 18080:127.0.0.1:49152 user@your-server
@@ -136,9 +136,40 @@ http://127.0.0.1:8300/api/mcp/transport
 | `STRIXOPS_MCP_ROOT` | MCP SQLite、journal、CA 與任務資料的根目錄 |
 | `STRIXOPS_MCP_TOKEN` | 非本機 API／MCP client 的共用存取 token；以 `Authorization: Bearer ...` 或 `X-MCP-Token` 傳送 |
 | `STRIXOPS_MCP_TRUSTED_ORIGINS` | 逗號分隔的信任來源；用於本機開發，或已由反向代理驗證身份的 Console；僅供 loopback 上游存取 |
+| `STRIXOPS_MCP_PROXY_BIND_HOST` | 新捕獲代理在主機上綁定的 IP；預設 `127.0.0.1` |
+| `STRIXOPS_MCP_PROXY_PUBLIC_HOST` | 瀏覽器應使用的 IP／主機名稱；NAT 或 `0.0.0.0`／`::` 綁定時使用，不能填 URL、埠號或萬用位址 |
+| `STRIXOPS_MCP_PROXY_AUTH` | 代理帳密，格式 `username:password`；非 loopback 綁定必填，與控制台 Token 分開 |
 | `STRIXOPS_CONSOLE_CONFIG` | 共用模型設定檔位置；沿用 Console 設定 |
 
-API 接受本機 loopback 的同源存取；未明確信任的跨來源瀏覽器請求會被拒絕。瀏覽器介面目前沒有獨立 token 登入欄位，遠端操作可使用 SSH 通道，或由提供身份驗證與 TLS 的反向代理提供同源前端與 API。部署時，`STRIXOPS_MCP_TRUSTED_ORIGINS` 只是明確信任該既有驗證層，本身不會替網站建立登入機制。
+API 接受本機 loopback 的同源存取；遠端瀏覽器在 MCP 頁面輸入伺服器設定的 Token。Token 只保存在目前分頁的 `sessionStorage`，並以 header 附到 MCP 請求與 CA 下載；不放進 URL。清除登入或 Token 失效會清空頁面中的 MCP 資料，再顯示登入入口。清除登入不會停止已啟動的代理或 Agent 工作。Web／Internal 的存取流程不變；這不是整個 Console 的登入系統。
+
+### 直接連接主機 IP
+
+例如 Console 主機的內網 IP 為 `192.168.1.20`，在啟動它的終端設定以下環境變數，將 Token 與代理密碼替換為自己的長隨機值：
+
+```bash
+export STRIXOPS_MCP_TOKEN='replace-with-a-long-random-access-token'
+export STRIXOPS_MCP_PROXY_BIND_HOST='192.168.1.20'
+export STRIXOPS_MCP_PROXY_AUTH='mcp:replace-with-a-different-long-random-password'
+uv run --no-dev strixops-console --host 0.0.0.0 --port 8300
+```
+
+1. 在瀏覽器開啟 `http://192.168.1.20:8300/mcp`，輸入上面設定的 MCP Token。
+2. 建立任務並啟動代理，將瀏覽器的 HTTP／HTTPS 代理設為頁面顯示的主機與埠。
+3. 瀏覽器詢問代理帳密時，輸入 `STRIXOPS_MCP_PROXY_AUTH` 的使用者名稱與密碼。
+4. 從 MCP 頁面下載共用 CA，信任一次後即可捕獲 HTTPS。
+
+兩種憑證用途不同：MCP Token 用於操作任務，代理帳密用於轉送瀏覽器流量。未提供有效代理帳密時，遠端代理回應 HTTP 407。代理驗證資訊不會寫入捕獲 journal。每個任務的代理埠仍是動態配置，主機防火牆須允許測試電腦連到該埠。
+
+若主機在 NAT 後，或需要綁定所有介面，可將 `STRIXOPS_MCP_PROXY_BIND_HOST` 設為 `0.0.0.0`，並以 `STRIXOPS_MCP_PROXY_PUBLIC_HOST` 指定瀏覽器實際能到達的 IP／DNS 主機名稱。設定變更僅套用新啟動的捕獲；既有代理不會被自動重啟。systemd 部署則將這些值放到服務的環境設定並重啟 Console。
+
+HTTP 範例適用可信內網；跨網際網路仍應使用 HTTPS 與整個 Console 的既有存取保護。
+
+### 反向代理
+
+若使用 Nginx／Caddy 等代理，保留同來源 UI 與 `/api/mcp` 路由；可在 MCP 頁面輸入 Token，或由已完成身份驗證的代理覆寫並注入 `X-MCP-Token`。代理轉送的 protocol／Host 須與瀏覽器來源一致。
+
+`STRIXOPS_MCP_TRUSTED_ORIGINS` 只信任既有身份驗證層，本身不是登入機制，也不會放行 IP 直連。Uvicorn 依可信代理的 `X-Forwarded-For` 還原遠端 IP 時，請使用 Token 驗證，不依賴 loopback 來源豁免。
 
 ## 儲存、限制與故障處理
 
@@ -177,6 +208,8 @@ SQLite 保存任務、flow、job、report 與事件；capture journal 保存增�
 | 顯示映像尚未安裝 | 執行上方固定版本與 digest 的 `docker pull`；啟動按鈕不會自動拉取映像 |
 | Docker 無法存取 | 確認 daemon 已啟動，並檢查執行 Console 帳號的 Docker 權限 |
 | 有代理位址但沒有流量 | 確認瀏覽器實際使用該 proxy、SSH 通道連接埠正確，且目標符合允許規則 |
+| 遠端 MCP 顯示尚未設定 Token | 在 Console process 的環境設定 `STRIXOPS_MCP_TOKEN` 並重啟，再於 MCP 頁面輸入相同 Token |
+| 代理要求登入／回應 407 | 使用 `STRIXOPS_MCP_PROXY_AUTH` 設定的代理帳密，不能以 MCP 控制台 Token 代替 |
 | HTTPS 憑證錯誤 | 確認已信任平台共用 CA；舊版代理則確認其 CA 是否相同。另須分辨瀏覽器不信任代理，還是代理不信任目標上游憑證 |
 | 網頁切換卻沒有新頁面 | 檢查是否為 SPA 路由或快取回應；單次前端路由切換不必然產生 HTTP request |
 | Journal 達上限或磁碟寫入失敗 | 保留現有資料，處理容量後停止並建立新捕獲工作階段；勿將仍在轉送視為仍在記錄 |

@@ -45,8 +45,12 @@ def classify(url: str, content_type: str) -> str:
 
 
 def header_pairs(headers: Any) -> list[list[str]]:
-    """Use byte fields, preserving duplicate headers and their original bytes."""
-    return [[name.decode("latin-1"), value.decode("latin-1")] for name, value in headers.fields]
+    """Preserve repeated headers; proxy credentials are never target evidence."""
+    return [
+        [name.decode("latin-1"), value.decode("latin-1")]
+        for name, value in headers.fields
+        if name.lower() != b"proxy-authorization"
+    ]
 
 
 class CaptureAddon:
@@ -63,6 +67,7 @@ class CaptureAddon:
         self.body_limit = body_limit
         self.journal_limit = journal_limit
         self.capacity_reached = False
+        self.proxy_auth_required = os.environ.get("MCP_CAPTURE_PROXY_AUTH_REQUIRED") == "1"
 
     def _scope(self) -> dict:
         try:
@@ -112,7 +117,10 @@ class CaptureAddon:
         if "mcp_capture" not in flow.metadata:
             scope = self._scope()
             flow.metadata["mcp_capture"] = {
-                "allowed": self._allowed(flow.request.url, scope),
+                # Mitmproxy's built-in auth addon runs before script addons and
+                # marks successful HTTP/CONNECT authentication in metadata.
+                "allowed": self._allowed(flow.request.url, scope)
+                and (not self.proxy_auth_required or bool(flow.metadata.get("proxyauth"))),
                 "scope_revision": scope.get("scope_revision", 0),
                 "request": {"body": bytearray(), "size": 0, "complete": False},
                 "response": {"body": bytearray(), "size": 0, "complete": False},

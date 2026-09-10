@@ -2,12 +2,15 @@
 
 These containers never share the Web/Internal scanner runtime. All Docker
 mutations verify task, session, role, and an unguessable persisted owner label.
-Public proxy listeners bind only to host loopback; no management API is exposed.
+Proxy listeners default to host loopback. Remote listeners require explicit
+binding and credentials; no management API is exposed.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import ipaddress
 import json
 import os
 import re
@@ -66,6 +69,83 @@ def _policy(task: dict) -> dict:
         "exclude_hosts": normalize_rules(source.get("exclude_hosts", [])),
         "scope_revision": int(source.get("scope_revision", 1)),
     }
+
+
+def _proxy_settings() -> tuple[dict, str]:
+    """Validate listener settings without including credentials in metadata/errors."""
+    bind_host = os.environ.get("STRIXOPS_MCP_PROXY_BIND_HOST", "127.0.0.1")
+    try:
+        if "%" in bind_host:
+            raise ValueError
+        address = ipaddress.ip_address(bind_host)
+        if address.is_multicast:
+            raise ValueError
+    except ValueError:
+        raise ValueError("STRIXOPS_MCP_PROXY_BIND_HOST must be a literal IPv4 or IPv6 address") from None
+    bind_host = str(address)
+    public_host = os.environ.get("STRIXOPS_MCP_PROXY_PUBLIC_HOST", "")
+    if not public_host:
+        if address.is_unspecified:
+            raise ValueError("Wildcard proxy binding requires STRIXOPS_MCP_PROXY_PUBLIC_HOST")
+        public_host = bind_host
+    try:
+        public_address = ipaddress.ip_address(public_host)
+    except ValueError:
+        labels = public_host.rstrip(".").split(".")
+        if (
+            len(public_host) > 253
+            or not all(
+                re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels
+            )
+            or re.fullmatch(r"[0-9.]+", public_host)
+        ):
+            raise ValueError(
+                "STRIXOPS_MCP_PROXY_PUBLIC_HOST must be a concrete IP address or DNS hostname"
+            ) from None
+        public_host = public_host.rstrip(".").lower()
+    else:
+        if public_address.is_unspecified or public_address.is_multicast or "%" in public_host:
+            raise ValueError("STRIXOPS_MCP_PROXY_PUBLIC_HOST must be a concrete IP address or DNS hostname")
+        public_host = str(public_address)
+    auth = os.environ.get("STRIXOPS_MCP_PROXY_AUTH", "")
+    if auth:
+        # Mitmproxy accepts exactly one colon and reserves @/ldap prefixes for
+        # other authentication backends. Restrict to its literal single user mode.
+        parts = auth.split(":")
+        if (
+            len(parts) != 2
+            or not all(re.fullmatch(r"[\x21-\x39\x3b-\x7e]{1,256}", part) for part in parts)
+            or parts[0].startswith(("@", "ldap"))
+        ):
+            raise ValueError(
+                "STRIXOPS_MCP_PROXY_AUTH requires username:password with 1–256 printable ASCII "
+                "characters per part, no whitespace or extra colon, and no @/ldap username prefix"
+            )
+    if not address.is_loopback and not auth:
+        raise ValueError("Remote proxy binding requires STRIXOPS_MCP_PROXY_AUTH=username:password")
+    return {
+        "proxy_bind_host": bind_host,
+        "proxy_host": public_host,
+        "proxy_auth_required": bool(auth),
+    }, auth
+
+
+def proxy_configuration() -> dict:
+    """Public connection guidance; never return the proxy password."""
+    return _proxy_settings()[0]
+
+
+def _binding_matches(bindings: list[dict], expected: str) -> bool:
+    try:
+        address = ipaddress.ip_address(expected)
+        return bool(bindings) and all(ipaddress.ip_address(item["HostIp"]) == address for item in bindings)
+    except (ValueError, KeyError):
+        return False
+
+
+def _probe_host(bind_host: str) -> str:
+    address = ipaddress.ip_address(bind_host)
+    return ("127.0.0.1" if address.version == 4 else "::1") if address.is_unspecified else bind_host
 
 
 class CaptureRuntime:
@@ -156,6 +236,8 @@ class CaptureRuntime:
                     "task_id",
                     "session_id",
                     "proxy_host",
+                    "proxy_bind_host",
+                    "proxy_auth_required",
                     "proxy_port",
                     "image",
                     "role",
@@ -209,6 +291,7 @@ class CaptureRuntime:
         self, task: dict, session_id: str, directory: Path, *, ca_directory: Path | None = None
     ) -> dict:
         policy = _policy(task)
+        connection_settings, auth = _proxy_settings()
         identity = ca_info(ca_directory) if ca_directory is not None else None
         image = self._image()
         directory = Path(directory).resolve()
@@ -220,11 +303,13 @@ class CaptureRuntime:
             ca_directory = Path(ca_directory).resolve()
         _atomic_json(directory / "scope.json", policy)
         metadata = self._metadata(str(task["id"]), session_id, "capture")
-        metadata.update(directory=str(directory), proxy_host="127.0.0.1", proxy_port=None, ca_ready=False)
+        metadata.update(directory=str(directory), proxy_port=None, ca_ready=False, **connection_settings)
         if identity is not None:
             metadata.update(ca_directory=str(ca_directory), ca_shared=True, ca_sha256=identity["sha256"])
         options = self._options()
         options["environment"].update(MCP_CAPTURE_DIR="/capture", MCP_CAPTURE_SESSION=session_id)
+        if auth:
+            options["environment"]["MCP_CAPTURE_PROXY_AUTH_REQUIRED"] = "1"
         volumes = {
             str(directory): {"bind": "/capture", "mode": "rw"},
             str(Path(__file__).parent.resolve()): {"bind": "/opt/traffic", "mode": "ro"},
@@ -254,10 +339,11 @@ class CaptureRuntime:
                     "--quiet",
                     "-s",
                     "/opt/traffic/capture_addon.py",
-                ],
+                ]
+                + (["--proxyauth", auth] if auth else []),
                 name=f"strixops-mcp-capture-{metadata['owner_token'][:16]}",
                 labels=self._labels(metadata),
-                ports={"8080/tcp": ("127.0.0.1", None)},
+                ports={"8080/tcp": (metadata["proxy_bind_host"], None)},
                 volumes=volumes,
                 **options,
             )
@@ -272,20 +358,34 @@ class CaptureRuntime:
                 bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {}).get("8080/tcp") or []
                 if bindings:
                     binding = bindings[0]
-                    if binding.get("HostIp") != "127.0.0.1":
-                        raise RuntimeUnavailable("Capture listener must be bound only to host loopback")
+                    if not _binding_matches(bindings, metadata["proxy_bind_host"]):
+                        raise RuntimeUnavailable(
+                            "Capture listener does not match the configured bind address"
+                        )
                     metadata["proxy_port"] = int(binding["HostPort"])
                 if metadata["proxy_port"] and self.ca_path(directory, ca_directory=ca_directory).is_file():
                     try:
                         with socket.create_connection(
-                            ("127.0.0.1", metadata["proxy_port"]), timeout=0.3
+                            (_probe_host(metadata["proxy_bind_host"]), metadata["proxy_port"]), timeout=0.3
                         ) as connection:
                             # Docker's published TCP port can accept before
                             # mitmdump has bound its listener. A hostless request
                             # proves proxy readiness without contacting a target.
-                            connection.sendall(b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n")
-                            if not connection.recv(512).startswith(b"HTTP/"):
+                            auth_header = (
+                                b"Proxy-Authorization: Basic "
+                                + base64.b64encode(auth.encode("ascii"))
+                                + b"\r\n"
+                                if auth
+                                else b""
+                            )
+                            connection.sendall(
+                                b"GET / HTTP/1.1\r\n" + auth_header + b"Connection: close\r\n\r\n"
+                            )
+                            response = connection.recv(512)
+                            if not response.startswith(b"HTTP/"):
                                 raise OSError("Capture proxy has not started responding")
+                            if response.split(b" ", 2)[1:2] == [b"407"]:
+                                raise RuntimeUnavailable("Capture proxy authentication configuration failed")
                         metadata.update(
                             ca_ready=True, runtime_status="running", scope_revision=policy["scope_revision"]
                         )
@@ -295,10 +395,16 @@ class CaptureRuntime:
                         pass
                 time.sleep(0.2)
             raise RuntimeUnavailable("Capture proxy did not become ready within 20 seconds")
-        except BaseException:
+        except BaseException as exc:
             if container is not None and metadata.get("container_id"):
                 with contextlib.suppress(Exception):
                     self._remove(task["id"], metadata)
+            if isinstance(exc, docker.errors.DockerException):
+                # Docker errors can echo the container command and its proxyauth
+                # argument. Never copy daemon errors into task/session records.
+                raise RuntimeUnavailable(
+                    "Cannot start the MCP capture container; check Docker configuration"
+                ) from None
             raise
 
     def stop(self, task_id: str, session: dict) -> None:
@@ -326,6 +432,8 @@ class CaptureRuntime:
                         "session_id",
                         "task_id",
                         "proxy_host",
+                        "proxy_bind_host",
+                        "proxy_auth_required",
                         "proxy_port",
                         "ca_directory",
                         "ca_shared",
@@ -336,10 +444,18 @@ class CaptureRuntime:
             )
             if running:
                 bindings = container.attrs.get("NetworkSettings", {}).get("Ports", {}).get("8080/tcp") or []
-                if bindings and bindings[0].get("HostIp") != "127.0.0.1":
-                    raise ValueError("Capture listener is not bound to host loopback")
+                bind_host = session.get("proxy_bind_host", "127.0.0.1")
+                if bindings and not _binding_matches(bindings, bind_host):
+                    raise ValueError("Capture listener does not match its saved bind address")
+                if not ipaddress.ip_address(bind_host).is_loopback and not session.get("proxy_auth_required"):
+                    raise ValueError("Remote capture listener has no proxy authentication record")
                 if bindings:
-                    result.update(proxy_host="127.0.0.1", proxy_port=int(bindings[0]["HostPort"]))
+                    result.update(
+                        proxy_host=session.get("proxy_host", bind_host),
+                        proxy_bind_host=bind_host,
+                        proxy_auth_required=bool(session.get("proxy_auth_required")),
+                        proxy_port=int(bindings[0]["HostPort"]),
+                    )
                 if not result["ca_ready"] or not bindings:
                     result["runtime_status"] = "starting"
             status_path = Path(session["directory"]) / "capture-status.json"

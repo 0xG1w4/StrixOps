@@ -10,14 +10,15 @@ from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from strixops.traffic.security import public_flow
 from strixops.traffic.service import get_service
 
 
-def access_error(scope: dict) -> str:
+def origin_error(scope: dict) -> str:
+    """Keep browser-origin checks independent from local or token authentication."""
     headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
     host = headers.get("host", "")
     scheme = scope.get("scheme", "http")
@@ -36,6 +37,22 @@ def access_error(scope: dict) -> str:
         return "Cross-origin access to MCP tasks is not permitted"
     if headers.get("sec-fetch-site") == "cross-site":
         return "Cross-site access to MCP tasks is not permitted"
+    return ""
+
+
+def access_error(scope: dict) -> str:
+    if error := origin_error(scope):
+        return error
+    headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    host = headers.get("host", "")
+    peer = (scope.get("client") or ("", 0))[0]
+    local_peer = peer in {"127.0.0.1", "::1", "localhost"}
+    expected = f"{scope.get('scheme', 'http')}://{host}"
+    trusted = {
+        item.strip().rstrip("/")
+        for item in os.environ.get("STRIXOPS_MCP_TRUSTED_ORIGINS", "").split(",")
+        if item.strip()
+    }
     configured = os.environ.get("STRIXOPS_MCP_TOKEN", "")
     supplied = headers.get("x-mcp-token", "")
     if headers.get("authorization", "").startswith("Bearer "):
@@ -64,6 +81,39 @@ def ensure_access(request: Request):
 
 
 router = APIRouter(prefix="/api/mcp", tags=["mcp-tasks"], dependencies=[Depends(ensure_access)])
+access_router = APIRouter(prefix="/api/mcp", tags=["mcp-access"])
+
+
+@access_router.get("/access")
+def access_status(request: Request):
+    """Describe how this browser can authenticate without loading task data."""
+    origin_problem = origin_error(request.scope)
+    headers = {"Cache-Control": "no-store", "Vary": "Origin, Authorization, X-MCP-Token"}
+    if origin_problem:
+        return JSONResponse(
+            {
+                "allowed": False,
+                "token_configured": False,
+                "reason": "origin_rejected",
+                "message": origin_problem,
+            },
+            status_code=403,
+            headers=headers,
+        )
+    allowed = not access_error(request.scope)
+    configured = bool(os.environ.get("STRIXOPS_MCP_TOKEN", ""))
+    reason = "" if allowed else "token_required" if configured else "token_not_configured"
+    message = ""
+    if not allowed:
+        message = (
+            "Enter the MCP access token configured on this server"
+            if configured
+            else "Configure STRIXOPS_MCP_TOKEN on the server and restart Console to enable remote MCP access"
+        )
+    return JSONResponse(
+        {"allowed": allowed, "token_configured": configured, "reason": reason, "message": message},
+        headers=headers,
+    )
 
 
 def invoke(function: Callable, *args, **kwargs):

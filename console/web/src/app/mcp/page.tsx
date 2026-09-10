@@ -7,6 +7,7 @@ import { ArrowLeft, ArrowRight, CheckCheck, ChevronDown, FileText, FlaskConical,
 import { McpApiError, mcpApi, mcpError, isMcpTaskLive, isMcpTestLive, type McpTask, type McpFlow, type McpEndpoint, type McpCatalog, type McpTest, type McpReport } from "@/lib/mcp-api";
 import { AgentTestForm, DeleteTaskDialog, ReplayForm, TaskForm } from "./forms";
 import { SharedCaPanel } from "./ca-panel";
+import { McpAccessGate } from "./access-gate";
 import { FlowDetail, ReportsPanel, TestsPanel } from "./panels";
 import { dateText, McpError, McpModal, McpStatus, shortId, useMcpCopy } from "./shared";
 import styles from "./mcp.module.css";
@@ -15,7 +16,7 @@ const POLL_MS = 3000;
 const activeTests = (tests: McpTest[]) => tests.some(isMcpTestLive);
 
 export default function McpPage() {
-  return <React.Suspense fallback={<div className={styles.contentEmpty}><LoaderCircle size={26} className={styles.spin} /></div>}><McpRouter /></React.Suspense>;
+  return <React.Suspense fallback={<div className={styles.contentEmpty}><LoaderCircle size={26} className={styles.spin} /></div>}><McpAccessGate><McpRouter /></McpAccessGate></React.Suspense>;
 }
 
 function McpRouter() {
@@ -161,7 +162,15 @@ function ConnectionPanel({ task }: { task: McpTask }) {
   const session = task.session;
   const host = session?.proxy_host || "127.0.0.1";
   const port = session?.proxy_port;
-  return <section className={styles.connectionPanel}><div><h3>{c("瀏覽器代理", "Browser proxy")}</h3><p>{c("在瀏覽器的 HTTP 與 HTTPS 代理設定填入下列位址。瀏覽目標網站後，流量會出現在這個任務。", "Use this address for your browser's HTTP and HTTPS proxy. Browsing your target will add traffic to this task.")}</p><code className={styles.proxyAddress}>{port ? `${host}:${port}` : c("啟動後顯示位址", "Address available after start")}</code><small>{c("若瀏覽器和伺服器不在同一台機器，請先建立到此監聽位址的 SSH 通道。", "For a browser on another machine, first create an SSH tunnel to this listener.")}</small>{port && <code className={styles.tunnelCommand}>{`ssh -N -L ${port}:127.0.0.1:${port} user@server`}</code>}</div><div><SharedCaPanel task={task} /></div></section>;
+  const bindHost = (session?.proxy_bind_host || host).replace(/^\[|\]$/g, "").toLowerCase();
+  const loopback = bindHost === "localhost" || bindHost === "::1" || /^127\./.test(bindHost);
+  const displayHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const tunnelHost = bindHost.includes(":") ? `[${bindHost}]` : bindHost;
+  return <section className={styles.connectionPanel}><div><h3>{c("瀏覽器代理", "Browser proxy")}</h3><p>{c("在瀏覽器的 HTTP 與 HTTPS 代理設定填入下列位址。瀏覽目標網站後，流量會出現在這個任務。", "Use this address for your browser's HTTP and HTTPS proxy. Browsing your target will add traffic to this task.")}</p><code className={styles.proxyAddress}>{port ? `${displayHost}:${port}` : c("啟動後顯示位址", "Address available after start")}</code>
+    {port && loopback && <><small>{c("此代理只監聽主機本機位址。若瀏覽器在另一台電腦，請先建立 SSH 通道，再使用 127.0.0.1 與上述連接埠。", "This proxy listens on the server's loopback address. From another computer, create an SSH tunnel and use 127.0.0.1 with the port above.")}</small><code className={styles.tunnelCommand}>{`ssh -N -L ${port}:${tunnelHost}:${port} user@server`}</code></>}
+    {port && !loopback && <small>{c("此代理允許從其他電腦連入。請確認主機防火牆允許你的測試電腦存取上述連接埠。", "This proxy accepts connections from other computers. Allow your testing computer to reach this port through the host firewall.")}</small>}
+    {session?.proxy_auth_required && <div className={styles.formNote}>{c("瀏覽器連線時會要求代理帳號與密碼。請使用主機設定的 STRIXOPS_MCP_PROXY_AUTH 帳密；這與工作台的 MCP Token 分開。", "Your browser will request a proxy username and password. Use the host's STRIXOPS_MCP_PROXY_AUTH credentials; these are separate from the workbench's MCP token.")}</div>}
+  </div><div><SharedCaPanel task={task} /></div></section>;
 }
 
 function TrafficWorkspace({ task, live, active, endpoints, refresh, selectedId, onSelect, onTest, onRefresh, onTests }: { task: McpTask; live: boolean; active: boolean; endpoints: McpEndpoint[]; refresh: number; selectedId: string | null; onSelect: (id: string | null) => void; onTest: (ids: string[]) => void; onRefresh: () => void; onTests: () => void }) {

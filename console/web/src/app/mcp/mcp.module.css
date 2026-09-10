@@ -368,3 +368,18 @@ textarea.input { resize: vertical; line-height: 1.8; }
 }
 @media (pointer: coarse) { .root button, .dialog button, .primaryButton, .secondaryButton { min-height: 42px; } .root input:not([type="checkbox"]), .root select { font-size: 16px; } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } .primaryButton, .secondaryButton, .iconButton, .textButton { transition: none; } }
+
+.accessGate { width: min(100%, 610px); margin: clamp(24px, 7vh, 80px) auto; padding: clamp(22px, 4vw, 38px); background: var(--mcp-surface); border: 1px solid var(--mcp-line); border-top: 2px solid var(--mcp-accent); border-radius: 5px; }
+.accessGate h1 { margin: 16px 0 12px; font-weight: 500; font-size: clamp(24px, 3vw, 30px); line-height: 1.3; letter-spacing: -.03em; color: var(--mcp-heading); }
+.accessGate > p, .accessSetup p { margin: 0 0 22px; font-size: 13px; line-height: 1.85; color: var(--mcp-muted); overflow-wrap: anywhere; }
+.accessGate .formNote { margin: 18px 0; font-size: 12px; }
+.accessForm { display: grid; gap: 15px; margin-top: 26px; }
+.accessForm input { width: 100%; min-width: 0; min-height: 42px; padding: 9px 11px; border: 1px solid var(--mcp-line); border-radius: 4px; background: var(--mcp-raised); color: var(--mcp-text); }
+.accessForm > button { justify-self: start; min-height: 39px; margin-top: 3px; }
+.accessChecking { display: flex; align-items: center; gap: 10px; margin-top: 28px; font-size: 12px; color: var(--mcp-muted); }
+.accessSetup { margin-top: 25px; padding-top: 22px; border-top: 1px solid var(--mcp-line); }
+.accessSetup h2 { margin: 0 0 10px; font-size: 15px; font-weight: 500; color: var(--mcp-heading); }
+.accessSetup code { display: block; margin: 0 0 18px; padding: 10px 12px; background: var(--mcp-raised); font: 12px var(--font-mono); overflow-wrap: anywhere; }
+.accessBar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 18px; margin: 0 0 15px; padding-bottom: 10px; border-bottom: 1px solid var(--mcp-soft-line); }
+.accessBar > span { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mcp-muted); }
+.accessBar .textButton { min-height: 26px; font-size: 11px; }
