@@ -4,17 +4,18 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.0.0** · [版本说明](docs/v1.0.0.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.1.0** · [版本说明](docs/v1.1.0.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
-Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。控制台为每个任务启动一个原生引擎进程；`strixops` 和兼容命令 `strix` 均调用该引擎，无需额外安装 Strix 源码或 Python 包。沙箱镜像基于上游 Strix 镜像扩展，详情见[沙箱部署](#sandbox-deployment)和 [NOTICE](NOTICE)。
+Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。控制台为每个 Web／内网任务启动一个原生引擎进程；`strixops` 和兼容命令 `strix` 均调用该引擎，无需额外安装 Strix 源码或 Python 包。沙箱镜像基于上游 Strix 镜像扩展，详情见[沙箱部署](#sandbox-deployment)和 [NOTICE](NOTICE)。
 
 请仅对已获得授权的系统使用 StrixOps。模型输出和报告中的覆盖范围需要人工复核；任务完成并不代表目标已经安全。
 
 ## 目录
 
 - [功能概览](#what-you-can-do)
+- [MCP 流量工作台](#mcp-traffic-workbench)
 - [架构与任务生命周期](#architecture-and-task-lifecycle)
 - [运行要求](#requirements)
 - [从源码快速启动](#quick-start-from-source)
@@ -39,6 +40,7 @@ Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。�
 |---|---|---|
 | Web 评估 | URL、域名和 IP 目标；浏览器与 HTTP 工具；沙箱内的 Caido 流量拦截 | 分析应用行为，记录可复现的安全发现 |
 | 内网评估 | 主机、IP 和 CIDR 目标；共用网络工具镜像；可选 SOCKS5 或 GSocket 接入 | 在明确范围与接入说明的前提下评估已授权内网 |
+| MCP 流量工作台 | 独立代理任务、网站捕获范围、请求查看与重放、选定请求的 Agent 测试及 Markdown 报告 | 捕获浏览器流量，针对观察到的页面与 API 测试并保存证据 |
 | 多目标任务 | 单次运行最多包含 100 个不同目标 | 为相关服务共用上下文、证据归档和最终报告 |
 | 实时控制台 | 任务看板、对话流、智能体树、操作员提示、安全发现与下载 | 跟踪执行过程，并在任务中补充指引 |
 | 项目管理 | 范围校验、任务分组、报告汇总和技能使用统计 | 组织同一环境的多次评估 |
@@ -50,6 +52,20 @@ Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。�
 | 证据管理 | 保留工作区、SHA256 元数据、二进制文件下载和 ZIP 导出 | 保存安全发现与最终报告引用的文件 |
 
 控制台是**单用户应用**，不提供用户账户、租户隔离或身份验证边界。远程部署时，应通过 SSH 隧道或具备身份验证的访问层使用。
+
+<a id="mcp-traffic-workbench"></a>
+
+## MCP 流量工作台
+
+在侧栏打开 **MCP**，创建流量任务、设置允许／排除的网站，然后启动代理。在测试浏览器中，将 HTTP 和 HTTPS 代理设为页面显示的地址。浏览目标后即可查看或重放请求，选择请求交给 Agent 测试，并导出报告。工作台只捕获实际经过代理的网络请求，不会记录所有前端路由或自动遍历整个网站。
+
+MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默认使用 `~/.strixops/mcp_tasks`，可通过 `STRIXOPS_MCP_ROOT` 配置，与 Web／内网运行分开。请求测试可复用已保存的 Web 模型路由和兼容的提示词／技能资源，每次测试保存资源快照。
+
+同一 MCP 数据目录下的任务共用一张持久 CA，每个测试浏览器／配置文件只需导入并信任一次。重启捕获、创建或删除任务均不会更换 CA。升级时优先沿用有效旧 CA；如果浏览器信任的是另一张旧 CA，需要导入共用 CA。正在运行的旧代理会保留原证书，直到下次启动；升级不会自动重启代理。
+
+长任务名称和 URL 不再撑破列宽，详情保留完整内容。删除任务需确认，随后停止其代理与测试工作，并清除保存的流量、结果和报告；共用 CA 与其他任务继续保留。
+
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.1.0 版本说明](docs/v1.1.0.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -71,6 +87,7 @@ flowchart LR
 ```
 
 构建后的前端与 API 由同一个控制台进程提供，并使用同一来源。评估环境由本地 Docker 守护进程提供；常规部署不需要 Postgres、Redis 或独立的前端服务器。模型服务单独配置，并会接收智能体请求所需的上下文。
+此处架构图描述 Web／内网运行；MCP 使用上文所述的独立请求测试生命周期。
 
 ```mermaid
 flowchart TD
@@ -98,6 +115,7 @@ flowchart TD
 | Python | 3.12 或更新版本 | 引擎、CLI 和控制台 |
 | Docker | 正在运行的 Linux 容器守护进程，且运行 StrixOps 的账户可访问 | 实际评估 |
 | 沙箱镜像 | `strixops-sandbox:1.3.0`，或通过 `STRIXOPS_IMAGE` 指定的兼容镜像 | 实际评估 |
+| MCP 代理镜像 | 固定 `ghcr.io/mitmproxy/mitmproxy:12.2.3`，完整 digest 见 [MCP 指南](docs/mcp-traffic-workbench.md#安裝與啟動) | MCP 捕获与请求重放 |
 | 模型服务 | 支持所选协议、流式响应及函数工具的 OpenAI 兼容 API | 评估和模型诊断 |
 | Git 与 uv | 获取源码并按照锁定依赖安装 Python 环境 | 源码部署 |
 | Node.js 与 npm | 当前锁定的前端依赖要求 Node.js 20.9+ | 仅构建前端源码时需要 |
@@ -114,7 +132,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.0.0 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.1.0 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -136,7 +154,7 @@ uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 
 请像示例一样使用**绝对运行目录路径**。控制台使用自身的工作目录启动引擎进程；相对运行路径在控制台和引擎中可能解析为不同位置，wheel 安装方式尤其需要注意。
 
-上面的克隆命令选择持续维护的 `v1.0.0` **分支**。如果要查看最初发布时的精确快照，请使用 `git switch --detach refs/tags/v1.0.0`。发布标签创建后，该分支仍可能接收文档更新。
+上面的克隆命令选择 `v1.1.0` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.1.0`。
 
 安装完成后，再次启动只需执行：
 
@@ -157,11 +175,11 @@ curl --fail http://127.0.0.1:8300/api/health
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.0.0-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.1.0-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.0.0-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.1.0-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -188,7 +206,7 @@ python3 -m venv .venv
 
 例如，Base URL 为 `https://gateway.example/v1` 时，请求地址为 `https://gateway.example/v1/chat/completions` 或 `https://gateway.example/v1/responses`。请填写 API 基础地址，而非完整的 completion 端点，并使用该网关实际识别的模型 ID。
 
-在 1.0.0 中，Auto 会为已识别的 Astra、GPT-5.4 Pro、GPT-5.5 和 GPT-5.6 名称选择 Responses，其他名称使用 Chat Completions。使用部署别名时，请明确设置 API 类型。手动选择的 API 会被保留，原生模型兼容性说明仅作提示；不支持的选项值和已知不支持的推理强度仍会被拒绝。请求最终能否成功，取决于供应商的实际支持。
+当前版本中，Auto 会为已识别的 Astra、GPT-5.4 Pro、GPT-5.5 和 GPT-5.6 名称选择 Responses，其他名称使用 Chat Completions。使用部署别名时，请明确设置 API 类型。手动选择的 API 会被保留，原生模型兼容性说明仅作提示；不支持的选项值和已知不支持的推理强度仍会被拒绝。请求最终能否成功，取决于供应商的实际支持。
 
 两种模式均使用 OpenAI 兼容格式，但网关可能只实现其中一种，也可能只支持部分工具、图片和推理设置。模型出现在目录中，并不代表该组合可用。请求失败时，不会静默切换 API、推理强度或模型。模型测试会正常消耗供应商配额。
 
@@ -386,7 +404,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.0.0` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.1.0` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 

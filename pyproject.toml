@@ -1,11 +1,12 @@
 [project]
 name = "strixops"
-version = "1.0.0"
+version = "1.1.0"
 description = "StrixOps — integrated security assessment engine and web console"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
+    "cryptography>=42",
     # Pinned to match the reference implementation (strix v1.6.0); do not bump
     # without re-validating the SandboxAgent/Runner integration surface.
     "openai-agents[litellm]==0.19.0",
@@ -21,6 +22,7 @@ dependencies = [
     # console
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "mcp==1.29.1",
 ]
 
 [project.scripts]

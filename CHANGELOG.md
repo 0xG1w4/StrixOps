@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.0 — 2026-09-10
+
+- Add an independent MCP traffic workbench with task-owned proxy containers,
+  website capture scope, saved pages/API requests, request/response inspection,
+  and manual replay. Keep its storage and lifecycle separate from Web/internal
+  runs, and expose the same operations through Streamable HTTP MCP tools.
+- Test selected requests with saved Web model routes and compatible prompt/skill
+  snapshots, bounded request/time budgets, isolated request containers, and
+  persisted results. Generate versioned Markdown reports from saved evidence.
+- Share one persistent CA across tasks and capture restarts. Prefer a valid
+  legacy CA during migration, expose its public certificate and fingerprint,
+  and retain it when deleting tasks. Existing proxies keep their certificate
+  until the next start; the upgrade does not restart them automatically.
+- Keep long task names, URLs, headers, and report content within their frontend
+  columns, while retaining access to complete values in detail views.
+- Add task deletion from the list, details, API, and MCP. Stop owned proxies,
+  cancel and wait for active jobs, then remove task evidence; preserve the
+  shared CA, other tasks, and retryable task records on cleanup failure.
+- Add `mcp==1.29.1` and a direct `cryptography>=42` dependency. Pin the separate
+  capture/replay image to mitmproxy 12.2.3 by digest. Keep the existing assessment
+  sandbox at 1.3.0.
+
+Upgrade and release scope: [v1.1.0 release notes](docs/v1.1.0.md).
+Setup and current limits: [MCP operation guide](docs/mcp-traffic-workbench.md).
+
 ## 1.0.0 — 2026-09-09
 
 First integrated StrixOps release, combining the native Python engine, FastAPI

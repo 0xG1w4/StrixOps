@@ -103,6 +103,11 @@ app.add_middleware(
 )
 app.include_router(prompt_probe.router)
 
+# Independent traffic tasks share only the Console HTTP surface, not scan execution.
+from strixops.traffic.mcp_server import install as install_mcp_tasks  # noqa: E402
+
+install_mcp_tasks(app)
+
 
 # ------------------------------------------------------------------ liveness
 

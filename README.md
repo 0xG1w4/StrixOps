@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.0.0** · [Release notes](docs/v1.0.0.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Version **1.1.0** · [Release notes](docs/v1.1.0.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -12,7 +12,7 @@ the browser or CLI, follow agent activity, add operator guidance, and review a
 report alongside the records that produced it.
 
 The Python engine, FastAPI service, and Next.js console are part of the same
-product. The Console starts a native engine process for each task; both `strixops`
+product. The Console starts a native engine process for each Web/internal task; both `strixops`
 and the compatibility command `strix` invoke that engine. An external Strix
 checkout or Python package is not required. The sandbox image does extend an
 upstream Strix image; see [Sandbox deployment](#sandbox-deployment) and [NOTICE](NOTICE).
@@ -23,6 +23,7 @@ coverage require review; a completed task is not a guarantee that a target is se
 ## Contents
 
 - [What you can do](#what-you-can-do)
+- [MCP traffic workbench](#mcp-traffic-workbench)
 - [Architecture and task lifecycle](#architecture-and-task-lifecycle)
 - [Requirements](#requirements)
 - [Quick start from source](#quick-start-from-source)
@@ -45,6 +46,7 @@ coverage require review; a completed task is not a guarantee that a target is se
 |---|---|---|
 | Web assessments | URL, domain, and IP targets; browser and HTTP tooling; Caido interception in the sandbox | Investigate application behavior and record reproducible findings |
 | Internal assessments | Host, IP, and CIDR targets; shared network-tool image; optional SOCKS5 or GSocket access | Assess an authorized internal environment with explicit scope and access instructions |
+| MCP traffic workbench | Independent proxy tasks, website capture scope, request inspection and replay, selected-request Agent tests, and Markdown reports | Capture browser traffic and investigate observed pages and APIs with persistent evidence |
 | Multi-target tasks | Up to 100 distinct targets in one run | Keep related services under one context, evidence archive, and final report |
 | Live Console | Task dashboard, conversation stream, agent tree, operator hints, findings, and downloads | Follow execution and provide additional guidance during a task |
 | Projects | Scope validation, task grouping, report aggregation, and skill-use analytics | Organize repeated assessments of the same environment |
@@ -58,6 +60,38 @@ coverage require review; a completed task is not a guarantee that a target is se
 The Console is a **single-user application**. It does not provide user accounts,
 tenant isolation, or an authentication boundary. Remote deployment should keep
 it behind an SSH tunnel or an authenticated access layer.
+
+## MCP traffic workbench
+
+Open **MCP** in the sidebar to create a traffic task, set allowed/excluded
+websites, and start its proxy. Configure the test browser's HTTP and HTTPS
+proxy with the displayed address. Browse the target to collect requests, then
+inspect or replay them, select requests for Agent tests, and export reports.
+The workbench captures network requests that actually pass through the proxy;
+it does not record every frontend route or automatically explore the website.
+
+MCP tasks use their own capture containers, short-lived request containers,
+and data directory (`~/.strixops/mcp_tasks` by default, configurable with
+`STRIXOPS_MCP_ROOT`). They remain separate from Web/internal runs. Request tests
+can reuse saved Web model routes and compatible prompt/skill resources while
+preserving a snapshot for each test.
+
+All tasks in the same MCP data directory share one persistent CA. Import and
+trust its public certificate once per test browser/profile. Restarting capture
+or creating/deleting tasks does not rotate it. Upgrades prefer an existing
+valid CA; a browser that trusted a different legacy CA must trust the shared
+one. Running legacy proxies retain their certificate until the next start;
+the upgrade does not automatically restart them.
+
+Long task names and URLs stay within their columns, with full values available
+in the details. Task deletion requires confirmation, stops its proxy and test
+jobs, and removes its saved traffic, results, and reports. The shared CA and
+other tasks are retained.
+
+Capture uses a separate, pinned mitmproxy image. See the
+[MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
+browser trust, scope rules, storage, and current limits; see the
+[1.1.0 release notes](docs/v1.1.0.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -80,6 +114,8 @@ The built frontend and API share one Console process and origin. A local Docker
 daemon provides the assessment environment; no Postgres, Redis, or separate
 frontend server is needed for the normal deployment. The model service is
 configured separately and receives the context needed by the agent requests.
+The diagrams here describe Web/internal runs; MCP has the separate request
+testing lifecycle described above.
 
 ```mermaid
 flowchart TD
@@ -108,6 +144,7 @@ verified container cleanup.
 | Python | 3.12 or newer | Engine, CLI, and Console |
 | Docker | Running Linux-container daemon accessible to the account running StrixOps | Real assessments |
 | Sandbox image | `strixops-sandbox:1.3.0`, or a compatible image selected with `STRIXOPS_IMAGE` | Real assessments |
+| MCP proxy image | Pinned `ghcr.io/mitmproxy/mitmproxy:12.2.3` with the digest in the [MCP guide](docs/mcp-traffic-workbench.md#安裝與啟動) | MCP capture and request replay |
 | Model service | OpenAI-compatible API with the selected protocol, streaming, and function tools | Assessments and model diagnostics |
 | Git and uv | Source checkout and frozen Python dependency installation | Source deployment |
 | Node.js and npm | Node.js 20.9+ for the current locked frontend dependencies | Frontend source builds only |
@@ -127,7 +164,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.0.0 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.1.0 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -156,9 +193,9 @@ Use an **absolute runs path**, as shown above. The Console starts engine process
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the maintained `v1.0.0` **branch**. To inspect the exact
-original release snapshot instead, use `git switch --detach refs/tags/v1.0.0`.
-The branch can receive documentation updates after the release tag.
+The clone command selects the `v1.1.0` **release tag**, leaving a detached HEAD
+at that release snapshot. It does not select a maintained release branch.
+In an existing checkout, the exact reference is `refs/tags/v1.1.0`.
 
 After installation, subsequent starts only require:
 
@@ -180,12 +217,12 @@ The health endpoint does not validate Docker, a model key, or target reachabilit
 
 A wheel contains the built Console and runtime prompt/skill library. It does
 not contain the Docker sandbox image. Use this route when you already have a
-trusted `strixops-1.0.0-py3-none-any.whl`; it does not assume a PyPI publication or
+trusted `strixops-1.1.0-py3-none-any.whl`; it does not assume a PyPI publication or
 an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.0.0-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.1.0-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -219,7 +256,7 @@ For example, a Base URL of `https://gateway.example/v1` produces
 `https://gateway.example/v1/responses`. Enter the API base, not the complete
 completion endpoint. Use the model ID recognized by that particular gateway.
 
-In 1.0.0, Auto chooses Responses for the recognized Astra, GPT-5.4 Pro, GPT-5.5,
+In this release, Auto chooses Responses for the recognized Astra, GPT-5.4 Pro, GPT-5.5,
 and GPT-5.6 names; other names use Chat Completions. Set deployment aliases
 explicitly. Manual API choices are honored; native-model compatibility notes
 are advisory. Unsupported option values and known unsupported effort levels
@@ -457,7 +494,7 @@ tool inventory and architecture-specific best-effort installs.
 
 Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
 remote `DOCKER_HOST` alone does not make local workspace directories available on
-that remote host. The product version `1.0.0` and sandbox tag `1.3.0` are separate
+that remote host. The product version `1.1.0` and sandbox tag `1.3.0` are separate
 version numbers.
 
 ## Configuration reference

@@ -15,6 +15,7 @@ import {
   Radar,
   SlidersHorizontal,
   Sun,
+  Waypoints,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -42,6 +43,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/", key: "nav.runs", icon: Radar },
       { href: "/scan", key: "nav.scan", icon: Crosshair },
+      { href: "/mcp", key: "nav.mcp", icon: Waypoints },
     ],
   },
   {
@@ -233,7 +235,7 @@ function EnginePanel({ stats }: { stats: EngineStats }) {
       <div className="engine-panel-meta">
         <span>{stats.liveRuns.toString().padStart(2, "0")} LIVE</span>
         <span>{stats.totalRuns.toString().padStart(2, "0")} RUNS</span>
-        <span>v1.0.0</span>
+        <span>v1.1.0</span>
       </div>
     </div>
   );

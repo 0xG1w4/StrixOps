@@ -1798,14 +1798,16 @@ wheels = [
 
 [[package]]
 name = "strixops"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "cvss" },
     { name = "docker" },
     { name = "fastapi" },
     { name = "jinja2" },
     { name = "litellm" },
+    { name = "mcp" },
     { name = "openai" },
     { name = "openai-agents", extra = ["litellm"] },
     { name = "pydantic" },
@@ -1824,11 +1826,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
     { name = "cvss", specifier = ">=3.2" },
     { name = "docker", specifier = ">=7.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "litellm", specifier = "==1.90.1" },
+    { name = "mcp", specifier = "==1.29.1" },
     { name = "openai", specifier = "==2.53.0" },
     { name = "openai-agents", extras = ["litellm"], specifier = "==0.19.0" },
     { name = "pydantic", specifier = ">=2.11" },
