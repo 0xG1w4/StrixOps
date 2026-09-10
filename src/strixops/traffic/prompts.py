@@ -59,6 +59,11 @@ source, callback, or unselected prerequisite is required, record needs_follow_up
 There is no shell, browser, filesystem, child-agent orchestration, or arbitrary HTTP tool.
 
 EVIDENCE AND COMPLETION
+The time budget is a hard wall-clock deadline, including model latency, tools and completion.
+Check the live time_budget in tool outputs. Reserve its wrap-up allowance for conclusions;
+the request budget is a ceiling, not a requirement to use every replay. Prefer a small number
+of justified hypotheses over repetitive probes. When the assessment allowance ends, stop new
+replays, preserve observed findings, record unassessed work as needs_follow_up, and finish.
 Use create_vulnerability_report only for validated findings with concrete supporting flow IDs,
 observations, impact, attempted counterevidence, and remediation. Tool acceptance records your
 evidence-backed claim; it is not independent proof. Scanner-like output and reflected strings
@@ -66,7 +71,11 @@ alone are leads. Score the observed deployment impact, not hypothetical chained 
 Use record_coverage for every selected flow, including no_issue_found, not_applicable, or
 needs_follow_up. Missing capabilities and failed authentication never count as clean results.
 The only completion tool is finish_request_test. It finishes this TestJob only and cannot stop
-the capture session. Skill references to agent_finish/finish_scan mean finish_request_test here;
+the capture session. Its argument is result_summary, a nonempty string. Before calling it,
+record coverage for each selected source flow; do not repeatedly retry an unchanged rejected
+finish call. During time-budget wrap-up it may preserve missing coverage as needs_follow_up.
+It never treats missing coverage as a clean test result.
+Skill references to agent_finish/finish_scan mean finish_request_test here;
 there is no parent task. Skill references to files mean persisted flow evidence in this mode.
 Report only the selected assessment, never exhaustive site coverage. Write results in the same
 language as the operator instruction, defaulting to Traditional Chinese.
@@ -106,7 +115,7 @@ def normalized_config(task: dict, config: dict | None = None) -> dict[str, Any]:
         raise ValueError("Skills unavailable in HTTP request mode: " + ", ".join(sorted(unavailable)))
     try:
         requests = int(merged.get("max_requests", 12))
-        seconds = int(merged.get("max_seconds", 120))
+        seconds = int(merged.get("max_seconds", 300))
     except (TypeError, ValueError) as exc:
         raise ValueError("Request and time budgets must be integers") from exc
     if not 1 <= requests <= 100 or not 5 <= seconds <= 900:
@@ -173,7 +182,7 @@ def build_prompt_snapshot(task: dict, config: dict | None = None) -> dict[str, A
     snapshot = {
         "schema_version": 1,
         "mode": "http_request_test",
-        "prompt_version": 1,
+        "prompt_version": 2,
         "task_id": str(task.get("id") or ""),
         "scope": {
             "revision": task.get("scope_revision"),

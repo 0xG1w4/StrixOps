@@ -4,12 +4,88 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 
 from strixops.traffic.store import new_id, now
 
 
 def _text(value) -> str:
     return str(value or "").replace("|", "\\|").replace("\n", " ").replace("<", "&lt;")
+
+
+_REASONS = {
+    "completed": "測試流程已完成",
+    "time_budget_limited": "已使用預留時間收尾，保留部分結果",
+    "time_budget_exceeded": "時間預算已用盡，測試未完成",
+    "model_error": "模型執行未完成",
+    "incomplete_lifecycle": "尚未完成測試結論",
+    "cancelled": "測試已取消",
+    "partial": "僅完成部分測試",
+}
+
+
+def _completion_reason(job: dict) -> str:
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    diagnostics = result.get("diagnostics") if isinstance(result.get("diagnostics"), dict) else {}
+    reason = result.get("completion_reason") or diagnostics.get("reason")
+    if isinstance(reason, str) and reason in _REASONS:
+        return reason
+    if any(
+        isinstance(error, str) and error.strip().casefold().startswith("time budget exceeded")
+        for error in (job.get("error"), result.get("error"))
+    ):
+        return "time_budget_exceeded"
+    if result.get("partial") is True:
+        return "partial"
+    return {"completed": "completed", "cancelled": "cancelled"}.get(job.get("status"), "")
+
+
+def _number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not 0 <= value <= 1_000_000 or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _diagnostic_lines(result: dict) -> list[str]:
+    diagnostics = result.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return []
+    lines, timing, activity = [], [], []
+    for field, label in (("elapsed_seconds", "已用"), ("budget_seconds", "上限")):
+        value = _number(diagnostics.get(field))
+        if value is not None:
+            timing.append(f"{label} {value:g} 秒")
+    if timing:
+        lines.append("- 時間預算：" + "／".join(timing))
+    for field, label in (("request_count", "重送"), ("model_rounds", "模型呼叫")):
+        value = _number(diagnostics.get(field))
+        if value is not None and value.is_integer():
+            activity.append(f"{label} {value:g} 次")
+    rounds = diagnostics.get("rounds")
+    if isinstance(rounds, list):
+        durations = [
+            value
+            for row in rounds[:200]
+            if isinstance(row, dict) and (value := _number(row.get("duration_seconds"))) is not None
+        ]
+        if durations:
+            activity.append(f"模型耗時合計 {sum(durations):g} 秒（含中止的呼叫）")
+    if activity:
+        lines.append("- 執行記錄：" + "；".join(activity))
+    phase = {
+        "initialization": "初始化",
+        "model": "模型",
+        "tool": "工具",
+        "replay": "重送",
+        "wrapup": "收尾",
+        "completion": "完成",
+    }.get(str(diagnostics.get("phase")), "")
+    if phase:
+        stage = "收尾／" if diagnostics.get("stage") == "wrapup" and phase != "收尾" else ""
+        lines.append(f"- 結束階段：{stage}{phase}")
+    return lines
 
 
 def build_report(task: dict, endpoints: list[dict], jobs: list[dict]) -> dict:
@@ -20,6 +96,7 @@ def build_report(task: dict, endpoints: list[dict], jobs: list[dict]) -> dict:
             "status": job["status"],
             "flow_ids": job["flow_ids"],
             "result": job.get("result"),
+            "completion_reason": _completion_reason(job),
             "prompt_sha256": (job.get("prompt_snapshot") or {}).get("sha256"),
         }
         for job in jobs
@@ -56,15 +133,32 @@ def build_report(task: dict, endpoints: list[dict], jobs: list[dict]) -> dict:
         lines.append("尚未執行 Agent 測試；流量盤點不代表已驗證安全性。")
     for job in reversed(jobs):
         result = job.get("result") or {}
+        reason = _completion_reason(job)
+        partial = result.get("partial") is True or reason in {
+            "partial",
+            "time_budget_limited",
+            "time_budget_exceeded",
+        }
+        status = _text(job["status"])
+        if reason == "time_budget_exceeded":
+            status = "時間預算已用盡（測試未完成，保留部分結果）"
+        elif partial and job["status"] == "completed":
+            status = "部分完成（已收尾，仍需後續驗證）"
+        summary = result.get("summary")
+        if not summary or summary in (job.get("error"), result.get("error")):
+            summary = _REASONS.get(reason, "測試尚未完成")
         lines += [
             f"### `{job['id']}`",
             "",
-            f"- 狀態：{_text(job['status'])}",
+            f"- 狀態：{status}",
             "- 原始請求：" + ", ".join(f"`{flow_id}`" for flow_id in job["flow_ids"]),
-            "",
-            _text(result.get("summary") or job.get("error") or "測試尚未完成"),
-            "",
         ]
+        if reason in _REASONS:
+            lines.append("- 結束原因：" + _REASONS[reason])
+        lines += _diagnostic_lines(result)
+        if partial:
+            lines.append("- 結論限制：僅保留已完成的檢查與證據；未完成項目仍需後續驗證，不代表通過。")
+        lines += ["", _text(summary), ""]
         for finding in result.get("findings", []):
             lines += [
                 f"- **{_text(finding.get('severity'))} — {_text(finding.get('title'))}**",
@@ -99,7 +193,8 @@ def build_report(task: dict, endpoints: list[dict], jobs: list[dict]) -> dict:
         "",
         f"已保存 {task['counts']['flows']} 筆流量（含重送）；選取 {len(selected)} 筆原始請求進入測試。",
         "端點分組是路徑推論，樣本數不代表測試次數；未選取的請求不視為已測試。",
-        "未完成、阻塞與失敗的測試均不代表通過。HTTP 模式不提供 DOM 執行或原始碼分析。",
+        "部分完成、時間預算用盡、未完成、阻塞與失敗的測試均不代表通過。"
+        "HTTP 模式不提供 DOM 執行或原始碼分析。",
         "本文預設隱藏憑證；原始證據保存在本機任務資料中。",
     ]
     for session in task.get("sessions", []):

@@ -54,6 +54,11 @@ export interface McpMessage {
   truncated?: boolean;
   http_version?: string;
   binary?: boolean;
+  body_decode_error?: string | null;
+  body_decoded?: boolean;
+  body_encoding?: string;
+  body_charset?: string;
+  body_preview_truncated?: boolean;
 }
 
 export interface McpFlow {
@@ -110,9 +115,40 @@ export interface McpTest {
   started_at?: string | null;
   finished_at?: string | null;
   config?: McpAgentConfig;
-  result?: { summary?: string; findings?: McpFinding[]; coverage?: unknown[]; [key: string]: unknown } | null;
+  requests_used?: number;
+  result?: { summary?: string; findings?: McpFinding[]; coverage?: unknown[]; partial?: boolean; completion_reason?: string; diagnostics?: McpTestDiagnostics; [key: string]: unknown } | null;
   error?: string | null;
-  events?: Array<{ timestamp?: string; message?: string; type?: string; [key: string]: unknown }>;
+  events?: McpTestEvent[];
+}
+
+export interface McpTestDiagnostics {
+  reason?: string;
+  phase?: string;
+  stage?: string;
+  elapsed_seconds?: number;
+  budget_seconds?: number;
+  remaining_seconds?: number;
+  wrapup_seconds?: number;
+  request_count?: number;
+  model_rounds?: number;
+  partial_evidence?: boolean;
+  rounds?: Array<{ round: number; stage: string; duration_seconds: number; outcome: string }>;
+}
+
+export interface McpTestEvent {
+  created_at?: string;
+  timestamp?: string;
+  message?: string;
+  type?: string;
+  phase?: string;
+  stage?: string;
+  elapsed_seconds?: number;
+  duration_seconds?: number;
+  remaining_seconds?: number;
+  request_count?: number;
+  round?: number;
+  tool?: string;
+  [key: string]: unknown;
 }
 
 export interface McpReport {

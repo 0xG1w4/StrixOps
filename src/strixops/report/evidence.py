@@ -24,13 +24,33 @@ _WORKSPACE_REFERENCE = re.compile(
 def evidence_filename(reference: str) -> str | None:
     """Resolve a declared evidence path, rejecting absolute paths and traversal."""
     prefix = "/workspace/output/"
-    if reference == prefix:
+    if reference in {prefix, prefix.rstrip("/")}:
         return "."
     name = reference[len(prefix) :] if reference.startswith(prefix) else reference
     path = PurePosixPath(name)
     if not name or path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
         return None
     return path.as_posix()
+
+
+def _resolve_reference(reference: str, by_name: dict[str, dict[str, Any]]) -> str | None:
+    """Prefer actual archive paths before accepting workspace-relative aliases.
+
+    An ``output/name`` reference can mean a real nested output directory or a
+    path written relative to /workspace. Exact manifest entries/descendants
+    take precedence, including undeliverable entries. Absolute workspace paths
+    are already unambiguous and must never lose a second output/ component.
+    """
+    name = evidence_filename(reference)
+    if name is None or name == "." or reference.startswith("/"):
+        return name
+    if name in by_name or any(filename.startswith(name + "/") for filename in by_name):
+        return name
+    if name == "output":
+        return "."
+    if name.startswith("output/"):
+        return name[len("output/") :]
+    return name
 
 
 def _reference_delivery(
@@ -87,7 +107,7 @@ def finding_references(findings: list[dict[str, Any]], index: list[dict[str, Any
                 ref.rstrip(".,;:") for ref in _WORKSPACE_REFERENCE.findall(str(finding.get(field) or ""))
             )
         for reference in sorted(refs):
-            name = evidence_filename(reference)
+            name = _resolve_reference(reference, by_name)
             references.append(
                 {
                     "finding_id": finding.get("id", ""),

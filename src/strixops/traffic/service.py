@@ -559,6 +559,7 @@ class TrafficService:
 
         identity, task_id = job["id"], task["id"]
         requests_used = 0
+        started = time.monotonic()
         replay_lock = threading.Lock()
         cancelled_before_cleanup: bool | None = None
 
@@ -580,16 +581,27 @@ class TrafficService:
                     raise ValueError("Request budget exhausted")
                 requests_used += 1
             original = next(flow for flow in flows if flow["id"] == flow_id)
-            return await asyncio.to_thread(
-                self.replay,
-                task_id,
-                flow_id,
-                modifications,
-                test_id=identity,
-                cancel=cancelled,
-                original=original,
-                job_scope=job["scope"],
-            )
+
+            class ReplayCancellation(threading.Event):
+                def is_set(self) -> bool:
+                    return cancelled.is_set() or super().is_set()
+
+            signal = ReplayCancellation()
+            try:
+                return await asyncio.to_thread(
+                    self.replay,
+                    task_id,
+                    flow_id,
+                    modifications,
+                    test_id=identity,
+                    cancel=signal,
+                    original=original,
+                    job_scope=job["scope"],
+                )
+            finally:
+                # Ending a replay for wrap-up must stop its container without cancelling
+                # the remaining model conclusion or changing the user's cancellation state.
+                signal.set()
 
         try:
             with self.lock:
@@ -619,8 +631,30 @@ class TrafficService:
                 cancelled.is_set() if cancelled_before_cleanup is None else cancelled_before_cleanup
             )
             status = "cancelled" if user_cancelled or isinstance(exc, asyncio.CancelledError) else "failed"
-            error = str(exc)[:1000] or type(exc).__name__
-            result = {"summary": "Test could not complete", "findings": [], "coverage": []}
+            error = (
+                "Test cancelled"
+                if status == "cancelled"
+                else f"Agent request test failed ({type(exc).__name__})"
+            )
+            reason = "cancelled" if status == "cancelled" else "model_error"
+            result = {
+                "summary": "Test could not complete",
+                "findings": [],
+                "coverage": [],
+                "partial": True,
+                "completion_reason": reason,
+                "diagnostics": {
+                    "reason": reason,
+                    "phase": "initialization",
+                    "stage": "assessment",
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "budget_seconds": job["config"]["max_seconds"],
+                    "request_count": requests_used,
+                    "model_rounds": 0,
+                    "partial_evidence": bool(requests_used),
+                    "rounds": [],
+                },
+            }
         finally:
             cancelled.set()
         with self.lock:

@@ -12,12 +12,13 @@ import contextlib
 import copy
 import json
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
-from agents import Agent, ModelSettings, RunConfig, Runner, StopAtTools, function_tool
+from agents import Agent, Model, ModelSettings, RunConfig, RunHooks, Runner, StopAtTools, function_tool
 
 from strixops.config.provider import make_platform_model
 from strixops.config.settings import EngineSettings
@@ -43,6 +44,30 @@ _SECRET_TEXT = re.compile(
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _OUTCOMES = Literal["reported", "no_issue_found", "ruled_out", "not_applicable", "needs_follow_up"]
 _SEVERITIES = Literal["critical", "high", "medium", "low", "info"]
+_monotonic = time.monotonic
+
+
+class _WrapUpRequired(Exception):
+    """The assessment allowance ended; the hard deadline has not been extended."""
+
+
+class _TimeBudget:
+    def __init__(self, seconds: int) -> None:
+        self.seconds = seconds
+        self.started = _monotonic()
+        self.wrapup_seconds = min(60.0, seconds * 0.3)
+
+    @property
+    def elapsed(self) -> float:
+        return max(0.0, _monotonic() - self.started)
+
+    @property
+    def remaining(self) -> float:
+        return max(0.0, self.seconds - self.elapsed)
+
+    @property
+    def assessment_remaining(self) -> float:
+        return max(0.0, self.remaining - self.wrapup_seconds)
 
 
 def _flow_id(flow: dict) -> str:
@@ -59,16 +84,25 @@ class _Redactor:
         if isinstance(value, str) and 3 <= len(value) <= 16384 and "redacted" not in value.lower():
             self.secrets.add(value)
 
-    def learn(self, value: Any, key: str = "") -> None:
-        if _SENSITIVE.search(key):
+    def learn(self, value: Any, key: str = "", depth: int = 0) -> None:
+        if depth > 16:
+            return
+        sensitive = bool(_SENSITIVE.search(key))
+        if sensitive:
             self.add(value)
         if isinstance(value, dict):
+            if "body_base64" in value:
+                from strixops.traffic.body import decode_body
+
+                decoded = decode_body(value).get("body_text")
+                if isinstance(decoded, str):
+                    self.learn(decoded, "body_text", depth + 1)
             for name, item in value.items():
                 if name == "body_base64" and isinstance(item, str) and len(item) <= 2_000_000:
                     with contextlib.suppress(ValueError, UnicodeError):
-                        self.learn(base64.b64decode(item).decode("utf-8"), "body")
+                        self.learn(base64.b64decode(item).decode("utf-8"), "body", depth + 1)
                 else:
-                    self.learn(item, str(name))
+                    self.learn(item, key if sensitive else str(name), depth + 1)
         elif isinstance(value, list):
             for item in value:
                 if (
@@ -86,7 +120,7 @@ class _Redactor:
                             if "=" in pair:
                                 self.add(pair.split("=", 1)[1].strip())
                 else:
-                    self.learn(item, key)
+                    self.learn(item, key, depth + 1)
         elif isinstance(value, str):
             for match in _JWT.finditer(value):
                 self.add(match.group())
@@ -96,7 +130,7 @@ class _Redactor:
                 with contextlib.suppress(ValueError, RecursionError):
                     parsed = json.loads(value)
                     if isinstance(parsed, (dict, list)):
-                        self.learn(parsed)
+                        self.learn(parsed, depth=depth + 1)
                 for name, item in parse_qsl(value, keep_blank_values=True):
                     if _SENSITIVE.search(name):
                         self.add(item)
@@ -196,6 +230,7 @@ async def run_request_test(
     snapshot = copy.deepcopy(job.get("prompt_snapshot") or build_prompt_snapshot(task, _config(job)))
     validate_snapshot(snapshot, str(task.get("id") or ""))
     config = snapshot["config"]
+    budget = _TimeBudget(config["max_seconds"])
     originals = {_flow_id(flow): flow for flow in flows if _flow_id(flow)}
     if not originals or len(originals) != len(flows) or len(originals) > 50:
         raise ValueError("Select between 1 and 50 distinct persisted flows")
@@ -214,16 +249,58 @@ async def run_request_test(
     completed = False
     summary = ""
     stopped = False
+    wrapping_up = False
+    budget_limited = False
+    phase = "initialization"
+    model_rounds: list[dict] = []
     replay_lock = asyncio.Lock()
 
     def progress(kind: str, **data: Any) -> None:
-        emit({"type": kind, "job_id": str(job.get("id") or ""), **redactor.value(data)})
+        emit(
+            {
+                "type": kind,
+                "job_id": str(job.get("id") or ""),
+                "phase": phase,
+                "stage": "wrapup" if wrapping_up else "assessment",
+                "elapsed_seconds": round(budget.elapsed, 3),
+                "remaining_seconds": round(budget.remaining, 3),
+                **redactor.value(data),
+            }
+        )
+
+    def begin_wrapup(reason: str) -> None:
+        nonlocal wrapping_up, budget_limited, phase
+        if wrapping_up:
+            return
+        wrapping_up = True
+        budget_limited = True
+        phase = "wrapup"
+        progress("agent.wrapup_started", reason=reason, wrapup_seconds=budget.wrapup_seconds)
+
+    def budget_state() -> dict:
+        return {
+            "max_seconds": budget.seconds,
+            "remaining_seconds": round(budget.remaining, 3),
+            "assessment_seconds_remaining": round(budget.assessment_remaining, 3),
+            "wrapup_seconds": budget.wrapup_seconds,
+            "remaining_requests": max(0, config["max_requests"] - request_count),
+            "stage": "wrapup" if wrapping_up else "assessment",
+            "instruction": (
+                "Stop replaying. Record evidence-backed coverage and finish_request_test now; "
+                "unassessed requests must be needs_follow_up."
+                if wrapping_up or not budget.assessment_remaining
+                else "Reserve the wrap-up allowance for coverage and finish_request_test. "
+                "The request limit is a ceiling, not a target to exhaust."
+            ),
+        }
 
     def active() -> None:
         if stopped or completed or cancelled():
             raise asyncio.CancelledError()
 
     def output(value: Any) -> str:
+        if isinstance(value, dict):
+            value = {**value, "time_budget": budget_state()}
         return json.dumps(redactor.value(value), ensure_ascii=False)
 
     @function_tool(strict_mode=False, failure_error_function=None)
@@ -260,9 +337,17 @@ async def run_request_test(
         Headers objects merge fields; header lists replace the full list. Redirects are not followed.
         The older proxy tools' params/path/cookies aliases are unavailable. Never send masked secrets.
         """
-        nonlocal request_count
+        nonlocal request_count, phase
         async with replay_lock:
             active()
+            if wrapping_up or not budget.assessment_remaining:
+                begin_wrapup("assessment_allowance_exhausted")
+                return output(
+                    {
+                        "success": False,
+                        "error": "Time reserved for wrap-up; finish coverage without new replays",
+                    }
+                )
             if flow_id not in originals:
                 return output({"success": False, "error": "Replay requires an original selected flow ID"})
             if request_count >= config["max_requests"]:
@@ -278,14 +363,30 @@ async def run_request_test(
             if "[redacted]" in json.dumps(changes, ensure_ascii=False).lower():
                 return output({"success": False, "error": "Masked credential values cannot be replayed"})
             request_count += 1
+            phase = "replay"
+            replay_started = _monotonic()
             progress("agent.request_started", flow_id=flow_id, request_count=request_count)
             try:
-                result = await replay(flow_id, changes)
+                result = await asyncio.wait_for(replay(flow_id, changes), timeout=budget.assessment_remaining)
+            except TimeoutError:
+                begin_wrapup("replay_reached_wrapup_allowance")
+                progress(
+                    "agent.request_failed",
+                    flow_id=flow_id,
+                    error_type="TimeBudgetReached",
+                    duration_seconds=round(_monotonic() - replay_started, 3),
+                )
+                return output({"success": False, "error": "Replay stopped for time-budget wrap-up"})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 # Exceptions can embed raw requests, tokens and provider URLs.
-                progress("agent.request_failed", flow_id=flow_id, error_type=type(exc).__name__)
+                progress(
+                    "agent.request_failed",
+                    flow_id=flow_id,
+                    error_type=type(exc).__name__,
+                    duration_seconds=round(_monotonic() - replay_started, 3),
+                )
                 return output(
                     {
                         "success": False,
@@ -303,7 +404,12 @@ async def run_request_test(
             known[identity] = row
             inspected.add(identity)
             public = _model_flow(row, redactor)
-            progress("agent.request_completed", flow_id=identity, parent_flow_id=flow_id)
+            progress(
+                "agent.request_completed",
+                flow_id=identity,
+                parent_flow_id=flow_id,
+                duration_seconds=round(_monotonic() - replay_started, 3),
+            )
             return output(
                 {
                     "success": True,
@@ -341,6 +447,8 @@ async def run_request_test(
             )
             + "\n\n"
             + REQUEST_CONTRACT
+            + "\n\nLIVE TIME BUDGET\n"
+            + json.dumps(budget_state(), ensure_ascii=False)
         )
 
     @function_tool(strict_mode=False, failure_error_function=None)
@@ -416,9 +524,21 @@ async def run_request_test(
     @function_tool(strict_mode=False, failure_error_function=None)
     def finish_request_test(result_summary: str) -> str:
         """Finish this TestJob after recording coverage for every selected source flow."""
-        nonlocal completed, summary
+        nonlocal completed, summary, budget_limited
         active()
         missing = set(originals) - {row["flow_id"] for row in coverage.values()}
+        if not budget.assessment_remaining:
+            begin_wrapup("assessment_allowance_exhausted")
+        if wrapping_up and result_summary.strip():
+            for identity in missing:
+                coverage[(identity, "request assessment")] = {
+                    "flow_id": identity,
+                    "risk_area": "request assessment",
+                    "outcome": "needs_follow_up",
+                    "evidence": "Time was reserved for wrap-up before this selection was assessed.",
+                }
+            budget_limited = True
+            missing = set()
         if missing or not result_summary.strip():
             return output(
                 {
@@ -431,6 +551,88 @@ async def run_request_test(
         completed = True
         return output({"success": True, "request_test_completed": True, "summary": summary})
 
+    class TimedModel(Model):
+        """Apply this job's deadline around the provider call, including its retries."""
+
+        def __init__(self, wrapped: Model) -> None:
+            self.wrapped = wrapped
+            self.last_input: Any = None
+
+        async def get_response(self, *args: Any, **kwargs: Any):
+            nonlocal phase
+            active()
+            if not budget.assessment_remaining:
+                begin_wrapup("assessment_allowance_exhausted")
+            phase = "model"
+            allowance = budget.remaining if wrapping_up else budget.assessment_remaining
+            self.last_input = copy.deepcopy(kwargs.get("input", args[1] if len(args) > 1 else None))
+            number = len(model_rounds) + 1
+            started = _monotonic()
+            stage = "wrapup" if wrapping_up else "assessment"
+            outcome, error_type = "completed", ""
+            progress("agent.model_started", round=number, call_budget_seconds=round(allowance, 3))
+            try:
+                async with asyncio.timeout(allowance):
+                    return await self.wrapped.get_response(*args, **kwargs)
+            except TimeoutError:
+                if stage == "assessment" and not budget.assessment_remaining and budget.remaining:
+                    outcome, error_type = "wrapup_required", "TimeBudgetReached"
+                    begin_wrapup("model_reached_wrapup_allowance")
+                    raise _WrapUpRequired() from None
+                outcome, error_type = "time_budget_exceeded", "TimeoutError"
+                raise
+            except asyncio.CancelledError:
+                outcome, error_type = "cancelled", "CancelledError"
+                raise
+            except Exception as exc:
+                outcome, error_type = "failed", type(exc).__name__
+                raise
+            finally:
+                duration = round(_monotonic() - started, 3)
+                model_rounds.append(
+                    {"round": number, "stage": stage, "duration_seconds": duration, "outcome": outcome}
+                )
+                progress(
+                    "agent.model_completed" if outcome == "completed" else "agent.model_failed",
+                    round=number,
+                    duration_seconds=duration,
+                    outcome=outcome,
+                    error_type=error_type,
+                )
+
+        async def stream_response(self, *args: Any, **kwargs: Any):
+            raise RuntimeError("MCP request tests use bounded non-streamed model calls")
+            yield  # pragma: no cover
+
+        def get_retry_advice(self, request: Any):
+            return self.wrapped.get_retry_advice(request)
+
+        async def _cleanup_on_run_end(self, owner: object) -> None:
+            await self.wrapped._cleanup_on_run_end(owner)
+
+    class ToolTiming(RunHooks):
+        def __init__(self) -> None:
+            self.started: dict[str, float] = {}
+
+        async def on_tool_start(self, context: Any, agent: Any, tool: Any) -> None:
+            nonlocal phase
+            phase = "tool"
+            key = str(getattr(context, "tool_call_id", tool.name))
+            self.started[key] = _monotonic()
+            progress("agent.tool_started", tool=tool.name, round=len(model_rounds))
+
+        async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any) -> None:
+            nonlocal phase
+            phase = "tool"
+            key = str(getattr(context, "tool_call_id", tool.name))
+            started = self.started.pop(key, _monotonic())
+            progress(
+                "agent.tool_completed",
+                tool=tool.name,
+                round=len(model_rounds),
+                duration_seconds=round(_monotonic() - started, 3),
+            )
+
     tools = [
         list_selected_requests,
         inspect_request,
@@ -441,9 +643,16 @@ async def run_request_test(
         create_vulnerability_report,
         finish_request_test,
     ]
-    progress("agent.started", selected_count=len(originals), limitations=snapshot["limitations"])
+    progress(
+        "agent.started",
+        selected_count=len(originals),
+        limitations=snapshot["limitations"],
+        budget_seconds=budget.seconds,
+        wrapup_seconds=budget.wrapup_seconds,
+    )
     status = "failed"
     error = ""
+    reason = "incomplete_lifecycle"
     runner_task: asyncio.Task | None = None
     cancel_task: asyncio.Task | None = None
     try:
@@ -457,13 +666,38 @@ async def run_request_test(
         problems = settings.validate()
         if problems:
             raise ValueError("The model route is invalid")
+
         # An HTTP client belongs to this worker. Concurrent jobs cannot overwrite
         # keys or routing and it is closed after cancellation and on model failure.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(45), trust_env=False) as client:
-            model = make_platform_model(settings, http_client=client)
+        async def bound_transport(request: httpx.Request) -> None:
+            allowance = max(0.001, budget.remaining if wrapping_up else budget.assessment_remaining)
+            request.extensions["timeout"] = {
+                "connect": min(10.0, allowance),
+                "read": allowance,
+                "write": min(10.0, allowance),
+                "pool": min(5.0, allowance),
+            }
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(budget.seconds),
+            trust_env=False,
+            event_hooks={"request": [bound_transport]},
+        ) as client:
+            model = TimedModel(make_platform_model(settings, http_client=client))
+
+            def instructions(context: Any, current_agent: Any) -> str:
+                if not budget.assessment_remaining:
+                    begin_wrapup("assessment_allowance_exhausted")
+                # Completion needs the mode contract and recorded evidence, not another
+                # copy of the full skill corpus on a slow local model's final call.
+                prompt = REQUEST_CONTRACT if wrapping_up else snapshot["prompt"]
+                if wrapping_up and config["instruction"]:
+                    prompt += "\n\nOPERATOR INSTRUCTION\n" + config["instruction"]
+                return prompt + "\n\nLIVE TIME BUDGET\n" + json.dumps(budget_state(), ensure_ascii=False)
+
             agent = Agent(
                 name="MCP Request Tester",
-                instructions=snapshot["prompt"],
+                instructions=instructions,
                 model=model,
                 tools=tools,
                 tool_use_behavior=StopAtTools(stop_at_tool_names=["finish_request_test"]),
@@ -475,6 +709,7 @@ async def run_request_test(
                     "task_id": task.get("id"),
                     "job_id": job.get("id"),
                     "max_requests": config["max_requests"],
+                    "max_seconds": config["max_seconds"],
                     "scope_at_job_creation": snapshot.get("scope", {}),
                     "limitations": snapshot["limitations"],
                 }
@@ -482,42 +717,79 @@ async def run_request_test(
 
             async def execute() -> None:
                 inputs: Any = initial
-                for _ in range(3):
+                corrections = 0
+                wrapup_restarted = False
+                hooks = ToolTiming()
+                while True:
                     active()
-                    result = await Runner.run(
-                        agent,
-                        input=inputs,
-                        max_turns=min(80, config["max_requests"] * 3 + 16),
-                        run_config=RunConfig(
-                            tracing_disabled=True,
-                            trace_include_sensitive_data=False,
-                            model_settings=ModelSettings(parallel_tool_calls=False, max_tokens=2500),
-                        ),
-                    )
+                    try:
+                        result = await Runner.run(
+                            agent,
+                            input=inputs,
+                            max_turns=min(80, config["max_requests"] * 3 + 16),
+                            hooks=hooks,
+                            run_config=RunConfig(
+                                tracing_disabled=True,
+                                trace_include_sensitive_data=False,
+                                model_settings=ModelSettings(parallel_tool_calls=False, max_tokens=2500),
+                            ),
+                        )
+                    except _WrapUpRequired:
+                        if wrapup_restarted or not budget.remaining:
+                            raise TimeoutError() from None
+                        wrapup_restarted = True
+                        previous = model.last_input or initial
+                        inputs = (
+                            previous
+                            if isinstance(previous, list)
+                            else [{"role": "user", "content": previous}]
+                        )
+                        inputs = [
+                            *inputs,
+                            {
+                                "role": "user",
+                                "content": "The assessment allowance ended during the previous model call. "
+                                "Use only persisted evidence already returned above. Stop replaying and call "
+                                "finish_request_test(result_summary=...) now; missing coverage will be "
+                                "retained as needs_follow_up, never a clean result.\n"
+                                + output(budget_state()),
+                            },
+                        ]
+                        continue
                     if completed:
                         return
+                    if corrections >= 1 or not budget.remaining:
+                        return
+                    corrections += 1
                     inputs = result.to_input_list() + [
                         {
                             "role": "user",
-                            "content": "This TestJob is not complete. Record missing coverage, then call "
-                            "finish_request_test. Plain text or a rejected finish call does not complete it.",
+                            "content": "This TestJob is not complete. Correct the stated missing coverage "
+                            "or argument error and call finish_request_test(result_summary=...). Do not "
+                            "repeat an unchanged rejected call. Plain text is not completion.\n"
+                            + output(budget_state()),
                         }
                     ]
 
             runner_task = asyncio.create_task(execute())
             cancel_task = asyncio.create_task(_cancel_when_requested(cancelled))
             done, _ = await asyncio.wait(
-                {runner_task, cancel_task}, timeout=config["max_seconds"], return_when=asyncio.FIRST_COMPLETED
+                {runner_task, cancel_task}, timeout=budget.remaining, return_when=asyncio.FIRST_COMPLETED
             )
             if cancel_task in done or cancelled():
                 status, error = "cancelled", "Test cancelled"
+                reason = "cancelled"
             elif runner_task in done:
                 await runner_task
                 status = "completed" if completed else "failed"
                 if not completed:
                     error = "Agent did not complete the request-test lifecycle"
+                else:
+                    reason = "time_budget_limited" if budget_limited else "completed"
+                    phase = "completion"
             else:
                 error = "Time budget exceeded"
+                reason = "time_budget_exceeded"
             stopped = True
             for pending in (runner_task, cancel_task):
                 if not pending.done():
@@ -525,9 +797,16 @@ async def run_request_test(
             await asyncio.gather(runner_task, cancel_task, return_exceptions=True)
     except asyncio.CancelledError:
         status, error = "cancelled", "Test cancelled"
+        reason = "cancelled"
+    except TimeoutError:
+        if not budget.remaining:
+            error, reason = "Time budget exceeded", "time_budget_exceeded"
+        else:
+            error, reason = "Agent model operation timed out", "model_error"
     except Exception as exc:
         # Public diagnostics intentionally do not include untrusted exception text.
         error = f"Agent request test failed ({type(exc).__name__})"
+        reason = "model_error"
     finally:
         stopped = True
         pending_tasks = [item for item in (runner_task, cancel_task) if item is not None]
@@ -544,11 +823,35 @@ async def run_request_test(
                 "outcome": "needs_follow_up",
                 "evidence": error or "No assessment conclusion was recorded for this selection",
             }
-    progress("agent.finished", status=status, finding_count=len(findings), request_count=request_count)
+    partial = status != "completed" or budget_limited
+    diagnostics = {
+        "reason": reason,
+        "phase": phase,
+        "stage": "wrapup" if wrapping_up else "assessment",
+        "elapsed_seconds": round(budget.elapsed, 3),
+        "budget_seconds": budget.seconds,
+        "remaining_seconds": round(budget.remaining, 3),
+        "wrapup_seconds": budget.wrapup_seconds,
+        "request_count": request_count,
+        "model_rounds": len(model_rounds),
+        "partial_evidence": bool(inspected or findings or request_count),
+        "rounds": model_rounds,
+    }
+    progress(
+        "agent.finished",
+        status=status,
+        finding_count=len(findings),
+        request_count=request_count,
+        reason=reason,
+        partial=partial,
+    )
     return {
         "status": status,
         "summary": redactor.text(summary or error),
         "error": error,
+        "partial": partial,
+        "completion_reason": reason,
+        "diagnostics": diagnostics,
         "findings": redactor.value(findings),
         "coverage": redactor.value(list(coverage.values())),
         "request_count": request_count,

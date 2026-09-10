@@ -46,7 +46,7 @@ export function AgentTestForm({ task, flowIds, catalog, catalogError, onClose, o
   const [skills, setSkills] = React.useState<string[]>(defaults.skills || []);
   const [instruction, setInstruction] = React.useState(defaults.instruction || "");
   const [maxRequests, setMaxRequests] = React.useState(defaults.max_requests ?? 12);
-  const [maxSeconds, setMaxSeconds] = React.useState(defaults.max_seconds ?? 120);
+  const [maxSeconds, setMaxSeconds] = React.useState(defaults.max_seconds ?? 300);
   const [skillQuery, setSkillQuery] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -64,8 +64,9 @@ export function AgentTestForm({ task, flowIds, catalog, catalogError, onClose, o
       <div className={styles.selectedFlowIds}>{flowIds.map(id => <code key={id}>#{shortId(id)}</code>)}</div>
       <div className={styles.formColumns}>
         <label className={styles.field}>{c("模型設定檔", "Model profile")}<select className={styles.input} value={profile} onChange={e => setProfile(e.target.value)}><option value="">{c("使用目前啟用的設定檔", "Use the active profile")}</option>{(catalog?.profiles || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <div className={styles.formColumns}><label className={styles.field}>{c("最多請求數", "Request limit")}<input className={styles.input} type="number" min={1} max={100} value={maxRequests} onChange={e => setMaxRequests(Number(e.target.value))} required /></label><label className={styles.field}>{c("最長秒數", "Time limit (s)")}<input className={styles.input} type="number" min={5} max={900} value={maxSeconds} onChange={e => setMaxSeconds(Number(e.target.value))} required /></label></div>
+        <div className={styles.formColumns}><label className={styles.field}>{c("最多重送次數", "Replay limit")}<input className={styles.input} type="number" min={1} max={100} value={maxRequests} onChange={e => setMaxRequests(Number(e.target.value))} required /></label><label className={styles.field}>{c("整次測試秒數", "Total time limit (s)")}<input className={styles.input} type="number" min={5} max={900} value={maxSeconds} onChange={e => setMaxSeconds(Number(e.target.value))} required /></label></div>
       </div>
+      <p className={styles.fieldHint}>{c("所有選取請求共用這份時間與重送預算，包含模型回覆、重送和整理結果。新任務預設 300 秒；較慢模型可調整時間，最多 900 秒。", "All selected requests share this time and replay budget, including model responses, replays, and final results. New tasks default to 300 seconds; allow more time for slower models, up to 900 seconds.")}</p>
       <label className={styles.field}>{c("本次測試指示", "Instructions for this test")}<textarea className={styles.input} rows={4} value={instruction} onChange={e => setInstruction(e.target.value)} maxLength={8000} placeholder={c("描述要驗證的行為、角色與前置條件。", "Describe the behavior, roles, and prerequisites to verify.")} /></label>
       <div className={styles.field}><div className={styles.fieldHeading}><span>{c("共享技能", "Shared skills")}</span><span className={styles.muted}>{skills.length} {c("個已選取", "selected")}</span></div><input className={styles.input} aria-label={c("搜尋技能", "Search skills")} placeholder={c("搜尋技能名稱或描述", "Search skill names or descriptions")} value={skillQuery} onChange={e => setSkillQuery(e.target.value)} />
         <div className={styles.skillPicker}>{matchingSkills.map(skill => <label key={skill.id} className={styles.skillOption}><input type="checkbox" checked={skills.includes(skill.id)} disabled={!skills.includes(skill.id) && skills.length >= 8} onChange={e => setSkills(old => e.target.checked ? [...old, skill.id] : old.filter(id => id !== skill.id))} /><span><code>{skill.id}</code>{skill.description && <small>{skill.description}</small>}</span></label>)}{!matchingSkills.length && <p className={styles.muted}>{catalog ? c("沒有符合的技能。", "No matching skills.") : c("正在讀取技能目錄…", "Loading skills…")}</p>}</div>

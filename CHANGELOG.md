@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.3 — 2026-09-10
+
+- Resolve workspace-relative evidence references such as `output/file.json`
+  against the delivered attachment index, preserving exact nested paths and
+  continuing to report truly missing evidence.
+- Decode gzip, deflate, Brotli, and declared text charsets for MCP request and
+  response previews and Agent inspection. Preserve original transfer bytes,
+  bound decoded previews, distinguish decode errors from binary content, and
+  keep edited replay bodies consistent with their encoding headers.
+- Give MCP request tests a 300-second default, visible remaining time, reserved
+  wrap-up time, and model/tool/replay timing. Preserve configured budgets and
+  partial results, and explain where an exhausted budget was spent in the
+  workbench and newly generated reports.
+
+Upgrade and behavior: [v1.1.3 release notes](docs/v1.1.3.md).
+
 ## 1.1.2 — 2026-09-10
 
 - Initialize MCP browser access automatically when opened through a Console IP

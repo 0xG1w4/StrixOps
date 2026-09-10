@@ -123,6 +123,24 @@ def prepare_request(task: dict, flow: dict, modifications: dict | None = None) -
     if "body" in changes:
         if not isinstance(changes["body"], str):
             raise ValueError("body must be text; use body_base64 for binary requests")
+        explicit_encoding = "headers" in changes and any(
+            name.lower() == "content-encoding" and content.strip().lower() not in {"", "identity"}
+            for name, content in _headers(changes["headers"])
+        )
+        if explicit_encoding:
+            raise ValueError(
+                "Text body edits cannot declare Content-Encoding; use encoded body_base64 instead"
+            )
+        # The editor provides decoded Unicode text. Its new UTF-8 wire bytes
+        # must not retain the captured compression or a different charset.
+        headers = [pair for pair in headers if pair[0].lower() != "content-encoding"]
+        normalized = []
+        for name, content in headers:
+            if name.lower() == "content-type":
+                content = re.sub(r"(?i);\s*charset\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^;\s]*)", "", content)
+                content += "; charset=utf-8"
+            normalized.append([name, content])
+        headers = normalized
         body = changes["body"].encode("utf-8")
     else:
         encoded = changes.get("body_base64", original.get("body_base64", ""))

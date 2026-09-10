@@ -874,7 +874,8 @@ def create_finding(
         source: Where/how it was obtained (tool, technique, path).
         severity: critical/high/medium/low/info, based on demonstrated impact.
         metadata: Structured context, including evidence_files
-            (paths relative to /workspace/output/).
+            (paths relative to /workspace/output/, or absolute /workspace/output/... paths).
+            Workspace-relative output/... paths are also accepted when no exact archive path exists.
     """
     run_state: RunState = ctx.context.run_state  # type: ignore[assignment]
     finding_type = finding_type.strip().lower()
