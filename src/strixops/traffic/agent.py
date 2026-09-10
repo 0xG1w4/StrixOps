@@ -22,6 +22,8 @@ from agents import Agent, Model, ModelSettings, RunConfig, RunHooks, Runner, Sto
 
 from strixops.config.provider import make_platform_model
 from strixops.config.settings import EngineSettings
+from strixops.engine.stream_cleanup import consume_stream
+from strixops.traffic.context import prepare_initial_context
 from strixops.traffic.prompts import (
     REQUEST_CONTRACT,
     build_prompt_snapshot,
@@ -30,6 +32,7 @@ from strixops.traffic.prompts import (
     resolve_profile,
     validate_snapshot,
 )
+from strixops.traffic.streaming import StreamMetrics, attach_stream_observer
 
 __all__ = ["build_prompt_snapshot", "compatible_skills", "run_request_test"]
 
@@ -49,6 +52,10 @@ _monotonic = time.monotonic
 
 class _WrapUpRequired(Exception):
     """The assessment allowance ended; the hard deadline has not been extended."""
+
+
+class _IncompleteToolResponse(Exception):
+    """A provider ended a tool-producing response without a complete generation."""
 
 
 class _TimeBudget:
@@ -142,14 +149,14 @@ class _Redactor:
                         if _SENSITIVE.search(name):
                             self.add(item)
 
-    def text(self, value: Any, limit: int = 6000) -> str:
+    def text(self, value: Any, limit: int | None = 6000) -> str:
         text = str(value or "")
         for secret in sorted(self.secrets, key=len, reverse=True):
             text = text.replace(secret, "[redacted]")
         text = re.sub(r"(?i)\bBearer\s+[^\s,;\"']+", "Bearer [redacted]", text)
         text = _JWT.sub("[redacted]", text)
         text = _SECRET_TEXT.sub(lambda m: m.group(1) + "[redacted]", text)
-        return text if len(text) <= limit else text[:limit] + "\n[truncated]"
+        return text if limit is None or len(text) <= limit else text[:limit] + "\n[truncated]"
 
     def value(self, value: Any, key: str = "", depth: int = 0) -> Any:
         if depth > 8:
@@ -256,6 +263,22 @@ async def run_request_test(
     replay_lock = asyncio.Lock()
 
     def progress(kind: str, **data: Any) -> None:
+        safe = redactor.value(data)
+        # These provider counters contain no token strings. Generic secret-key
+        # redaction intentionally masks other fields whose names include token.
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "reasoning_tokens",
+        ):
+            if (
+                kind in {"agent.model_started", "agent.model_completed", "agent.model_failed"}
+                and key in data
+                and (data[key] is None or type(data[key]) is int and data[key] >= 0)
+            ):
+                safe[key] = data[key]
         emit(
             {
                 "type": kind,
@@ -264,7 +287,7 @@ async def run_request_test(
                 "stage": "wrapup" if wrapping_up else "assessment",
                 "elapsed_seconds": round(budget.elapsed, 3),
                 "remaining_seconds": round(budget.remaining, 3),
-                **redactor.value(data),
+                **safe,
             }
         )
 
@@ -425,7 +448,7 @@ async def run_request_test(
         return output(
             {
                 "skills": [
-                    {"id": name, "description": row["description"]}
+                    {"id": name, "description": row["description"], "loaded": name in loaded}
                     for name, row in snapshot["skills"].items()
                 ],
                 "limitations": snapshot["limitations"],
@@ -438,17 +461,32 @@ async def run_request_test(
         active()
         if not 1 <= len(skills) <= 3 or any(name not in snapshot["skills"] for name in skills):
             return output({"success": False, "error": "Select 1–3 exact IDs from list_skills"})
-        loaded.update(skills)
-        progress("agent.skills_loaded", skills=skills)
-        return (
-            "\n\n".join(
-                f"===== SKILL: {name} =====\n{snapshot['skills'][name]['content']}"
-                for name in dict.fromkeys(skills)
-            )
-            + "\n\n"
-            + REQUEST_CONTRACT
-            + "\n\nLIVE TIME BUDGET\n"
-            + json.dumps(budget_state(), ensure_ascii=False)
+        requested = list(dict.fromkeys(skills))
+        fresh = [name for name in requested if name not in loaded]
+        already_loaded = [name for name in requested if name in loaded]
+        loaded.update(fresh)
+        progress("agent.skills_loaded", skills=fresh, already_loaded=already_loaded)
+        # Frozen skill documents are intentionally delivered in full, once. The
+        # ordinary evidence-output cap would silently cut their final sections.
+        return json.dumps(
+            {
+                "success": True,
+                "loaded_skills": sorted(loaded),
+                "already_loaded": already_loaded,
+                "skills": [
+                    {
+                        "id": name,
+                        "content": redactor.text(
+                            snapshot["skills"][name]["content"],
+                            None,
+                        ),
+                    }
+                    for name in fresh
+                ],
+                "instruction": "Use the skill content already provided; do not reload it for ceremony.",
+                "time_budget": budget_state(),
+            },
+            ensure_ascii=False,
         )
 
     @function_tool(strict_mode=False, failure_error_function=None)
@@ -557,8 +595,14 @@ async def run_request_test(
         def __init__(self, wrapped: Model) -> None:
             self.wrapped = wrapped
             self.last_input: Any = None
+            self.current_metrics: StreamMetrics | None = None
+            self.streams: list[Any] = []
+            self.raw_chat = attach_stream_observer(wrapped, lambda: self.current_metrics, self.streams)
 
         async def get_response(self, *args: Any, **kwargs: Any):
+            raise RuntimeError("MCP request tests require the streamed model path")
+
+        async def stream_response(self, *args: Any, **kwargs: Any):
             nonlocal phase
             active()
             if not budget.assessment_remaining:
@@ -566,14 +610,58 @@ async def run_request_test(
             phase = "model"
             allowance = budget.remaining if wrapping_up else budget.assessment_remaining
             self.last_input = copy.deepcopy(kwargs.get("input", args[1] if len(args) > 1 else None))
+            metrics = StreamMetrics(
+                self.last_input,
+                kwargs.get("system_instructions", args[0] if args else None),
+                {tool.name for tool in tools},
+                raw_chat=self.raw_chat,
+            )
+            self.current_metrics = metrics
             number = len(model_rounds) + 1
             started = _monotonic()
             stage = "wrapup" if wrapping_up else "assessment"
+            route_metrics = {
+                "api_mode": snapshot["model_route"]["llm_api_mode"],
+                "reasoning_effort": snapshot["model_route"]["llm_reasoning_effort"],
+                "output_limit": None,
+            }
             outcome, error_type = "completed", ""
-            progress("agent.model_started", round=number, call_budget_seconds=round(allowance, 3))
+            progress(
+                "agent.model_started",
+                round=number,
+                call_budget_seconds=round(allowance, 3),
+                input_chars=metrics.data["input_chars"],
+                system_chars=metrics.data["system_chars"],
+                streaming=True,
+                **route_metrics,
+            )
+            iterator = self.wrapped.stream_response(*args, **kwargs)
             try:
                 async with asyncio.timeout(allowance):
-                    return await self.wrapped.get_response(*args, **kwargs)
+                    async for event in iterator:
+                        activity = metrics.observe(event, _monotonic() - started)
+                        if activity is not None:
+                            progress(
+                                "agent.model_streaming",
+                                round=number,
+                                activity=activity,
+                                first_event_seconds=metrics.data["first_event_seconds"],
+                                first_output_seconds=metrics.data["first_output_seconds"],
+                            )
+                        if (
+                            getattr(event, "type", None) in {"response.completed", "response.incomplete"}
+                            and metrics.data["tools"]
+                            and (
+                                metrics.data["finish_reason"]
+                                in {"length", "incomplete", "content_filter", "failed", "cancelled"}
+                                or self.raw_chat
+                                and metrics.data["finish_reason"] is None
+                            )
+                        ):
+                            # Even syntactically valid tool arguments from a truncated
+                            # generation must not execute or mark a TestJob complete.
+                            raise _IncompleteToolResponse()
+                        yield event
             except TimeoutError:
                 if stage == "assessment" and not budget.assessment_remaining and budget.remaining:
                     outcome, error_type = "wrapup_required", "TimeBudgetReached"
@@ -588,21 +676,46 @@ async def run_request_test(
                 outcome, error_type = "failed", type(exc).__name__
                 raise
             finally:
-                duration = round(_monotonic() - started, 3)
-                model_rounds.append(
-                    {"round": number, "stage": stage, "duration_seconds": duration, "outcome": outcome}
-                )
-                progress(
-                    "agent.model_completed" if outcome == "completed" else "agent.model_failed",
-                    round=number,
-                    duration_seconds=duration,
-                    outcome=outcome,
-                    error_type=error_type,
-                )
-
-        async def stream_response(self, *args: Any, **kwargs: Any):
-            raise RuntimeError("MCP request tests use bounded non-streamed model calls")
-            yield  # pragma: no cover
+                cleanup_error: BaseException | None = None
+                originating_outcome = outcome
+                try:
+                    # Both SDK providers can schedule underlying stream close in the
+                    # background on cancellation. Join every job-local stream, even
+                    # when another close fails, before the HTTP client is closed.
+                    closers = [getattr(iterator, "aclose", None)] + [stream.aclose for stream in self.streams]
+                    for close in closers:
+                        if close is None:
+                            continue
+                        try:
+                            await close()
+                        except (Exception, asyncio.CancelledError) as exc:
+                            if cleanup_error is None:
+                                cleanup_error = exc
+                finally:
+                    self.streams.clear()
+                    self.current_metrics = None
+                    if cleanup_error is not None and originating_outcome == "completed":
+                        outcome = (
+                            "cancelled" if isinstance(cleanup_error, asyncio.CancelledError) else "failed"
+                        )
+                        error_type = type(cleanup_error).__name__
+                    record = {
+                        "round": number,
+                        "stage": stage,
+                        "duration_seconds": round(_monotonic() - started, 3),
+                        "outcome": outcome,
+                        "error_type": error_type,
+                        **metrics.data,
+                        **route_metrics,
+                    }
+                    if cleanup_error is not None:
+                        record["cleanup_error_type"] = type(cleanup_error).__name__
+                    model_rounds.append(record)
+                    progress(
+                        "agent.model_completed" if outcome == "completed" else "agent.model_failed", **record
+                    )
+                if cleanup_error is not None and originating_outcome == "completed":
+                    raise cleanup_error
 
         def get_retry_advice(self, request: Any):
             return self.wrapped.get_retry_advice(request)
@@ -702,18 +815,30 @@ async def run_request_test(
                 tools=tools,
                 tool_use_behavior=StopAtTools(stop_at_tool_names=["finish_request_test"]),
             )
-            initial = output(
+            initial_context = prepare_initial_context(flows, lambda row: _model_flow(row, redactor))
+            inspected.update(initial_context["preinspected_flow_ids"])
+            initial_data = redactor.value(
                 {
                     "assignment": "Assess only the selected requests using the HTTP tools.",
                     "selected_flow_ids": list(originals),
+                    "skill_catalog": [
+                        {"id": name, "description": row["description"], "loaded": name in loaded}
+                        for name, row in snapshot["skills"].items()
+                    ],
+                    "loaded_skills": sorted(loaded),
                     "task_id": task.get("id"),
                     "job_id": job.get("id"),
                     "max_requests": config["max_requests"],
                     "max_seconds": config["max_seconds"],
                     "scope_at_job_creation": snapshot.get("scope", {}),
                     "limitations": snapshot["limitations"],
+                    "time_budget": budget_state(),
                 }
             )
+            # This helper already projected/redacted and budgeted the evidence.
+            # A second generic truncation pass could invalidate preinspected IDs.
+            initial_data["prepared_context"] = initial_context
+            initial = json.dumps(initial_data, ensure_ascii=False)
 
             async def execute() -> None:
                 inputs: Any = initial
@@ -723,7 +848,7 @@ async def run_request_test(
                 while True:
                     active()
                     try:
-                        result = await Runner.run(
+                        result = Runner.run_streamed(
                             agent,
                             input=inputs,
                             max_turns=min(80, config["max_requests"] * 3 + 16),
@@ -731,9 +856,14 @@ async def run_request_test(
                             run_config=RunConfig(
                                 tracing_disabled=True,
                                 trace_include_sensitive_data=False,
-                                model_settings=ModelSettings(parallel_tool_calls=False, max_tokens=2500),
+                                model_settings=ModelSettings(parallel_tool_calls=False, include_usage=True),
                             ),
                         )
+                        # Consume safely without copying raw deltas into persisted events.
+                        # The shared cleanup joins SDK producers on every cancellation path.
+                        await consume_stream(result, lambda event: None)
+                        if getattr(result, "run_loop_exception", None) is not None:
+                            raise result.run_loop_exception
                     except _WrapUpRequired:
                         if wrapup_restarted or not budget.remaining:
                             raise TimeoutError() from None
@@ -803,6 +933,9 @@ async def run_request_test(
             error, reason = "Time budget exceeded", "time_budget_exceeded"
         else:
             error, reason = "Agent model operation timed out", "model_error"
+    except _IncompleteToolResponse:
+        error = "Model stream ended without a complete tool response"
+        reason = "model_error"
     except Exception as exc:
         # Public diagnostics intentionally do not include untrusted exception text.
         error = f"Agent request test failed ({type(exc).__name__})"
@@ -836,6 +969,10 @@ async def run_request_test(
         "model_rounds": len(model_rounds),
         "partial_evidence": bool(inspected or findings or request_count),
         "rounds": model_rounds,
+        "streaming": True,
+        "api_mode": snapshot["model_route"]["llm_api_mode"],
+        "reasoning_effort": snapshot["model_route"]["llm_reasoning_effort"],
+        "output_limit": None,
     }
     progress(
         "agent.finished",

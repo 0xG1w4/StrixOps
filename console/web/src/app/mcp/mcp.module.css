@@ -118,6 +118,26 @@
 .credentialCopyStatus { display: block; min-height: 18px; margin-top: 7px; color: var(--mcp-accent); font-size: 11px; }
 .decodeNote { padding: 9px 16px; color: var(--mcp-muted); font-size: 11px; line-height: 1.7; border-bottom: 1px solid var(--mcp-soft-line); overflow-wrap: anywhere; }
 .testDiagnostics { padding: 12px 16px; margin: 14px 0; border: 1px solid var(--mcp-soft-line); border-radius: 4px; background: var(--mcp-raised); }
+.modelActivity { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: var(--mcp-accent); }
+.activityDot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.roundSnapshot { margin: 13px 0; padding-top: 12px; border-top: 1px solid var(--mcp-soft-line); }
+.roundHeading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; }
+.roundHeading strong { font-weight: 500; color: var(--mcp-text); }
+.roundHeading > span { color: var(--mcp-muted); }
+.modelMetrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin: 14px 0; }
+.modelMetrics > div { min-width: 0; }
+.modelMetrics dt { font-size: 10px; line-height: 1.5; color: var(--mcp-muted); margin-bottom: 5px; overflow-wrap: anywhere; }
+.modelMetrics dd { margin: 0; font: 13px var(--font-mono); color: var(--mcp-text); overflow-wrap: anywhere; }
+.roundDetails { border-top: 1px solid var(--mcp-soft-line); margin-top: 12px; }
+.roundDetails > summary { display: flex; justify-content: space-between; gap: 8px; padding: 11px 0 2px; color: var(--mcp-accent); font-size: 11px; cursor: pointer; }
+.roundRows { max-height: 400px; overflow-y: auto; }
+.roundRow { padding: 13px 0; border-bottom: 1px solid var(--mcp-soft-line); }
+.roundMeasures { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 7px; color: var(--mcp-muted); font-size: 10px; }
+.roundTools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.roundTools code, .eventLog code { overflow-wrap: anywhere; font: 10px/1.6 var(--font-mono); color: var(--mcp-accent); }
+.testDiagnostics .metricNote { margin-top: 12px; font-size: 10px; color: var(--mcp-muted); }
+.testDiagnostics .roundNotice { color: var(--mcp-gold); font-size: 11px; }
+.eventLog small { display: block; margin-top: 4px; font-size: 10px; color: var(--mcp-muted); }
 .testDiagnostics p { margin: 8px 0 0; color: var(--mcp-muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
 .caStandalone { padding: 20px; background: var(--mcp-surface); border: 1px solid var(--mcp-line); border-radius: 5px; margin-bottom: 20px; }
 .caPanel h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: 13px; font-weight: 500; }

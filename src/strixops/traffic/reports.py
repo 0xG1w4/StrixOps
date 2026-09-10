@@ -22,6 +22,16 @@ _REASONS = {
     "cancelled": "測試已取消",
     "partial": "僅完成部分測試",
 }
+_TOOLS = {
+    "list_selected_requests",
+    "inspect_request",
+    "replay_request",
+    "list_skills",
+    "load_skill",
+    "record_coverage",
+    "create_vulnerability_report",
+    "finish_request_test",
+}
 
 
 def _completion_reason(job: dict) -> str:
@@ -48,11 +58,102 @@ def _number(value) -> float | None:
     return float(value)
 
 
+def _round_metric(value, suffix: str = "") -> str:
+    number = _number(value)
+    return f"{number:g}{suffix}" if number is not None else "—"
+
+
+def _token_metric(value) -> str:
+    number = _number(value)
+    return f"{number:g}" if number is not None and number.is_integer() else "—"
+
+
+def _round_lines(rounds: list) -> list[str]:
+    lines = []
+    reasons = {
+        "completed": "回覆完成",
+        "stop": "回覆完成",
+        "tool_calls": "呼叫工具",
+        "length": "輸出達上限（已截斷）",
+        "content_filter": "內容受限",
+        "incomplete": "回覆未完成",
+        "failed": "回覆失敗",
+        "cancelled": "已中止",
+    }
+    for row in rounds[:200]:
+        if not isinstance(row, dict):
+            continue
+        number = _number(row.get("round"))
+        if (
+            number is None
+            or not number.is_integer()
+            or not any(
+                name in row
+                for name in ("first_event_seconds", "first_output_seconds", "input_tokens", "finish_reason")
+            )
+        ):
+            continue
+        reason = (
+            "輸出達上限（已截斷）"
+            if row.get("truncated") is True
+            else reasons.get(str(row.get("finish_reason")), "—")
+        )
+        lines += [
+            "",
+            f"- **模型回合 {number:g}**：耗時 {_round_metric(row.get('duration_seconds'), ' 秒')}；"
+            f"首個串流事件 {_round_metric(row.get('first_event_seconds'), ' 秒')}；"
+            f"首個模型輸出 {_round_metric(row.get('first_output_seconds'), ' 秒')}；結束：{reason}。",
+            "  Token：輸入 "
+            + _token_metric(row.get("input_tokens"))
+            + "／輸出 "
+            + _token_metric(row.get("output_tokens"))
+            + "／快取輸入 "
+            + _token_metric(row.get("cached_input_tokens"))
+            + "／推理 "
+            + _token_metric(row.get("reasoning_tokens"))
+            + "。",
+        ]
+        if "system_chars" in row or "input_chars" in row:
+            lines.append(
+                "  系統／對話字元（不含工具定義）："
+                + _token_metric(row.get("system_chars"))
+                + "／"
+                + _token_metric(row.get("input_chars"))
+                + "。"
+            )
+        tools = row.get("tools")
+        if isinstance(tools, list):
+            known = list(dict.fromkeys(tool for tool in tools if isinstance(tool, str) and tool in _TOOLS))
+            if known:
+                lines.append("  工具：" + "、".join(f"`{tool}`" for tool in known) + "。")
+    if lines:
+        lines += [
+            "",
+            "各回合時間由模型呼叫開始計算；首個模型輸出包含推理、文字或工具參數的串流活動。"
+            "— 表示尚未收到、供應端未提供或舊紀錄未保存，並非 0。",
+        ]
+    return lines
+
+
 def _diagnostic_lines(result: dict) -> list[str]:
     diagnostics = result.get("diagnostics")
     if not isinstance(diagnostics, dict):
         return []
     lines, timing, activity = [], [], []
+    settings = []
+    if diagnostics.get("api_mode") in ("auto", "chat_completions", "responses"):
+        settings.append("API " + diagnostics["api_mode"])
+    effort = diagnostics.get("reasoning_effort")
+    if effort in ("default", "none", "minimal", "low", "medium", "high", "xhigh", "max"):
+        settings.append("推理強度 " + ("模型服務預設" if effort == "default" else effort))
+    if "output_limit" in diagnostics:
+        limit = diagnostics["output_limit"]
+        if limit is None:
+            settings.append("輸出上限 模型服務預設")
+        elif _number(limit) is not None:
+            settings.append("輸出上限 " + _token_metric(limit))
+    if settings:
+        lines.append("- 模型設定：" + "；".join(settings))
     for field, label in (("elapsed_seconds", "已用"), ("budget_seconds", "上限")):
         value = _number(diagnostics.get(field))
         if value is not None:
@@ -85,6 +186,8 @@ def _diagnostic_lines(result: dict) -> list[str]:
     if phase:
         stage = "收尾／" if diagnostics.get("stage") == "wrapup" and phase != "收尾" else ""
         lines.append(f"- 結束階段：{stage}{phase}")
+    if isinstance(rounds, list):
+        lines += _round_lines(rounds)
     return lines
 
 

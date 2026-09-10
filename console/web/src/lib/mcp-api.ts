@@ -132,10 +132,36 @@ export interface McpTestDiagnostics {
   request_count?: number;
   model_rounds?: number;
   partial_evidence?: boolean;
-  rounds?: Array<{ round: number; stage: string; duration_seconds: number; outcome: string }>;
+  streaming?: boolean;
+  api_mode?: string;
+  reasoning_effort?: string;
+  output_limit?: number | null;
+  rounds?: McpModelRound[];
 }
 
-export interface McpTestEvent {
+export interface McpModelRound {
+  round: number;
+  stage?: string;
+  duration_seconds?: number;
+  outcome?: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  input_chars?: number;
+  system_chars?: number;
+  first_event_seconds?: number | null;
+  first_output_seconds?: number | null;
+  finish_reason?: string | null;
+  tools?: string[];
+  truncated?: boolean;
+  api_mode?: string;
+  reasoning_effort?: string;
+  output_limit?: number | null;
+}
+
+export interface McpTestEvent extends Partial<McpModelRound> {
   created_at?: string;
   timestamp?: string;
   message?: string;
@@ -148,6 +174,7 @@ export interface McpTestEvent {
   request_count?: number;
   round?: number;
   tool?: string;
+  activity?: "streaming" | "tool_call" | "text" | "reasoning";
   [key: string]: unknown;
 }
 

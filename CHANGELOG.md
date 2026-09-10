@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.4 — 2026-09-11
+
+- Supply bounded selected-request evidence and a skill catalog in the first MCP
+  model turn, avoiding unnecessary request/skill lookup rounds.
+- Replace automatic full baseline skill injection with compact HTTP evidence
+  guidance, retain explicit skill choices, and avoid repeated skill loading.
+- Use streaming MCP Agent runs with safe first-event/output timing, tool names,
+  available token usage and finish diagnostics in the workbench and new reports.
+- Remove the additional MCP-only 2,500-token output cap while preserving the
+  configured model route, total time budget, cancellation and partial results.
+
+Upgrade and behavior: [v1.1.4 release notes](docs/v1.1.4.md).
+
 ## 1.1.3 — 2026-09-10
 
 - Resolve workspace-relative evidence references such as `output/file.json`
