@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import ipaddress
 import json
 import os
+import re
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
@@ -13,8 +15,48 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from strixops.traffic.access_credentials import AccessCredentialsError, ensure_token, read_token
 from strixops.traffic.security import public_flow
 from strixops.traffic.service import get_service
+from strixops.traffic.store import storage_root
+
+
+def _trusted_origins() -> set[str]:
+    return {
+        item.strip().rstrip("/")
+        for item in os.environ.get("STRIXOPS_MCP_TRUSTED_ORIGINS", "").split(",")
+        if item.strip()
+    }
+
+
+def bootstrap_host_allowed(scope: dict) -> bool:
+    """Only literal Console addresses or configured domains may issue browser credentials."""
+    headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    host = headers.get("host", "")
+    scheme = scope.get("scheme", "http")
+    if scheme not in {"http", "https"} or not re.fullmatch(
+        r"(?:\[[A-Fa-f0-9:.]+\]|[A-Za-z0-9._-]+)(?::[0-9]{1,5})?", host
+    ):
+        return False
+    try:
+        parsed = urlsplit(f"{scheme}://{host}")
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.port == 0
+        ):
+            return False
+        # Reading port also rejects malformed/out-of-range ports and unbracketed IPv6.
+        if parsed.hostname == "localhost" or f"{scheme}://{host}" in _trusted_origins():
+            return True
+        address = ipaddress.ip_address(parsed.hostname)
+        return "%" not in str(address)
+    except ValueError:
+        return False
 
 
 def origin_error(scope: dict) -> str:
@@ -26,13 +68,8 @@ def origin_error(scope: dict) -> str:
     peer = (scope.get("client") or ("", 0))[0]
     local_peer = peer in {"127.0.0.1", "::1", "localhost"}
     expected = f"{scheme}://{host}"
-    trusted = {
-        item.strip().rstrip("/")
-        for item in os.environ.get("STRIXOPS_MCP_TRUSTED_ORIGINS", "").split(",")
-        if item.strip()
-    }
     # Explicitly allow only same-origin browser requests, including behind a trusted access layer.
-    trusted_local_origin = local_peer and origin.rstrip("/") in trusted
+    trusted_local_origin = local_peer and origin.rstrip("/") in _trusted_origins()
     if origin and origin.rstrip("/") != expected and not trusted_local_origin:
         return "Cross-origin access to MCP tasks is not permitted"
     if headers.get("sec-fetch-site") == "cross-site":
@@ -48,11 +85,6 @@ def access_error(scope: dict) -> str:
     peer = (scope.get("client") or ("", 0))[0]
     local_peer = peer in {"127.0.0.1", "::1", "localhost"}
     expected = f"{scope.get('scheme', 'http')}://{host}"
-    trusted = {
-        item.strip().rstrip("/")
-        for item in os.environ.get("STRIXOPS_MCP_TRUSTED_ORIGINS", "").split(",")
-        if item.strip()
-    }
     configured = os.environ.get("STRIXOPS_MCP_TOKEN", "")
     supplied = headers.get("x-mcp-token", "")
     if headers.get("authorization", "").startswith("Bearer "):
@@ -68,11 +100,16 @@ def access_error(scope: dict) -> str:
         return ""
     if local_host and local_peer:
         return ""
-    if local_peer and expected in trusted:
+    if local_peer and expected in _trusted_origins():
         return ""
-    return (
-        "MCP tasks require localhost/SSH tunneling, a configured MCP token, or a trusted authenticated origin"
-    )
+    if not configured and supplied:
+        try:
+            automatic = read_token(storage_root())
+        except AccessCredentialsError as exc:
+            return str(exc)
+        if automatic and hmac.compare_digest(supplied.encode(), automatic.encode()):
+            return ""
+    return "Open the MCP page to initialize browser access, or supply the configured MCP access token"
 
 
 def ensure_access(request: Request):
@@ -96,24 +133,83 @@ def access_status(request: Request):
                 "token_configured": False,
                 "reason": "origin_rejected",
                 "message": origin_problem,
+                "mode": "manual" if os.environ.get("STRIXOPS_MCP_TOKEN", "") else "automatic",
+                "bootstrap_available": False,
             },
             status_code=403,
             headers=headers,
         )
     allowed = not access_error(request.scope)
     configured = bool(os.environ.get("STRIXOPS_MCP_TOKEN", ""))
-    reason = "" if allowed else "token_required" if configured else "token_not_configured"
+    available = not configured and bootstrap_host_allowed(request.scope)
+    reason = (
+        ""
+        if allowed
+        else "token_required"
+        if configured
+        else "bootstrap_required"
+        if available
+        else "bootstrap_unavailable"
+    )
     message = ""
     if not allowed:
         message = (
             "Enter the MCP access token configured on this server"
             if configured
-            else "Configure STRIXOPS_MCP_TOKEN on the server and restart Console to enable remote MCP access"
+            else "Initialize MCP access for this browser"
+            if available
+            else "Open Console using its IP address or configure this Console origin as trusted"
         )
     return JSONResponse(
-        {"allowed": allowed, "token_configured": configured, "reason": reason, "message": message},
+        {
+            "allowed": allowed,
+            "token_configured": configured,
+            "reason": reason,
+            "message": message,
+            "mode": "manual" if configured else "automatic",
+            "bootstrap_available": available,
+        },
         headers=headers,
     )
+
+
+@access_router.post("/access/bootstrap")
+def bootstrap_access(request: Request):
+    """Initialize same-origin browser access under the existing Console deployment boundary."""
+    headers = {"Cache-Control": "no-store", "Vary": "Origin, X-StrixOps-MCP-Bootstrap"}
+
+    def reject(reason: str, message: str, status: int = 403):
+        return JSONResponse(
+            {"allowed": False, "reason": reason, "message": message}, status_code=status, headers=headers
+        )
+
+    if problem := origin_error(request.scope):
+        return reject("origin_rejected", problem)
+    expected = f"{request.scope.get('scheme', 'http')}://{request.headers.get('host', '')}"
+    origin = request.headers.get("origin", "")
+    peer = (request.scope.get("client") or ("", 0))[0]
+    # A configured development/access proxy may rewrite Host while preserving
+    # the browser Origin. Retain that explicit trust only for a local upstream.
+    trusted_local_origin = peer in {"127.0.0.1", "::1", "localhost"} and origin.rstrip(
+        "/"
+    ) in _trusted_origins()
+    if (origin != expected and not trusted_local_origin) or request.headers.get(
+        "x-strixops-mcp-bootstrap"
+    ) != "1":
+        return reject("origin_rejected", "MCP initialization requires a same-origin browser request")
+    if os.environ.get("STRIXOPS_MCP_TOKEN", ""):
+        return reject(
+            "manual_configuration", "This server requires its explicitly configured MCP access token"
+        )
+    if not bootstrap_host_allowed(request.scope):
+        return reject(
+            "bootstrap_unavailable", "Open Console using its IP address or configure its trusted origin"
+        )
+    try:
+        token = ensure_token(storage_root())
+    except AccessCredentialsError as exc:
+        return reject("initialization_failed", str(exc), status=503)
+    return JSONResponse({"allowed": True, "token": token, "mode": "automatic"}, headers=headers)
 
 
 def invoke(function: Callable, *args, **kwargs):
@@ -210,9 +306,17 @@ def delete_task(task_id: str):
 
 
 @router.post("/tasks/{task_id}/start")
-def start_capture(task_id: str):
-    task = invoke(get_service().start, task_id)
+def start_capture(task_id: str, request: Request):
+    task = invoke(get_service().start, task_id, connection_host=request.url.hostname)
     return {"task": task, "session": task.get("session")}
+
+
+@router.get("/tasks/{task_id}/connection")
+def capture_connection(task_id: str):
+    return JSONResponse(
+        invoke(get_service().connection, task_id),
+        headers={"Cache-Control": "no-store", "Vary": "Origin, Authorization, X-MCP-Token"},
+    )
 
 
 @router.post("/tasks/{task_id}/stop")

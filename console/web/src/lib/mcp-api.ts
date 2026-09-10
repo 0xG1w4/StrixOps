@@ -19,6 +19,8 @@ export interface McpSession {
   proxy_host?: string;
   proxy_bind_host?: string;
   proxy_auth_required?: boolean;
+  proxy_auth_source?: "generated" | "environment" | "none";
+  credentials_available?: boolean;
   proxy_port?: number;
   ca_ready?: boolean;
   ca_shared?: boolean;
@@ -158,8 +160,24 @@ export interface McpCaInfo {
 export interface McpAccess {
   allowed: boolean;
   token_configured: boolean;
-  reason: "" | "token_required" | "token_not_configured" | "origin_rejected";
+  mode: "automatic" | "manual";
+  bootstrap_available: boolean;
+  reason: "" | "token_required" | "token_not_configured" | "origin_rejected" | "bootstrap_required" | "bootstrap_unavailable";
   message: string;
+}
+
+export interface McpConnection {
+  session_id: string | null;
+  proxy_host?: string;
+  proxy_bind_host?: string;
+  proxy_port?: number;
+  proxy_auth_required: boolean;
+  credentials: {
+    username?: string | null;
+    password?: string | null;
+    source: "generated" | "environment" | "none";
+    available: boolean;
+  };
 }
 
 export class McpApiError extends Error {
@@ -227,14 +245,14 @@ async function mcpFetch<T>(path: string, init: RequestInit, decode: (response: R
         const text = await response.text();
         if (text) {
           try {
-            const payload: { detail?: unknown; error?: unknown } = JSON.parse(text);
-            const detail = payload.detail ?? payload.error ?? payload;
+            const payload: { detail?: unknown; error?: unknown; message?: unknown } = JSON.parse(text);
+            const detail = payload.detail ?? payload.error ?? payload.message ?? payload;
             message = typeof detail === "string" ? detail : JSON.stringify(detail);
           } catch { message = text; }
         }
       } catch { /* Preserve the response status when its body is unavailable. */ }
       assertCurrent(generation, controller.signal);
-      if (response.status === 403 && path !== "/access") mcpAuth.clear();
+      if (response.status === 403 && path !== "/access" && path !== "/access/bootstrap") mcpAuth.clear();
       throw new McpApiError(message.slice(0, 1800), response.status);
     }
     const result = await decode(response);
@@ -254,10 +272,12 @@ const json = (method: string, body: unknown): RequestInit => ({ method, headers:
 
 export const mcpApi = {
   access: (signal?: AbortSignal, token?: string) => mcpFetch<McpAccess>("/access", { signal }, response => response.json(), token),
+  bootstrap: (signal?: AbortSignal) => mcpRequest<{ allowed: boolean; token: string; mode: "automatic" }>("/access/bootstrap", { method: "POST", headers: { "X-StrixOps-MCP-Bootstrap": "1" }, signal }),
   catalog: (signal?: AbortSignal) => mcpRequest<McpCatalog>("/catalog", { signal }),
   tasks: (signal?: AbortSignal) => mcpRequest<{ tasks: McpTask[] }>("/tasks", { signal }),
   createTask: (body: McpTaskInput) => mcpRequest<{ task: McpTask }>("/tasks", json("POST", body)),
   task: (id: string, signal?: AbortSignal) => mcpRequest<{ task: McpTask }>(taskPath(id), { signal }),
+  connection: (id: string, signal?: AbortSignal) => mcpRequest<McpConnection>(`${taskPath(id)}/connection`, { signal }),
   updateTask: (id: string, body: McpTaskInput) => mcpRequest<{ task: McpTask }>(taskPath(id), json("PATCH", body)),
   deleteTask: (id: string) => mcpRequest<{ deleted: boolean; task_id: string }>(taskPath(id), { method: "DELETE" }),
   transition: (id: string, action: "start" | "stop" | "end") => mcpRequest<{ task: McpTask; session?: McpSession }>(`${taskPath(id)}/${action}`, json("POST", {})),

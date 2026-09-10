@@ -16,14 +16,13 @@ uv sync --frozen --no-dev
 docker pull ghcr.io/mitmproxy/mitmproxy:12.2.3@sha256:00b77b5d8804c8ad18cb6caefbf9d5849e895e8986c5ce011f4ae30f4385962f
 ```
 
-設定獨立資料目錄並啟動單一 Console process：
+啟動單一 Console process，不需要先設定 MCP 環境變數：
 
 ```bash
-export STRIXOPS_MCP_ROOT="$PWD/mcp_tasks"
 uv run --no-dev strixops-console --host 127.0.0.1 --port 8300
 ```
 
-以上資料目錄只是本機範例；伺服器可設為服務帳號擁有的 `/var/lib/strixops/mcp_tasks`。不設定時，預設為 `~/.strixops/mcp_tasks`，與 `STRIX_RUNS` 分開。
+MCP 預設使用 `~/.strixops/mcp_tasks`，與 `STRIX_RUNS` 分開。需要自訂儲存位置時，才設定 `STRIXOPS_MCP_ROOT`；例如服務帳號擁有的 `/var/lib/strixops/mcp_tasks`。升級時沿用現有資料目錄。
 
 開啟 [本機 Console](http://127.0.0.1:8300)，在左側選擇 MCP。初次驗證建議由 Console 同一個來源提供前端和 API；開發環境另行使用 Next 時，需要保留 MCP API 的同源請求條件。
 
@@ -45,12 +44,12 @@ npm --prefix console/web run dev
 ## 建立任務並連接瀏覽器
 
 1. 按「建立 MCP 任務」，填入名稱與允許網站；如有需要，再填排除主機。
-2. 按「啟動代理」，等待顯示監聽位址及可下載的 CA 憑證。
+2. 按「啟動代理」，等待顯示監聽位址及可下載的 CA 憑證。使用遠端 Console 位址時，代理帳密會自動產生，可從連線資訊中顯示及複製。
 3. 在專用測試瀏覽器的代理設定中，將 HTTP 與 HTTPS 都指向該位址。
 4. 下載平台共用的公開 CA，匯入該測試瀏覽器的受信任憑證庫，並勾選信任此 CA 識別網站。相同 MCP 資料目錄下的所有任務共用此 CA，只需匯入一次。
 5. 以該瀏覽器登入、切換頁面及操作功能。範圍內的實際網路流量會持續顯示在工作台。
 
-代理預設只公布在 Console 主機的 `127.0.0.1`，每個工作階段使用不同的可用連接埠。遠端瀏覽器可依下方「直接連接主機 IP」配置監聽位址與代理帳密，或保留 loopback 並建立 SSH 通道。例如工作階段顯示的伺服器連接埠為 `49152`：
+從本機 Console 位址啟動時，代理只綁定 loopback；從遠端 IP 位址啟動時，會自動綁定主機介面，顯示該 IP，並產生獨立的代理帳密。每個工作階段使用不同的可用連接埠。若透過 SSH 通道開啟本機 Console 位址，代理也維持 loopback；例如工作階段顯示的伺服器連接埠為 `49152`：
 
 ```bash
 ssh -N -L 18080:127.0.0.1:49152 user@your-server
@@ -58,7 +57,7 @@ ssh -N -L 18080:127.0.0.1:49152 user@your-server
 
 此時瀏覽器代理設定為本機 `127.0.0.1:18080`。Console 頁面可另依主 [README 的遠端存取說明](../README.md#remote-access) 建立通道。
 
-「停止捕獲」會關閉該監聽器；需要繼續一般瀏覽時，將瀏覽器切回直連。再次啟動會建立新的工作階段與連接埠，但沿用同一張平台 CA；只需更新代理位址，不必重新匯入憑證。建立或刪除任務也不會更換 CA。
+「停止捕獲」會關閉該監聽器；需要繼續一般瀏覽時，將瀏覽器切回直連。再次啟動會建立新的工作階段與連接埠，但沿用同一張平台 CA；只需更新代理位址及新工作階段的代理帳密，不必重新匯入憑證。建立或刪除任務也不會更換 CA。
 
 從舊版升級時，平台會優先沿用已有的有效 CA；已在執行的舊代理保留原憑證，直到下次啟動。若舊代理與共用 CA 不同，介面會提示重新監聽以切換。共用 CA 只提供公開憑證下載及 SHA-256 指紋；私鑰由平台保存。更換資料目錄、明確更換 CA 或憑證到期時，才需要重新匯入。
 
@@ -131,45 +130,48 @@ http://127.0.0.1:8300/api/mcp/transport
 
 它與前端操作同一份任務資料，提供建立／刪除任務、共用 CA 資訊、啟停捕獲、查詢請求與端點、重送、建立／取消測試及報告工具。MCP client 斷線不會自動關閉捕獲工作階段。
 
-| 環境變數 | 用途 |
-|---|---|
-| `STRIXOPS_MCP_ROOT` | MCP SQLite、journal、CA 與任務資料的根目錄 |
-| `STRIXOPS_MCP_TOKEN` | 非本機 API／MCP client 的共用存取 token；以 `Authorization: Bearer ...` 或 `X-MCP-Token` 傳送 |
-| `STRIXOPS_MCP_TRUSTED_ORIGINS` | 逗號分隔的信任來源；用於本機開發，或已由反向代理驗證身份的 Console；僅供 loopback 上游存取 |
-| `STRIXOPS_MCP_PROXY_BIND_HOST` | 新捕獲代理在主機上綁定的 IP；預設 `127.0.0.1` |
-| `STRIXOPS_MCP_PROXY_PUBLIC_HOST` | 瀏覽器應使用的 IP／主機名稱；NAT 或 `0.0.0.0`／`::` 綁定時使用，不能填 URL、埠號或萬用位址 |
-| `STRIXOPS_MCP_PROXY_AUTH` | 代理帳密，格式 `username:password`；非 loopback 綁定必填，與控制台 Token 分開 |
-| `STRIXOPS_CONSOLE_CONFIG` | 共用模型設定檔位置；沿用 Console 設定 |
+### 自動初始化
 
-API 接受本機 loopback 的同源存取；遠端瀏覽器在 MCP 頁面輸入伺服器設定的 Token。Token 只保存在目前分頁的 `sessionStorage`，並以 header 附到 MCP 請求與 CA 下載；不放進 URL。清除登入或 Token 失效會清空頁面中的 MCP 資料，再顯示登入入口。清除登入不會停止已啟動的代理或 Agent 工作。Web／Internal 的存取流程不變；這不是整個 Console 的登入系統。
+從 Console 的 IP 或 localhost 開啟 MCP 時，前端會自動初始化存取設定，將控制 Token 保存於 MCP 資料目錄的 `access.json`，瀏覽器在目前分頁的 `sessionStorage` 保存使用副本。重新開啟或重新啟動 Console 會沿用同一份設定；新增／刪除任務不會更換控制 Token 或共用 CA。伺服器檔案權限為 `0600`；內容損壞時會回報錯誤，不會默默覆寫已有設定。
+
+初始化沿用整個 Console 的部署存取邊界：**能夠開啟此 Console 的使用者，也能初始化 MCP 並操作共用任務**，沒有另外建立使用者帳號或租戶隔離。初始化只接受符合 Host／protocol 的同來源請求及指定 header；任意 DNS 網域、跨網站或未獲允許的跨來源初始化會被拒絕。明確列入可信來源的本機開發轉送保留例外，允許其瀏覽器 Origin 與 loopback 上游 Host 不同。這項防護處理瀏覽器跨來源呼叫，不是獨立的身份驗證機制。
+
+後續 MCP 請求與 CA 下載透過 header 傳送 Token，不放進 URL。若明確設定 `STRIXOPS_MCP_TOKEN`，則優先使用手動 Token 登入，自動初始化不會繞過該設定。Web／Internal 的流程保持不變。
 
 ### 直接連接主機 IP
 
-例如 Console 主機的內網 IP 為 `192.168.1.20`，在啟動它的終端設定以下環境變數，將 Token 與代理密碼替換為自己的長隨機值：
+例如主機 IP 是 `192.168.1.20`，Console 已監聽 `0.0.0.0:8300`，不需要新增 MCP 環境變數：
 
 ```bash
-export STRIXOPS_MCP_TOKEN='replace-with-a-long-random-access-token'
-export STRIXOPS_MCP_PROXY_BIND_HOST='192.168.1.20'
-export STRIXOPS_MCP_PROXY_AUTH='mcp:replace-with-a-different-long-random-password'
 uv run --no-dev strixops-console --host 0.0.0.0 --port 8300
 ```
 
-1. 在瀏覽器開啟 `http://192.168.1.20:8300/mcp`，輸入上面設定的 MCP Token。
-2. 建立任務並啟動代理，將瀏覽器的 HTTP／HTTPS 代理設為頁面顯示的主機與埠。
-3. 瀏覽器詢問代理帳密時，輸入 `STRIXOPS_MCP_PROXY_AUTH` 的使用者名稱與密碼。
-4. 從 MCP 頁面下載共用 CA，信任一次後即可捕獲 HTTPS。
+1. 開啟 `http://192.168.1.20:8300/mcp`，等待自動初始化。
+2. 建立任務並啟動代理，將測試瀏覽器的 HTTP／HTTPS 代理設為頁面顯示的主機與埠。
+3. 在連線資訊中顯示及複製自動產生的代理帳密，填入瀏覽器的代理驗證提示。
+4. 下載並信任共用 CA 一次，即可捕獲範圍內的 HTTPS。
 
-兩種憑證用途不同：MCP Token 用於操作任務，代理帳密用於轉送瀏覽器流量。未提供有效代理帳密時，遠端代理回應 HTTP 407。代理驗證資訊不會寫入捕獲 journal。每個任務的代理埠仍是動態配置，主機防火牆須允許測試電腦連到該埠。
+控制 Token 與代理帳密用途不同。代理帳密在每次新捕獲工作階段產生，保存於該工作階段的私有 `proxy-auth.json`。重新整理頁面或重啟 Console 後，可再次顯示既有工作階段的帳密；停止後再啟動會建立新的帳密。帳密不包含在任務輪詢、報告、連線 URL 或捕獲 journal 中，只有明確點選顯示時才讀取。未提供有效代理帳密時，遠端代理回應 HTTP 407。
 
-若主機在 NAT 後，或需要綁定所有介面，可將 `STRIXOPS_MCP_PROXY_BIND_HOST` 設為 `0.0.0.0`，並以 `STRIXOPS_MCP_PROXY_PUBLIC_HOST` 指定瀏覽器實際能到達的 IP／DNS 主機名稱。設定變更僅套用新啟動的捕獲；既有代理不會被自動重啟。systemd 部署則將這些值放到服務的環境設定並重啟 Console。
+主機防火牆仍須允許測試電腦連到動態代理埠。HTTP 範例用於可信內網；對外部署應沿用整個 Console 的 HTTPS 與身份驗證層。升級不會重啟已執行的捕獲；要套用自動遠端設定，請停止並重新啟動該任務的代理。
 
-HTTP 範例適用可信內網；跨網際網路仍應使用 HTTPS 與整個 Console 的既有存取保護。
+### 進階覆寫與反向代理
 
-### 反向代理
+以下全部為選用設定；一般 IP 直連工作流程不需要設定。
 
-若使用 Nginx／Caddy 等代理，保留同來源 UI 與 `/api/mcp` 路由；可在 MCP 頁面輸入 Token，或由已完成身份驗證的代理覆寫並注入 `X-MCP-Token`。代理轉送的 protocol／Host 須與瀏覽器來源一致。
+| 環境變數 | 用途 |
+|---|---|
+| `STRIXOPS_MCP_ROOT` | MCP SQLite、控制 Token、CA 與任務資料的根目錄 |
+| `STRIXOPS_MCP_TOKEN` | 明確指定控制 Token，切回手動登入；API／MCP client 可用 `Authorization: Bearer ...` 或 `X-MCP-Token` |
+| `STRIXOPS_MCP_TRUSTED_ORIGINS` | 逗號分隔的完整 Console 來源；允許該 DNS 來源自動初始化，並保留既有 loopback 可信代理／開發來源豁免 |
+| `STRIXOPS_MCP_PROXY_BIND_HOST` | 覆寫新代理綁定的 IP；未設定時依啟動請求的 Console 位址選擇 loopback 或 IPv4／IPv6 萬用介面 |
+| `STRIXOPS_MCP_PROXY_PUBLIC_HOST` | 覆寫瀏覽器應使用的 IP／主機名稱；供 NAT 或不同代理主機使用，不填 URL、埠號或萬用位址 |
+| `STRIXOPS_MCP_PROXY_AUTH` | 覆寫代理帳密，格式 `username:password`；未設定時非 loopback 代理自動產生。明確設定的帳密不透過前端揭露 |
+| `STRIXOPS_CONSOLE_CONFIG` | 共用模型設定檔位置，沿用 Console 設定 |
 
-`STRIXOPS_MCP_TRUSTED_ORIGINS` 只信任既有身份驗證層，本身不是登入機制，也不會放行 IP 直連。Uvicorn 依可信代理的 `X-Forwarded-For` 還原遠端 IP 時，請使用 Token 驗證，不依賴 loopback 來源豁免。
+若透過 DNS 網域及 Nginx／Caddy 開啟 Console，將完整來源（例如 `https://console.example.com`）加入 `STRIXOPS_MCP_TRUSTED_ORIGINS`，並保留同來源 UI 與 `/api/mcp`，讓轉送的 protocol／Host 與瀏覽器一致。此清單本身不是登入機制；應由既有部署層負責驗證身份。
+
+若已明確設定 MCP Token，可在 MCP 頁面輸入，或由完成身份驗證的代理覆寫並注入 `X-MCP-Token`。Uvicorn 還原 `X-Forwarded-For` 後，自動初始化仍可發出 Token，不依賴 loopback 來源豁免。直接以 MCP client 工具啟動捕獲時沒有瀏覽器位址提示，預設維持 loopback；若需要遠端代理，可用上列進階設定指定其綁定及公開位址。
 
 ## 儲存、限制與故障處理
 
@@ -178,10 +180,12 @@ HTTP 範例適用可信內網；跨網際網路仍應使用 HTTPS 與整個 Cons
 ```text
 mcp_tasks/
 ├── traffic.sqlite3
+├── access.json                 # 自動產生的控制 Token（0600）
 ├── ca/                         # 平台共用 CA（含私鑰，須持久保存）
 └── tasks/<task_id>/captures/<session_id>/
     ├── scope.json
     ├── runtime.json
+    ├── proxy-auth.json         # 自動產生的該工作階段代理帳密（0600）
     ├── events.jsonl
     ├── capture-status.json
     └── ca/                     # 只有舊版工作階段保留此目錄
@@ -208,8 +212,9 @@ SQLite 保存任務、flow、job、report 與事件；capture journal 保存增�
 | 顯示映像尚未安裝 | 執行上方固定版本與 digest 的 `docker pull`；啟動按鈕不會自動拉取映像 |
 | Docker 無法存取 | 確認 daemon 已啟動，並檢查執行 Console 帳號的 Docker 權限 |
 | 有代理位址但沒有流量 | 確認瀏覽器實際使用該 proxy、SSH 通道連接埠正確，且目標符合允許規則 |
-| 遠端 MCP 顯示尚未設定 Token | 在 Console process 的環境設定 `STRIXOPS_MCP_TOKEN` 並重啟，再於 MCP 頁面輸入相同 Token |
-| 代理要求登入／回應 407 | 使用 `STRIXOPS_MCP_PROXY_AUTH` 設定的代理帳密，不能以 MCP 控制台 Token 代替 |
+| MCP 自動初始化失敗 | 確認前後端皆已更新、使用主機 IP 或已設定的可信網域同源開啟；檢查 MCP 資料目錄的寫入權限 |
+| 仍顯示手動 Token 登入 | 檢查服務是否保留明確的 `STRIXOPS_MCP_TOKEN`；它會優先使用手動模式。要改用自動模式，移除該覆寫後重啟 Console |
+| 代理要求登入／回應 407 | 從該任務連線資訊顯示並複製自動帳密；若使用明確的環境覆寫，則使用其帳密。不能以控制 Token 代替 |
 | HTTPS 憑證錯誤 | 確認已信任平台共用 CA；舊版代理則確認其 CA 是否相同。另須分辨瀏覽器不信任代理，還是代理不信任目標上游憑證 |
 | 網頁切換卻沒有新頁面 | 檢查是否為 SPA 路由或快取回應；單次前端路由切換不必然產生 HTTP request |
 | Journal 達上限或磁碟寫入失敗 | 保留現有資料，處理容量後停止並建立新捕獲工作階段；勿將仍在轉送視為仍在記錄 |
@@ -222,7 +227,7 @@ SQLite 保存任務、flow、job、report 與事件；capture journal 保存增�
 ```bash
 uv sync --frozen --dev
 .venv/bin/python -m pytest tests/unit/test_mcp* tests/contract/test_mcp* -q
-STRIXOPS_MCP_DOCKER_TESTS=1 .venv/bin/python -m pytest tests/contract/test_mcp_docker.py tests/contract/test_mcp_shared_ca_docker.py tests/contract/test_mcp_delete_docker.py -q
+STRIXOPS_MCP_DOCKER_TESTS=1 .venv/bin/python -m pytest tests/contract/test_mcp_docker.py tests/contract/test_mcp_shared_ca_docker.py tests/contract/test_mcp_delete_docker.py tests/contract/test_mcp_remote_proxy_docker.py -q
 ```
 
 本次實際 Docker 驗證涵蓋 HTTP／HTTPS、HTTP/2、範圍外 TLS 原樣轉送、重複 headers、binary body、停止捕獲後重送、雙任務隔離、Console metadata 復原、資料遮罩、流量識別碼與報告雜湊持久化。共用 CA 測試以同一份 TLS 信任設定連接兩個任務，再停止、刪除其中一個任務並建立新工作階段，確認憑證保持一致；刪除測試確認取消 Agent、停止所屬容器、清除資料並保留其他任務與 CA。

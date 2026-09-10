@@ -2,8 +2,8 @@
 
 These containers never share the Web/Internal scanner runtime. All Docker
 mutations verify task, session, role, and an unguessable persisted owner label.
-Proxy listeners default to host loopback. Remote listeners require explicit
-binding and credentials; no management API is exposed.
+Proxy listeners default to host loopback. Remote browser connections automatically
+receive an authenticated listener; no management API is exposed.
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
+import stat
 import tempfile
 import time
 import uuid
@@ -71,9 +73,50 @@ def _policy(task: dict) -> dict:
     }
 
 
-def _proxy_settings() -> tuple[dict, str]:
-    """Validate listener settings without including credentials in metadata/errors."""
-    bind_host = os.environ.get("STRIXOPS_MCP_PROXY_BIND_HOST", "127.0.0.1")
+def _concrete_host(value: str, setting: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        labels = value.rstrip(".").split(".")
+        if (
+            len(value) > 253
+            or not all(
+                re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels
+            )
+            or re.fullmatch(r"[0-9.]+", value)
+        ):
+            raise ValueError(f"{setting} must be a concrete IP address or DNS hostname") from None
+        return value.rstrip(".").lower()
+    if address.is_unspecified or address.is_multicast or "%" in value:
+        raise ValueError(f"{setting} must be a concrete IP address or DNS hostname")
+    return str(address)
+
+
+def _valid_auth(auth: str) -> bool:
+    parts = auth.split(":")
+    return bool(
+        len(parts) == 2
+        and all(re.fullmatch(r"[\x21-\x39\x3b-\x7e]{1,256}", part) for part in parts)
+        and not parts[0].startswith(("@", "ldap"))
+    )
+
+
+def _proxy_settings(connection_host: str | None = None) -> tuple[dict, str]:
+    """Validate browser guidance without resolving names or exposing secrets."""
+    hint = _concrete_host(connection_host, "MCP connection host") if connection_host is not None else None
+    automatic_bind = "127.0.0.1"
+    if hint is not None and hint != "localhost":
+        try:
+            hint_address = ipaddress.ip_address(hint)
+        except ValueError:
+            automatic_bind = "0.0.0.0"
+        else:
+            automatic_bind = (
+                str(hint_address)
+                if hint_address.is_loopback
+                else ("0.0.0.0" if hint_address.version == 4 else "::")
+            )
+    bind_host = os.environ.get("STRIXOPS_MCP_PROXY_BIND_HOST", automatic_bind)
     try:
         if "%" in bind_host:
             raise ValueError
@@ -85,54 +128,98 @@ def _proxy_settings() -> tuple[dict, str]:
     bind_host = str(address)
     public_host = os.environ.get("STRIXOPS_MCP_PROXY_PUBLIC_HOST", "")
     if not public_host:
-        if address.is_unspecified:
-            raise ValueError("Wildcard proxy binding requires STRIXOPS_MCP_PROXY_PUBLIC_HOST")
-        public_host = bind_host
-    try:
-        public_address = ipaddress.ip_address(public_host)
-    except ValueError:
-        labels = public_host.rstrip(".").split(".")
-        if (
-            len(public_host) > 253
-            or not all(
-                re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels
-            )
-            or re.fullmatch(r"[0-9.]+", public_host)
-        ):
+        # A browser hostname is display guidance only. Never use DNS resolution
+        # or an outbound request to decide which host interface to bind.
+        if hint and ("STRIXOPS_MCP_PROXY_BIND_HOST" not in os.environ or address.is_unspecified):
+            public_host = hint
+        elif address.is_unspecified:
             raise ValueError(
-                "STRIXOPS_MCP_PROXY_PUBLIC_HOST must be a concrete IP address or DNS hostname"
-            ) from None
-        public_host = public_host.rstrip(".").lower()
-    else:
-        if public_address.is_unspecified or public_address.is_multicast or "%" in public_host:
-            raise ValueError("STRIXOPS_MCP_PROXY_PUBLIC_HOST must be a concrete IP address or DNS hostname")
-        public_host = str(public_address)
+                "Wildcard proxy binding requires STRIXOPS_MCP_PROXY_PUBLIC_HOST or a browser host"
+            )
+        else:
+            public_host = bind_host
+    public_host = _concrete_host(public_host, "STRIXOPS_MCP_PROXY_PUBLIC_HOST")
     auth = os.environ.get("STRIXOPS_MCP_PROXY_AUTH", "")
-    if auth:
-        # Mitmproxy accepts exactly one colon and reserves @/ldap prefixes for
-        # other authentication backends. Restrict to its literal single user mode.
-        parts = auth.split(":")
-        if (
-            len(parts) != 2
-            or not all(re.fullmatch(r"[\x21-\x39\x3b-\x7e]{1,256}", part) for part in parts)
-            or parts[0].startswith(("@", "ldap"))
-        ):
-            raise ValueError(
-                "STRIXOPS_MCP_PROXY_AUTH requires username:password with 1–256 printable ASCII "
-                "characters per part, no whitespace or extra colon, and no @/ldap username prefix"
-            )
-    if not address.is_loopback and not auth:
-        raise ValueError("Remote proxy binding requires STRIXOPS_MCP_PROXY_AUTH=username:password")
+    if auth and not _valid_auth(auth):
+        raise ValueError(
+            "STRIXOPS_MCP_PROXY_AUTH requires username:password with 1–256 printable ASCII "
+            "characters per part, no whitespace or extra colon, and no @/ldap username prefix"
+        )
+    source = "environment" if auth else ("generated" if not address.is_loopback else "none")
     return {
         "proxy_bind_host": bind_host,
         "proxy_host": public_host,
-        "proxy_auth_required": bool(auth),
+        "proxy_auth_required": source != "none",
+        "proxy_auth_source": source,
+        "credentials_available": False,  # A configuration preview has no capture secret yet.
     }, auth
 
 
-def proxy_configuration() -> dict:
-    """Public connection guidance; never return the proxy password."""
-    return _proxy_settings()[0]
+def proxy_configuration(connection_host: str | None = None) -> dict:
+    """Public connection guidance; never return or generate the proxy password."""
+    return _proxy_settings(connection_host)[0]
+
+
+def _read_proxy_credentials(directory: Path, task_id: str, session_id: str) -> dict:
+    """Read only a bounded, private, regular file for this exact capture."""
+    path = directory / "proxy-auth.json"
+    try:
+        if directory.is_symlink():
+            raise ValueError
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "r") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_mode & 0o077
+                or info.st_size > 4096
+            ):
+                raise ValueError
+            record = json.loads(stream.read(4097))
+        if (
+            not isinstance(record, dict)
+            or record.get("version") != 1
+            or record.get("task_id") != task_id
+            or record.get("session_id") != session_id
+            or record.get("source") != "generated"
+            or not isinstance(record.get("username"), str)
+            or not isinstance(record.get("password"), str)
+            or not _valid_auth(record["username"] + ":" + record["password"])
+        ):
+            raise ValueError
+        return record
+    except (OSError, ValueError, UnicodeError, TypeError):
+        raise RuntimeUnavailable("Generated proxy credentials are unavailable or invalid") from None
+
+
+def _capture_credentials(directory: Path, task_id: str, session_id: str) -> dict:
+    path = directory / "proxy-auth.json"
+    if not path.exists() and not path.is_symlink():
+        record = {
+            "version": 1,
+            "task_id": task_id,
+            "session_id": session_id,
+            "source": "generated",
+            "username": "mcp-" + secrets.token_hex(6),
+            "password": secrets.token_urlsafe(32),
+        }
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".proxy-auth-", dir=directory)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w") as stream:
+                json.dump(record, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # Linking a complete 0600 temporary file creates the destination
+            # atomically without replacing an existing credential or symlink.
+            with contextlib.suppress(FileExistsError):
+                os.link(temporary, path)
+        except OSError:
+            raise RuntimeUnavailable("Cannot save generated proxy credentials") from None
+        finally:
+            temporary.unlink(missing_ok=True)
+    return _read_proxy_credentials(directory, task_id, session_id)
 
 
 def _binding_matches(bindings: list[dict], expected: str) -> bool:
@@ -238,6 +325,8 @@ class CaptureRuntime:
                     "proxy_host",
                     "proxy_bind_host",
                     "proxy_auth_required",
+                    "proxy_auth_source",
+                    "credentials_available",
                     "proxy_port",
                     "image",
                     "role",
@@ -288,15 +377,25 @@ class CaptureRuntime:
                 container.remove()
 
     def start(
-        self, task: dict, session_id: str, directory: Path, *, ca_directory: Path | None = None
+        self,
+        task: dict,
+        session_id: str,
+        directory: Path,
+        *,
+        ca_directory: Path | None = None,
+        connection_host: str | None = None,
     ) -> dict:
         policy = _policy(task)
-        connection_settings, auth = _proxy_settings()
+        connection_settings, auth = _proxy_settings(connection_host)
         identity = ca_info(ca_directory) if ca_directory is not None else None
         image = self._image()
         directory = Path(directory).resolve()
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         directory.chmod(0o700)
+        if connection_settings["proxy_auth_source"] == "generated":
+            credentials = _capture_credentials(directory, str(task["id"]), session_id)
+            auth = credentials["username"] + ":" + credentials["password"]
+            connection_settings["credentials_available"] = True
         if ca_directory is None:
             (directory / "ca").mkdir(mode=0o700, exist_ok=True)
         else:
@@ -407,6 +506,26 @@ class CaptureRuntime:
                 ) from None
             raise
 
+    @staticmethod
+    def proxy_credentials(session: dict) -> dict:
+        """Return generated credentials only to the explicit authenticated API."""
+        source = session.get("proxy_auth_source") or (
+            "environment" if session.get("proxy_auth_required") else "none"
+        )
+        if source != "generated" or not session.get("credentials_available"):
+            return {"username": "", "password": "", "source": source, "available": False}
+        task_id = str(session.get("task_id", ""))
+        session_id = str(session.get("session_id") or session.get("id", ""))
+        if not task_id or not session_id or not session.get("directory"):
+            raise RuntimeUnavailable("Generated proxy credentials are unavailable or invalid")
+        record = _read_proxy_credentials(Path(session["directory"]), task_id, session_id)
+        return {
+            "username": record["username"],
+            "password": record["password"],
+            "source": "generated",
+            "available": True,
+        }
+
     def stop(self, task_id: str, session: dict) -> None:
         self._remove(task_id, session)
 
@@ -434,6 +553,8 @@ class CaptureRuntime:
                         "proxy_host",
                         "proxy_bind_host",
                         "proxy_auth_required",
+                        "proxy_auth_source",
+                        "credentials_available",
                         "proxy_port",
                         "ca_directory",
                         "ca_shared",

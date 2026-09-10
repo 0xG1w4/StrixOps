@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.2 — 2026-09-10
+
+- Initialize MCP browser access automatically when opened through a Console IP
+  or localhost, persisting a private shared access token. Keep explicit server
+  token authentication as an override and reject cross-origin bootstrap requests.
+- Infer proxy connection settings from the Console address when capture starts.
+  Generate private per-capture credentials for remote listeners, with explicit
+  reveal/copy controls; keep passwords out of task polling, reports, and URLs.
+- Preserve shared CA identity, existing captures, and Web/internal workflows.
+  Document automatic setup and its existing Console deployment access boundary.
+
+Upgrade and setup: [v1.1.2 release notes](docs/v1.1.2.md).
+
 ## 1.1.1 — 2026-09-10
 
 - Complete remote browser access to MCP tasks: enter the configured server

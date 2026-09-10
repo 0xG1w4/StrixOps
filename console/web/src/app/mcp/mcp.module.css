@@ -107,6 +107,15 @@
 .proxyAddress { display: block; margin-bottom: 14px; font: 15px var(--font-mono); color: var(--mcp-accent); overflow-wrap: anywhere; }
 .tunnelCommand { display: block; padding: 9px 11px; font: 11px/1.8 var(--font-mono); background: var(--mcp-raised); overflow-wrap: anywhere; }
 .connectionPanel .scopeFootnote { margin-top: 14px; font-size: 11px; }
+.proxyCredentials { margin-top: 18px; padding: 16px; border: 1px solid var(--mcp-soft-line); border-radius: 4px; background: var(--mcp-raised); }
+.proxyCredentials h3 { display: flex; align-items: center; gap: 7px; }
+.credentialFields { display: grid; gap: 10px; margin: 14px 0; }
+.credentialFields > div { min-width: 0; }
+.credentialFields dt { margin-bottom: 4px; color: var(--mcp-muted); font-size: 11px; }
+.credentialFields dd { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; }
+.credentialFields code { flex: 1; min-width: 0; color: var(--mcp-text); font: 12px/1.8 var(--font-mono); overflow-wrap: anywhere; user-select: all; }
+.credentialFields button { flex: none; }
+.credentialCopyStatus { display: block; min-height: 18px; margin-top: 7px; color: var(--mcp-accent); font-size: 11px; }
 .caStandalone { padding: 20px; background: var(--mcp-surface); border: 1px solid var(--mcp-line); border-radius: 5px; margin-bottom: 20px; }
 .caPanel h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; font-size: 13px; font-weight: 500; }
 .caPanel > p { color: var(--mcp-muted); font-size: 12px; line-height: 1.8; margin: 0 0 12px; }

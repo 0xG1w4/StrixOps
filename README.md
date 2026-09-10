@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.1.1** · [Release notes](docs/v1.1.1.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Version **1.1.2** · [Release notes](docs/v1.1.2.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -88,15 +88,17 @@ in the details. Task deletion requires confirmation, stops its proxy and test
 jobs, and removes its saved traffic, results, and reports. The shared CA and
 other tasks are retained.
 
-Remote browsers can connect directly to the Console IP after setting
-`STRIXOPS_MCP_TOKEN` on the server and entering it on the MCP page. To capture
-from another computer, configure `STRIXOPS_MCP_PROXY_BIND_HOST` and separate
-`STRIXOPS_MCP_PROXY_AUTH` credentials; the listener stays on loopback by default.
+Open MCP through the Console IP and it initializes access automatically, using
+the Console deployment’s existing access boundary. Starting capture from a
+remote Console address selects a reachable proxy address and generates proxy
+credentials; reveal and copy them in the connection panel. No MCP environment
+variables are required for this workflow. Explicit token and proxy settings
+remain available as advanced overrides.
 
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[1.1.1 release notes](docs/v1.1.1.md) for upgrade commands.
+[1.1.2 release notes](docs/v1.1.2.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -169,7 +171,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.1.1 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.1.2 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -198,9 +200,9 @@ Use an **absolute runs path**, as shown above. The Console starts engine process
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.1.1` **release tag**, leaving a detached HEAD
+The clone command selects the `v1.1.2` **release tag**, leaving a detached HEAD
 at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.1.1`.
+In an existing checkout, the exact reference is `refs/tags/v1.1.2`.
 
 After installation, subsequent starts only require:
 
@@ -222,12 +224,12 @@ The health endpoint does not validate Docker, a model key, or target reachabilit
 
 A wheel contains the built Console and runtime prompt/skill library. It does
 not contain the Docker sandbox image. Use this route when you already have a
-trusted `strixops-1.1.1-py3-none-any.whl`; it does not assume a PyPI publication or
+trusted `strixops-1.1.2-py3-none-any.whl`; it does not assume a PyPI publication or
 an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.1.1-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.1.2-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -499,7 +501,7 @@ tool inventory and architecture-specific best-effort installs.
 
 Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
 remote `DOCKER_HOST` alone does not make local workspace directories available on
-that remote host. The product version `1.1.1` and sandbox tag `1.3.0` are separate
+that remote host. The product version `1.1.2` and sandbox tag `1.3.0` are separate
 version numbers.
 
 ## Configuration reference

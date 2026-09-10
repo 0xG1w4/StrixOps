@@ -165,7 +165,7 @@ class TrafficService:
             self._watchers[task_id] = thread
             thread.start()
 
-    def start(self, task_id: str) -> dict:
+    def start(self, task_id: str, *, connection_host: str | None = None) -> dict:
         with self.lock:
             self._require_available(task_id)
             self.refresh(task_id, watch=False)
@@ -193,7 +193,10 @@ class TrafficService:
             self.store.put_session(session)
             self.store.update_task(task_id, status="starting", error="")
             try:
-                metadata = self.runtime.start(task, session_id, directory, ca_directory=self.ensure_ca())
+                options = {"ca_directory": self.ensure_ca()}
+                if connection_host is not None:
+                    options["connection_host"] = connection_host
+                metadata = self.runtime.start(task, session_id, directory, **options)
                 session.update(metadata, status="running")
                 self.store.put_session(session)
                 self.store.update_task(task_id, status="capturing", ended_at=None)
@@ -205,6 +208,31 @@ class TrafficService:
                 raise
             self._watch(task_id)
             return self.task(task_id, refresh=False)
+
+    def connection(self, task_id: str) -> dict:
+        """Reveal generated connection credentials only through an explicit operation."""
+        with self.lock:
+            self._require_available(task_id)
+            sessions = self.store.sessions(task_id)
+            if not sessions:
+                raise ValueError("Start capture before requesting connection details")
+            session = sessions[0]
+            directory = self.store.root / "tasks" / valid_id(task_id) / "captures" / valid_id(session["id"])
+            if Path(session["directory"]) != directory:
+                raise ValueError("Invalid MCP capture storage path")
+            for path in (directory, *directory.parents):
+                if path == self.store.root:
+                    break
+                if path.is_symlink():
+                    raise ValueError("Invalid MCP capture storage path")
+            return {
+                "session_id": session["id"],
+                "proxy_host": session.get("proxy_host", ""),
+                "proxy_bind_host": session.get("proxy_bind_host", "127.0.0.1"),
+                "proxy_port": session.get("proxy_port"),
+                "proxy_auth_required": bool(session.get("proxy_auth_required")),
+                "credentials": self.runtime.proxy_credentials(session),
+            }
 
     def _ingest(self, task: dict, session: dict, *, drain: bool = False) -> None:
         path = Path(session["directory"]) / "events.jsonl"

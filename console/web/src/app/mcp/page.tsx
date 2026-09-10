@@ -7,6 +7,7 @@ import { ArrowLeft, ArrowRight, CheckCheck, ChevronDown, FileText, FlaskConical,
 import { McpApiError, mcpApi, mcpError, isMcpTaskLive, isMcpTestLive, type McpTask, type McpFlow, type McpEndpoint, type McpCatalog, type McpTest, type McpReport } from "@/lib/mcp-api";
 import { AgentTestForm, DeleteTaskDialog, ReplayForm, TaskForm } from "./forms";
 import { SharedCaPanel } from "./ca-panel";
+import { ConnectionPanel } from "./connection-panel";
 import { McpAccessGate } from "./access-gate";
 import { FlowDetail, ReportsPanel, TestsPanel } from "./panels";
 import { dateText, McpError, McpModal, McpStatus, shortId, useMcpCopy } from "./shared";
@@ -155,22 +156,6 @@ function TaskWorkspace({ taskId, catalog, catalogError }: { taskId: string; cata
     {testFlowIds && <AgentTestForm task={task} flowIds={testFlowIds} catalog={catalog} catalogError={catalogError} onClose={() => setTestFlowIds(null)} onCreated={test => { setTests(old => [test, ...old.filter(item => item.id !== test.id)]); setTestFlowIds(null); setTab("tests"); refreshAll(); }} />}
     {endOpen && <McpModal title={c("結束這個 MCP 任務？", "End this MCP task?")} description={c("代理將停止，任務不再接收新流量與測試。現有資料仍可檢視並產生報告。", "The proxy stops accepting traffic and new tests. Existing records remain available for review and reporting.")} onClose={() => !action && setEndOpen(false)}><div className={styles.form}>{activeTests(tests) && <div className={styles.warningNote}>{c("仍有 Agent 測試進行中；後端會處理任務結束時的執行狀態。", "Agent tests are still active; the server will handle their state when ending the task.")}</div>}{actionError && <McpError>{actionError}</McpError>}<div className={styles.formActions}><button className={styles.secondaryButton} disabled={Boolean(action)} onClick={() => setEndOpen(false)}>{c("繼續工作", "Keep working")}</button><button className={styles.primaryButton} disabled={Boolean(action)} onClick={() => void transition("end")}>{action ? c("結束中…", "Ending…") : c("結束任務", "End task")}</button></div></div></McpModal>}
   </>;
-}
-
-function ConnectionPanel({ task }: { task: McpTask }) {
-  const c = useMcpCopy();
-  const session = task.session;
-  const host = session?.proxy_host || "127.0.0.1";
-  const port = session?.proxy_port;
-  const bindHost = (session?.proxy_bind_host || host).replace(/^\[|\]$/g, "").toLowerCase();
-  const loopback = bindHost === "localhost" || bindHost === "::1" || /^127\./.test(bindHost);
-  const displayHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-  const tunnelHost = bindHost.includes(":") ? `[${bindHost}]` : bindHost;
-  return <section className={styles.connectionPanel}><div><h3>{c("瀏覽器代理", "Browser proxy")}</h3><p>{c("在瀏覽器的 HTTP 與 HTTPS 代理設定填入下列位址。瀏覽目標網站後，流量會出現在這個任務。", "Use this address for your browser's HTTP and HTTPS proxy. Browsing your target will add traffic to this task.")}</p><code className={styles.proxyAddress}>{port ? `${displayHost}:${port}` : c("啟動後顯示位址", "Address available after start")}</code>
-    {port && loopback && <><small>{c("此代理只監聽主機本機位址。若瀏覽器在另一台電腦，請先建立 SSH 通道，再使用 127.0.0.1 與上述連接埠。", "This proxy listens on the server's loopback address. From another computer, create an SSH tunnel and use 127.0.0.1 with the port above.")}</small><code className={styles.tunnelCommand}>{`ssh -N -L ${port}:${tunnelHost}:${port} user@server`}</code></>}
-    {port && !loopback && <small>{c("此代理允許從其他電腦連入。請確認主機防火牆允許你的測試電腦存取上述連接埠。", "This proxy accepts connections from other computers. Allow your testing computer to reach this port through the host firewall.")}</small>}
-    {session?.proxy_auth_required && <div className={styles.formNote}>{c("瀏覽器連線時會要求代理帳號與密碼。請使用主機設定的 STRIXOPS_MCP_PROXY_AUTH 帳密；這與工作台的 MCP Token 分開。", "Your browser will request a proxy username and password. Use the host's STRIXOPS_MCP_PROXY_AUTH credentials; these are separate from the workbench's MCP token.")}</div>}
-  </div><div><SharedCaPanel task={task} /></div></section>;
 }
 
 function TrafficWorkspace({ task, live, active, endpoints, refresh, selectedId, onSelect, onTest, onRefresh, onTests }: { task: McpTask; live: boolean; active: boolean; endpoints: McpEndpoint[]; refresh: number; selectedId: string | null; onSelect: (id: string | null) => void; onTest: (ids: string[]) => void; onRefresh: () => void; onTests: () => void }) {
