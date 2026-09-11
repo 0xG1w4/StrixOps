@@ -33,6 +33,7 @@ import ConversationView from "@/components/ConversationView";
 import FindingsPanel from "@/components/FindingsPanel";
 import HintsPanel from "@/components/HintsPanel";
 import ProxyStatusPanel from "@/components/ProxyStatusPanel";
+import WebSearchDiagnostics from "@/components/WebSearchDiagnostics";
 import ReportPanel from "@/components/ReportPanel";
 import RerunDialog from "@/components/RerunDialog";
 import RunTargetList from "@/components/RunTargetList";
@@ -671,6 +672,7 @@ function Cockpit() {
       </div>
 
       <ProxyStatusPanel key={name} runName={name} live={live} enabled={run.scan_type === "web" && !run.dry_run} />
+      <WebSearchDiagnostics key={`search-${name}`} runName={name} live={live} />
 
       {/* ============================ console ============================ */}
       <section

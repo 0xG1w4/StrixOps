@@ -4,7 +4,7 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.1.4** · [版本说明](docs/v1.1.4.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.1.5** · [版本说明](docs/v1.1.5.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -67,7 +67,7 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 通过控制台 IP 打开 MCP 即可自动初始化，沿用控制台部署的访问边界。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 与代理配置仍保留为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.1.4 版本说明](docs/v1.1.4.md)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.1.5 版本说明](docs/v1.1.5.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -134,7 +134,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.1.4 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.1.5 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -156,7 +156,7 @@ uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 
 请像示例一样使用**绝对运行目录路径**。控制台使用自身的工作目录启动引擎进程；相对运行路径在控制台和引擎中可能解析为不同位置，wheel 安装方式尤其需要注意。
 
-上面的克隆命令选择 `v1.1.4` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.1.4`。
+上面的克隆命令选择 `v1.1.5` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.1.5`。
 
 安装完成后，再次启动只需执行：
 
@@ -177,11 +177,11 @@ curl --fail http://127.0.0.1:8300/api/health
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.1.4-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.1.5-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.1.4-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.1.5-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -406,7 +406,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.1.4` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.1.5` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 
@@ -430,9 +430,14 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 | `STRIX_OPERATOR_HINTS_DIR` | 可选的提示目录；控制台启动时会提供本次运行专属的路径 |
 | `STRIXOPS_REPORT_LANG` | `zh-CN`；CLI `--report-language` 优先 |
 | `STRIXOPS_REPORT_SYNTHESIS` | 默认启用；设为 `0` 可禁用模型辅助的最终报告合成 |
-| `PERPLEXITY_API_KEY` | 可选的网络搜索集成；可在控制台“设置 → 集成”中保存 |
+| `PERPLEXITY_API_KEY` | 可选的网络搜索密钥；可在控制台“设置 → 集成”中保存 |
+| `PERPLEXITY_ENABLED` | 搜索开关；默认 true，仍需密钥才能使用 |
+| `PERPLEXITY_MODEL` | `sonar`（默认）或 `sonar-reasoning-pro` |
+| `PERPLEXITY_TIMEOUT_SECONDS` | 搜索超时 10–300 秒；按模型默认 30 / 300 秒 |
 
 CLI 读取环境变量，不会自动读取项目中的 `.env` 文件。控制台在服务端保存模型配置，在 API 返回值中掩码显示密钥；设置文件以 `0600` 权限保存。掩码显示不等于静态加密存储。
+
+Perplexity 设置、连接测试、任务用量及搜索不可用时的继续执行行为见[网络搜索指南](docs/web-search.md)。
 
 ### 智能体与上下文限制
 

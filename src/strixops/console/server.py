@@ -33,9 +33,11 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, model_validator
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import MalformedRangeHeader, RangeNotSatisfiable, Response
@@ -56,6 +58,7 @@ from strixops.console import (
     prompt_probe,
     proxy_status,
     settings_store,
+    web_search_settings,
 )
 from strixops.engine.targets import MAX_TARGETS, normalize_targets
 from strixops.platform.runname import generate_run_name
@@ -354,6 +357,15 @@ def run_proxy_status(name: str) -> dict:
         live=summary["live"],
         enabled=summary.get("scan_type") == "web" and not summary.get("dry_run", False),
     )
+
+
+@app.get("/api/runs/{name}/web-search")
+def run_web_search_status(name: str, response: Response) -> dict:
+    run_dir = state.run_dir(name)
+    if not run_dir.resolve().is_relative_to(state.runs_root.resolve()):
+        raise HTTPException(status_code=404, detail="unknown run")
+    response.headers["Cache-Control"] = "no-store"
+    return web_search_settings.read_stats(run_dir)
 
 
 @app.get("/api/runs/{name}/events")
@@ -1055,36 +1067,79 @@ def activate_profile(body: dict) -> dict:
 # --------------------------------------------------------------- integrations
 
 
+@app.exception_handler(RequestValidationError)
+async def safe_integration_validation(request: Request, exc: RequestValidationError) -> Response:
+    # Pydantic's normal validation output includes the rejected input, which
+    # can contain a key even when an invalid outer body never reaches a route.
+    route_path = getattr(request.scope.get("route"), "path", request.url.path)
+    if (request.method, route_path.rstrip("/")) in {
+        ("PUT", "/api/settings/integrations"),
+        ("POST", "/api/settings/integrations/test"),
+    }:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid integration settings"},
+            headers={"Cache-Control": "no-store"},
+        )
+    return await request_validation_exception_handler(request, exc)
+
+
 class IntegrationBody(BaseModel):
-    perplexity_api_key: str = ""
+    # Validate key values in the endpoint so validation responses never echo
+    # submitted credentials, including malformed ones.
+    perplexity_api_key: Any = None
+    perplexity_enabled: StrictBool | None = None
+    perplexity_model: Literal["sonar", "sonar-reasoning-pro"] | None = None
+    perplexity_timeout_seconds: float | None = Field(
+        default=None, ge=10, le=300, allow_inf_nan=False, strict=True
+    )
+
+
+class IntegrationProbeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 @app.get("/api/settings/integrations")
-def get_integrations() -> dict:
-    data = settings_store.load_settings()
-    key = str(data.get("integrations", {}).get("perplexity_api_key") or "")
-    return {
-        "perplexity_api_key_set": bool(key),
-        "perplexity_api_key_masked": settings_store.mask_key(key) if key else "",
-    }
+def get_integrations(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return web_search_settings.public_settings()
 
 
 @app.put("/api/settings/integrations")
-def set_integrations(body: IntegrationBody) -> dict:
+def set_integrations(body: IntegrationBody, response: Response) -> dict:
     data = settings_store.load_settings()
-    new_key = body.perplexity_api_key.strip()
-    # masked value or empty = keep current
-    current = str(data.get("integrations", {}).get("perplexity_api_key") or "")
-    if settings_store.is_masked(new_key) or (not new_key and current):
-        new_key = current
-    data.setdefault("integrations", {})
-    data["integrations"]["perplexity_api_key"] = new_key
+    integrations = data.setdefault("integrations", {})
+    raw_key = body.perplexity_api_key
+    if raw_key is not None:
+        if not isinstance(raw_key, str) or len(raw_key) > 8192:
+            raise HTTPException(status_code=422, detail="invalid Perplexity API key")
+        new_key = raw_key.strip()
+        if any(ord(char) < 32 or ord(char) == 127 for char in new_key):
+            raise HTTPException(status_code=422, detail="invalid Perplexity API key")
+        # Blank/masked keeps the stored key; an environment key is never copied
+        # into the settings file as a side effect of changing another setting.
+        if new_key and not settings_store.is_masked(new_key):
+            integrations["perplexity_api_key"] = new_key
+    for field in ("perplexity_enabled", "perplexity_model", "perplexity_timeout_seconds"):
+        value = getattr(body, field)
+        if value is not None:
+            integrations[field] = value
     settings_store.save_settings(data)
-    return {
-        "ok": True,
-        "perplexity_api_key_set": bool(new_key),
-        "perplexity_api_key_masked": settings_store.mask_key(new_key) if new_key else "",
-    }
+    response.headers["Cache-Control"] = "no-store"
+    return {"ok": True, **web_search_settings.public_settings(data)}
+
+
+@app.post("/api/settings/integrations/test")
+async def test_integrations(body: IntegrationProbeBody, response: Response) -> dict:
+    from strixops.tools.web_search_runtime import search
+
+    settings, _ = web_search_settings.effective_settings()
+    try:
+        result = await search(web_search_settings.TEST_QUERY, settings)
+    except Exception:
+        result = {"success": False, "status": "error", "code": "service_error"}
+    response.headers["Cache-Control"] = "no-store"
+    return web_search_settings.test_diagnostic(result, settings.model)
 
 
 # -------------------------------------------------------------------- launch
@@ -1307,12 +1362,7 @@ def launch_scan(body: ScanBody) -> dict:
     env["STRIXOPS_RUN_NAME"] = run_name
     env["STRIXOPS_REPORT_LANG"] = "en" if str(body.language).strip().lower().startswith("en") else "zh-CN"
 
-    # Inject the Perplexity key from Settings→Integrations (server-side store)
-    # so web_search works without the operator manually setting env.
-    integrations = settings_store.load_settings().get("integrations", {})
-    perplexity_key = str(integrations.get("perplexity_api_key") or "")
-    if perplexity_key:
-        env["PERPLEXITY_API_KEY"] = perplexity_key
+    env.update(web_search_settings.launch_environment())
     env.pop("STRIXOPS_DRY_RUN", None)
     if llm_env:
         env["LLM_API_BASE"] = llm_env["llm_api_base"]

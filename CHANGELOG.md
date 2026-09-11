@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.5 — 2026-09-11
+
+- Guide Web/Internal Agents to use current public research when useful and to
+  continue with other tools when optional search is unavailable.
+- Add Perplexity enable/model/timeout settings and a saved-settings connection
+  test, preserving existing saved keys and automatic Console configuration.
+- Bound async search retries and timeouts, share permanent-failure state within
+  each run, preserve citations and reject empty or truncated answers.
+- Show safe per-run search diagnostics and available provider-reported usage,
+  with unknown or partial totals labeled explicitly.
+
+Upgrade and behavior: [v1.1.5 release notes](docs/v1.1.5.md).
+
 ## 1.1.4 — 2026-09-11
 
 - Supply bounded selected-request evidence and a skill catalog in the first MCP

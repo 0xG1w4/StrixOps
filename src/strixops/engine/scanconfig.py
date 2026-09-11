@@ -140,6 +140,7 @@ class EngineServices:
     root_input: str = ""
     session_for: Callable[[str], Session] | None = None
     context_settings: ContextSettings | None = None
+    web_search_state: object | None = None  # shared optional-search circuit and usage diagnostics
 
 
 @dataclass(frozen=True)

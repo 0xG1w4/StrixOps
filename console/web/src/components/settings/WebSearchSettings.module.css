@@ -22,7 +22,7 @@
   background: currentColor;
 }
 
-.status[data-state="configured"] { color: var(--signal-success); }
+.status[data-state="success"] { color: var(--signal-success); }
 .status[data-state="error"] { color: var(--signal-warning); }
 
 .body {
@@ -69,6 +69,22 @@
 
 .providerHint { margin-top: 4px; }
 .form { min-width: 0; }
+.enableRow { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 20px; color: var(--signal-strong); font-size: 13px; }
+.enableRow input { width: 32px; height: 18px; accent-color: var(--signal-accent); cursor: pointer; }
+.options { display: grid; grid-template-columns: minmax(0, 2fr) minmax(100px, 1fr); gap: 14px; margin-top: 20px; }
+.options label { min-width: 0; }
+.options select, .options input { width: 100%; min-width: 0; height: 42px; font-size: 12px; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.actions .hint { margin-top: 0; flex: 1 1 220px; }
+.testArea { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--signal-line); }
+.testAction { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.testButton { min-height: 40px; white-space: nowrap; }
+.testAction small { flex: 1 1 190px; color: var(--signal-muted); font-size: 11px; line-height: 1.7; }
+.testResult { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; margin-top: 14px; padding: 10px 12px; border-left: 2px solid var(--signal-warning); background: var(--signal-raised); font-size: 12px; }
+.testResult strong { color: var(--signal-warning); font-weight: 500; }
+.testResult span { color: var(--signal-muted); font-size: 11px; }
+.testResult[data-success="true"] { border-left-color: var(--signal-success); }
+.testResult[data-success="true"] strong { color: var(--signal-success); }
 
 .controls {
   display: grid;
@@ -159,6 +175,8 @@
 @media (max-width: 480px) {
   .body { padding: 16px 14px; gap: 18px; }
   .controls { grid-template-columns: minmax(0, 1fr); }
+  .options { grid-template-columns: minmax(0, 1fr); }
+  .options select, .options input { font-size: 16px; }
   .panel .save { width: 100%; }
   .panel .keyInput { font-size: 16px; }
 }

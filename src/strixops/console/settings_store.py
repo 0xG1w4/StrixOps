@@ -62,7 +62,14 @@ def load_settings() -> dict[str, Any]:
         "active_profile_id": active,
         "profiles": [p for p in profiles if isinstance(p, dict)],
         "integrations": {
-            "perplexity_api_key": str(integrations.get("perplexity_api_key") or ""),
+            "perplexity_api_key": integrations.get("perplexity_api_key") or "",
+            # Keep absence distinct from an explicit override: old files use
+            # environment/default settings without a read-time migration write.
+            **{
+                name: integrations[name]
+                for name in ("perplexity_enabled", "perplexity_model", "perplexity_timeout_seconds")
+                if name in integrations
+            },
         },
     }
 
