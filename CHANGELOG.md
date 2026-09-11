@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.7 — 2026-09-11
+
+- Add persistent task-owned notes shared by Web/Internal root and child Agents,
+  with five familiar note tools and no cross-task mutable notebook state.
+- Protect replacements and deletions with revision checks, support atomic
+  append, and retain bounded revision history and soft-deleted records.
+- Preserve damaged notebook files and return truthful nonfatal storage errors;
+  keep task cancellation and existing prompt snapshots intact.
+- Guide selective note reuse and show a read-only Notes tab with paginated
+  search, filters, full content, lazy history and visible refresh.
+
+Upgrade and behavior: [v1.1.7 release notes](docs/v1.1.7.md).
+Operation and limits: [shared notes guide](docs/shared-notes.md).
+
 ## 1.1.6 — 2026-09-11
 
 - Include the new sandbox environment prompt in Web/Internal root and child

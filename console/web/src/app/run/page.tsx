@@ -32,6 +32,7 @@ import EvidencePanel from "@/components/EvidencePanel";
 import ConversationView from "@/components/ConversationView";
 import FindingsPanel from "@/components/FindingsPanel";
 import HintsPanel from "@/components/HintsPanel";
+import NotesPanel from "@/components/NotesPanel";
 import ProxyStatusPanel from "@/components/ProxyStatusPanel";
 import WebSearchDiagnostics from "@/components/WebSearchDiagnostics";
 import ReportPanel from "@/components/ReportPanel";
@@ -59,7 +60,7 @@ const TERMINAL_STATUSES = new Set([
   "crashed",
 ]);
 
-type TabKey = "conversation" | "agents" | "findings" | "evidence" | "assessment" | "report" | "hints" | "artifacts";
+type TabKey = "conversation" | "agents" | "findings" | "evidence" | "assessment" | "notes" | "report" | "hints" | "artifacts";
 
 const FAILED_STATUSES = new Set(["failed", "crashed"]);
 
@@ -170,6 +171,7 @@ const TAB_KEYS: readonly TabKey[] = [
   "findings",
   "evidence",
   "assessment",
+  "notes",
   "report",
   "hints",
   "artifacts",
@@ -388,6 +390,7 @@ function Cockpit() {
     { key: "findings", label: t("run.tab.findings"), count: findingsTotal },
     { key: "evidence", label: t("run.tab.evidence") },
     { key: "assessment", label: locale === "en" ? "Assessment" : "评估" },
+    { key: "notes", label: t("run.tab.notes") },
     { key: "report", label: t("run.tab.report") },
     { key: "hints", label: t("run.tab.hints"), count: hintsTotal },
     { key: "artifacts", label: t("run.tab.artifacts") },
@@ -417,6 +420,8 @@ function Cockpit() {
         return <EvidencePanel name={name} run={run} />;
       case "assessment":
         return <AssessmentPanel key={name} name={name} run={run} />;
+      case "notes":
+        return <NotesPanel key={name} runName={name} live={live} />;
       case "report":
         return <ReportPanel name={name} run={run} />;
       case "hints":

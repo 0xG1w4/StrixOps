@@ -235,7 +235,7 @@ function EnginePanel({ stats }: { stats: EngineStats }) {
       <div className="engine-panel-meta">
         <span>{stats.liveRuns.toString().padStart(2, "0")} LIVE</span>
         <span>{stats.totalRuns.toString().padStart(2, "0")} RUNS</span>
-        <span>v1.1.6</span>
+        <span>v1.1.7</span>
       </div>
     </div>
   );

@@ -29,10 +29,10 @@ import weakref
 import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +49,7 @@ from strixops.config.model_options import resolved_api_mode, validate_model_opti
 from strixops.console import (
     model_catalog,
     model_probe,
+    notes,
     parser,
     project_assignment,
     project_reports,
@@ -404,6 +405,51 @@ def run_conversation(name: str, after: int = -1) -> dict:
 @app.get("/api/runs/{name}/findings")
 def run_findings(name: str) -> dict:
     return parser.parse_findings(state.run_dir(name))
+
+
+def _notes_run_directory(name: str) -> Path:
+    try:
+        run_dir = state.run_dir(name)
+        if not run_dir.resolve().is_relative_to(state.runs_root.resolve()):
+            raise ValueError
+    except (HTTPException, OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=404, detail="unknown run", headers={"Cache-Control": "no-store"}
+        ) from exc
+    return run_dir
+
+
+@app.get("/api/runs/{name}/notes")
+def run_notes(
+    name: str,
+    category: str | None = None,
+    tags: Annotated[list[str] | None, Query(max_length=20)] = None,
+    search: Annotated[str | None, Query(max_length=500)] = None,
+    author: Annotated[str | None, Query(max_length=200)] = None,
+    include_deleted: bool = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Response:
+    payload, status = notes.list_response(
+        _notes_run_directory(name),
+        _open_run_file,
+        category=category,
+        tags=tags,
+        search=search,
+        author=author,
+        include_deleted=include_deleted,
+        limit=limit,
+        offset=offset,
+    )
+    return JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/runs/{name}/notes/{note_id}")
+def run_note(name: str, note_id: str, include_history: bool = False) -> Response:
+    payload, status = notes.detail_response(
+        _notes_run_directory(name), _open_run_file, note_id, include_history=include_history
+    )
+    return JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
 
 
 def _valid_assessment_document(data: Any) -> bool:
@@ -1081,7 +1127,12 @@ async def safe_integration_validation(request: Request, exc: RequestValidationEr
             content={"detail": "invalid integration settings"},
             headers={"Cache-Control": "no-store"},
         )
-    return await request_validation_exception_handler(request, exc)
+    response = await request_validation_exception_handler(request, exc)
+    if request.method == "GET" and route_path.rstrip("/") in {
+        "/api/runs/{name}/notes", "/api/runs/{name}/notes/{note_id}"
+    }:
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 class IntegrationBody(BaseModel):

@@ -28,6 +28,7 @@ from strixops.platform.events import EventWriter
 from strixops.report.assessment import AssessmentState
 from strixops.report.assessment import summary as assessment_summary
 from strixops.report.evidence import collect_files, finding_references
+from strixops.report.notes import NotesStore
 
 RUNNING = "running"
 COMPLETED = "completed"
@@ -100,6 +101,7 @@ class RunState:
         self.run_dir = Path(run_dir)
         self.events = events
         self._lock = threading.RLock()
+        self._notes = NotesStore(self.run_dir, self._lock)
         self.assessment = AssessmentState(self.save, self._lock)
         self.reports: list[dict[str, Any]] = []
         self.internal_findings: list[dict[str, Any]] = []
@@ -111,6 +113,11 @@ class RunState:
         self._start_monotonic = time.monotonic()
         self._completed_emitted = False
         self._final_fields: dict[str, Any] | None = None
+
+    @property
+    def notes(self) -> NotesStore:
+        """One lazy note store shared by this run's root and children."""
+        return self._notes
 
     # -- lifecycle ---------------------------------------------------------
 

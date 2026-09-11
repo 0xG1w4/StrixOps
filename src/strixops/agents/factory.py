@@ -38,6 +38,7 @@ from strixops.tools.collaboration import (
 )
 from strixops.tools.internal_campaign import get_internal_campaign, record_internal_event
 from strixops.tools.lifecycle import agent_finish, finish_scan
+from strixops.tools.notes import create_note, delete_note, get_note, list_notes, update_note
 from strixops.tools.output_store import bound_and_store
 from strixops.tools.proxy import proxy_tools
 from strixops.tools.reporting import (
@@ -88,6 +89,11 @@ def base_tools() -> list[Any]:
         think,
         create_todo,
         update_todo,
+        create_note,
+        list_notes,
+        get_note,
+        update_note,
+        delete_note,
         load_skill,
         list_skills,
         record_coverage,
