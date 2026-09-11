@@ -47,6 +47,7 @@ const DEFAULT_PAGE_SIZE = 50;
 
 /** Display status: an operator Stop (failed/"interrupted") shows as stopped. */
 function pillStatusOf(run: RunSummary): string {
+  if (run.queue?.status === "waiting_capacity") return "waiting_capacity";
   if (run.live) return "live";
   const status = (run.status || "unknown").toLowerCase();
   if (status === "failed" && (run.failure_reason || "").toLowerCase() === "interrupted") {
@@ -412,6 +413,7 @@ export default function DashboardPage() {
             )}
             <span>{t("dashboard.sync")}</span>
           </button>
+          <Link href="/batches" className="button-secondary button-compact">{t("nav.batches")}</Link>
           <Link href="/scan" className="button-primary button-compact">
             <Plus className="h-3.5 w-3.5" strokeWidth={2} />
             {t("dashboard.newScan")}

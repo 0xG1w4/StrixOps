@@ -180,3 +180,14 @@
 @media (prefers-reduced-motion: reduce) {
   .page *, .page *::before, .page *::after { transition: none !important; }
 }
+
+.batchOptions { display: grid; grid-template-columns: minmax(0, 2fr) minmax(150px, 1fr); gap: 13px; margin-bottom: 20px; }
+.batchOptions label { min-width: 0; }
+.batchOptions label > span { display: block; margin-bottom: 7px; color: var(--signal-muted); font-size: 11px; }
+.batchOptions input { width: 100%; min-width: 0; }
+.batchOptions p { grid-column: 1 / -1; margin: 0; color: var(--signal-muted); font-size: 11px; line-height: 1.8; }
+.batchOptions a, .batchImport a { color: var(--signal-accent); }
+.batchImport { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 12px 15px; border: 1px solid var(--signal-line); border-left: 2px solid var(--signal-accent); background: var(--signal-surface); color: var(--signal-text); font-size: 12px; line-height: 1.7; }
+.batchImport span { min-width: 0; overflow-wrap: anywhere; }
+.batchImport small { display: block; color: var(--signal-muted); font-size: 11px; }
+@media (max-width: 480px) { .batchOptions { grid-template-columns: minmax(0, 1fr); } }

@@ -16,6 +16,7 @@ import contextlib
 import logging
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ class SandboxBundle:
     caido: Any = None  # CaidoBootstrapHandle (or ready CaidoClient)
     _container_id: str = ""
     _owner_token: str = ""
+    _daemon_id: str = ""
     quiescence: dict[str, Any] = field(default_factory=dict, init=False)
     cleanup: dict[str, Any] = field(default_factory=dict, init=False)
     _quiesce_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
@@ -130,6 +132,9 @@ class SandboxBundle:
         await _join_cleanup(self._quiesce_task)
 
     async def _teardown(self, diagnostics_dir: Path | str | None) -> None:
+        if self.session is None and self.cleanup.get("verified") and self.cleanup.get("status") == "removed":
+            # Initialization conclusively finished before any container existed.
+            return
         self.cleanup = {"status": "pending", "container_id": self._container_id, "verified": False}
         try:
             # A failed stop must block evidence publication, but must not
@@ -294,6 +299,7 @@ async def create_sandbox_session(
     gsocket_key: str = "",
     host_workspace_dir: str = "",
     use_caido: bool = False,
+    on_created: Callable[[SandboxBundle], None] | None = None,
 ) -> SandboxBundle:
     """Bring up the sandbox container and return the (client, session) bundle."""
     import docker
@@ -326,7 +332,12 @@ async def create_sandbox_session(
         env.update(caido.proxy_environment())
     options = DockerSandboxClientOptions(image=image, exposed_ports=exposed_ports)
     manifest = Manifest(environment=Environment(value=env))
-    bundle = SandboxBundle(client=client, session=None)
+    daemon_id = docker_client.info().get("ID", "") if callable(getattr(docker_client, "info", None)) else ""
+    bundle = SandboxBundle(client=client, session=None, _owner_token=owner_token, _daemon_id=daemon_id)
+    if on_created is not None:
+        # Give the runner a cleanup handle before the SDK can create resources.
+        # It remains available when initialization raises before returning.
+        on_created(bundle)
 
     def capture_container() -> None:
         container = docker_client.containers.created_container
@@ -334,6 +345,8 @@ async def create_sandbox_session(
         if isinstance(container_id, str) and container_id:
             bundle._container_id = container_id
             bundle._owner_token = owner_token
+            if on_created is not None:
+                on_created(bundle)
             if bundle.session is None:
                 # SDK create starts Docker before returning a session. If that
                 # start fails, reconstruct only its cleanup handle; this manifest
@@ -374,6 +387,8 @@ async def create_sandbox_session(
             capture_container()
             if bundle.session is not None:
                 await bundle.teardown()
+            else:
+                bundle.cleanup = {"status": "removed", "verified": True, "container_id": ""}
             raise
         return bundle
 

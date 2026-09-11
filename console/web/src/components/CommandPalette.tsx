@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowUpRight, BarChart3, Crosshair, FileSearch, FolderOpen, LibraryBig,
-  LoaderCircle, Radar, Search, SlidersHorizontal, X, type LucideIcon,
+  LoaderCircle, Radar, Search, SlidersHorizontal, Globe2, Layers, X, type LucideIcon,
 } from "lucide-react";
 import { getJSON, getProjects, runTargetLabel, runTargets, type ProjectSummary, type RunSummary, type RunsPage } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -163,6 +163,8 @@ export default function CommandPalette() {
     const pages: Array<{ href: string; key: string; icon: LucideIcon; words: string }> = [
       { href: "/scan", key: "newTask", icon: Crosshair, words: "new create scan launch 新建 创建 扫描 启动" },
       { href: "/projects", key: "nav.projects", icon: FolderOpen, words: "projects 项目" },
+      { href: "/batches", key: "nav.batches", icon: Layers, words: "batch queue 批次 队列" },
+      { href: "/fofa", key: "nav.fofa", icon: Globe2, words: "FOFA asset search 资产 搜索" },
       { href: "/results", key: "nav.results", icon: FileSearch, words: "reports results 报告" },
       { href: "/", key: "nav.runs", icon: Radar, words: "overview dashboard 总览 仪表板" },
       { href: "/insights", key: "nav.insights", icon: BarChart3, words: "insights analytics 洞察 分析" },

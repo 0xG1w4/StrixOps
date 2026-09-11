@@ -27,6 +27,7 @@ const STATUS_TONES: Record<string, Tone> = {
   live: "accent",
   // gold
   waiting: "warning",
+  waiting_capacity: "warning",
   timeout: "warning",
   stopped: "warning",
   interrupted: "warning",
@@ -54,7 +55,7 @@ function statusCode(status: string): string {
   if (["running", "preparing", "live"].includes(key)) return "RUN";
   if (["reporting", "completed"].includes(key)) return "OK";
   if (["failed", "crashed"].includes(key)) return "ERR";
-  if (["waiting", "timeout", "stopped", "interrupted", "stale"].includes(key)) return "WAIT";
+  if (["waiting", "waiting_capacity", "timeout", "stopped", "interrupted", "stale"].includes(key)) return "WAIT";
   if (key === "dispatched") return "DSP";
   return "IDLE";
 }
@@ -271,11 +272,13 @@ export function ConfirmButton({
   label,
   confirmLabel = "Confirm?",
   danger = false,
+  disabled = false,
 }: {
   onConfirm: () => void;
   label: string;
   confirmLabel?: string;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   const [armed, setArmed] = React.useState(false);
 
@@ -288,6 +291,7 @@ export function ConfirmButton({
   return (
     <button
       type="button"
+      disabled={disabled}
       className={cn(
         danger ? "button-danger" : "button-primary",
         armed && "animate-pulse"

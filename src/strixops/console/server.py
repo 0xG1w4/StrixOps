@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import mimetypes
 import os
 import secrets
@@ -30,7 +31,7 @@ import zipfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -64,9 +65,12 @@ from strixops.console import (
     settings_store,
     web_search_settings,
 )
+from strixops.console.batch_launch import ConsoleBatchController
 from strixops.engine.targets import MAX_TARGETS, normalize_targets
 from strixops.platform import hint_store
 from strixops.platform.runname import generate_run_name
+from strixops.queue import QueueError, QueueStore
+from strixops.queue.store import default_queue_path
 
 RUN_SUFFIX_LENGTH = 4  # `<slug>_<4hex>`
 LIVE_GRACE_SECONDS = 300  # events.jsonl quiet longer than this → stale
@@ -101,6 +105,9 @@ class ConsoleState:
 
 
 state: ConsoleState = ConsoleState(_runs_root_from())
+
+_batch_controller: ConsoleBatchController | None = None
+_batch_controller_key: tuple[str, str] | None = None
 
 app = FastAPI(title="StrixOps Console", version=__version__)
 app.add_middleware(
@@ -236,6 +243,8 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
             scan_config.get("model_transport") or launch_meta.get("model_transport") or ""
         ),
         "project_id": _run_project_id(run_dir),
+        **({"batch_id": launch_meta["batch_id"]} if launch_meta.get("batch_id") else {}),
+        **({"source": launch_meta["source"]} if isinstance(launch_meta.get("source"), dict) else {}),
         "status": record.get("status") or "unknown",
         "start_time": record.get("start_time") or "",
         "end_time": record.get("end_time") or "",
@@ -265,6 +274,11 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
     llm_usage = record.get("llm_usage")
     if isinstance(llm_usage, dict):
         summary["llm_usage"] = llm_usage
+    queue = record.get("queue")
+    if isinstance(queue, dict):
+        summary["queue"] = {
+            key: queue[key] for key in ("status", "max_active_targets", "cleanup_complete") if key in queue
+        }
     for key in ("evidence", "workspace", "sandbox_runtime"):
         if isinstance(record.get(key), dict):
             summary[key] = record[key]
@@ -1134,6 +1148,13 @@ async def safe_integration_validation(request: Request, exc: RequestValidationEr
     # Pydantic's normal validation output includes the rejected input, which
     # can contain a key even when an invalid outer body never reaches a route.
     route_path = getattr(request.scope.get("route"), "path", request.url.path)
+    if route_path == "/api/scans" or route_path.startswith(
+        ("/api/fofa", "/api/scan-batches", "/api/scan-queue")
+    ):
+        return JSONResponse(
+            status_code=422, content={"detail": "Invalid request.", "error_code": "invalid_request"},
+            headers={"Cache-Control": "no-store"},
+        )
     if request.method == "POST" and route_path.rstrip("/") == "/api/runs/{name}/hints":
         return JSONResponse(
             status_code=422,
@@ -1235,6 +1256,9 @@ class ScanBody(BaseModel):
     strix_llm: str = ""
     llm_api_mode: str = "chat_completions"
     llm_reasoning_effort: str = "default"
+    name: str = Field(default="", max_length=160)
+    max_concurrent: int = Field(default=2, ge=1, le=16, strict=True)
+    source_draft_id: str = Field(default="", max_length=128)
 
     @model_validator(mode="before")
     @classmethod
@@ -1353,8 +1377,11 @@ def validate_scan_targets(body: TargetsPreflightBody) -> dict:
 
 
 @app.post("/api/scans")
-def launch_scan(body: ScanBody) -> dict:
+def launch_scan(body: ScanBody, request: Request) -> dict:
+    _console_origin(request)
     targets = _requested_targets(body)
+    if len(targets) > 1:
+        return _create_scan_batch(body)
     primary_target = targets[0]
     project = _validated_launch_project(body)
     llm_env: dict[str, str] = {}
@@ -1365,6 +1392,7 @@ def launch_scan(body: ScanBody) -> dict:
         )
         if errors:
             raise HTTPException(status_code=400, detail="; ".join(errors))
+    sources = _fofa_sources(body.source_draft_id, targets)
     run_name = generate_run_name(primary_target, body.scan_type)
     if (state.runs_root / run_name).exists():  # ensure unique
         run_name = f"{run_name[:-RUN_SUFFIX_LENGTH]}{secrets.token_hex(2)}"
@@ -1405,6 +1433,7 @@ def launch_scan(body: ScanBody) -> dict:
                 "project_scope_snapshot": projects_store.scope_for_project(project)
                 if project is not None
                 else None,
+                **({"source": sources[primary_target]} if primary_target in sources else {}),
             }
         ),
         encoding="utf-8",
@@ -1430,6 +1459,9 @@ def launch_scan(body: ScanBody) -> dict:
         argv.append("--dry-run")
 
     env = os.environ.copy()
+    for name in ("STRIXOPS_QUEUE_ITEM_ID", "STRIXOPS_QUEUE_ITEM_TOKEN"):
+        env.pop(name, None)
+    env["STRIXOPS_QUEUE_DB"] = str(_queue_controller().store.path)
     env["STRIX_RUNS"] = str(state.runs_root)
     env["STRIX_OPERATOR_HINTS_DIR"] = str(run_dir / "operator_hints")
     env["STRIXOPS_RUN_NAME"] = run_name
@@ -1486,6 +1518,167 @@ def list_scans() -> dict:
             }
         )
     return {"scans": scans}
+
+
+# ---------------------------------------------------------- independent batches
+
+
+def _queue_controller() -> ConsoleBatchController:
+    global _batch_controller, _batch_controller_key
+    path = default_queue_path()
+    key = (str(state.runs_root.resolve()), str(path))
+    if _batch_controller is None or key != _batch_controller_key:
+        def register(item: dict, process: Any) -> None:
+            state.scans[f"batch:{item['id']}"] = {
+                "pid": process.pid, "popen": process, "run_name": item["run_name"],
+                "target": item["target"], "targets": [item["target"]], "target_count": 1,
+            }
+
+        _batch_controller = ConsoleBatchController(QueueStore(path), state.runs_root, register)
+        _batch_controller_key = key
+    return _batch_controller
+
+
+def _console_origin(request: Request) -> None:
+    """Apply the Console origin boundary to credential and queue operations."""
+    origin = request.headers.get("origin")
+    if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
+        raise HTTPException(status_code=403, detail="Use this Console's own page for this operation.")
+    if origin:
+        try:
+            source, destination = urlsplit(origin), urlsplit(str(request.base_url))
+
+            def identity(url):
+                return (url.scheme, url.hostname, url.port or (443 if url.scheme == "https" else 80))
+
+            if source.username or source.password or identity(source) != identity(destination):
+                raise ValueError
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=403, detail="The request origin does not match this Console.",
+            ) from exc
+
+
+def _fofa_sources(draft_id: str, targets: list[str]) -> dict[str, dict]:
+    if not draft_id:
+        return {}
+    from strixops.fofa.errors import FofaError
+    from strixops.fofa.service import read_draft
+
+    try:
+        draft = read_draft(draft_id)
+    except FofaError as exc:
+        raise HTTPException(status_code=400, detail="The FOFA target draft is unavailable.") from exc
+    selected = set(targets)
+    return {
+        row["target"]: row["source"] for row in draft["targets"]
+        if row["target"] in selected
+    }
+
+
+def _create_scan_batch(body: ScanBody) -> dict:
+    targets = _requested_targets(body)
+    _validated_launch_project(body)
+    llm = {} if body.dry_run else _resolve_llm_env(body)
+    if llm:
+        errors = validate_model_options(llm["strix_llm"], llm["llm_api_mode"], llm["llm_reasoning_effort"])
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+    sources = _fofa_sources(body.source_draft_id, targets)
+    try:
+        batch = _queue_controller().create(
+            body.model_dump(), targets=targets, llm_env=llm,
+            search_env=web_search_settings.launch_environment(), sources=sources,
+        )
+    except QueueError as exc:
+        raise _queue_http_error(exc) from exc
+    return {"ok": True, "kind": "batch", "batch_id": batch["id"], "target_count": len(targets)}
+
+
+def _queue_http_error(error: QueueError) -> HTTPException:
+    code = getattr(error, "code", "queue_error")
+    return HTTPException(status_code=404 if code in {"not_found", "queue_not_found"} else 409,
+                         detail={"error_code": code, "message": str(error)})
+
+
+@app.post("/api/scan-batches")
+def create_scan_batch(body: ScanBody, request: Request, response: Response) -> dict:
+    _console_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return _create_scan_batch(body)
+
+
+@app.get("/api/scan-batches")
+def scan_batches(request: Request, response: Response, limit: int = Query(default=50, ge=1, le=100),
+                 offset: int = Query(default=0, ge=0)) -> dict:
+    _console_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    controller = _queue_controller()
+    return controller.store.list_batches(limit=limit, offset=offset, owner=controller.owner)
+
+
+@app.get("/api/scan-batches/{batch_id}")
+def scan_batch(batch_id: str, request: Request, response: Response) -> dict:
+    _console_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        controller = _queue_controller()
+        return controller.store.get_batch(batch_id, owner=controller.owner)
+    except QueueError as exc:
+        raise _queue_http_error(exc) from exc
+
+
+@app.post("/api/scan-batches/{batch_id}/cancel")
+def cancel_scan_batch(batch_id: str, request: Request) -> dict:
+    _console_origin(request)
+    try:
+        controller = _queue_controller()
+        return controller.store.cancel_batch(batch_id, owner=controller.owner)
+    except QueueError as exc:
+        raise _queue_http_error(exc) from exc
+
+
+@app.post("/api/scan-batches/{batch_id}/items/{item_id}/cancel")
+def cancel_batch_item(batch_id: str, item_id: str, request: Request) -> dict:
+    _console_origin(request)
+    try:
+        controller = _queue_controller()
+        return controller.store.cancel_item(batch_id, item_id, owner=controller.owner)
+    except QueueError as exc:
+        raise _queue_http_error(exc) from exc
+
+
+@app.delete("/api/scan-batches/{batch_id}")
+def delete_scan_batch(batch_id: str, request: Request) -> dict:
+    _console_origin(request)
+    try:
+        controller = _queue_controller()
+        reference = controller.store.delete_batch(batch_id, owner=controller.owner)
+        controller.snapshots.delete(reference)
+        return {"ok": True}
+    except QueueError as exc:
+        raise _queue_http_error(exc) from exc
+
+
+class QueueSettingsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_active_targets: int = Field(ge=1, le=16, strict=True)
+
+
+@app.get("/api/scan-queue/settings")
+def scan_queue_settings(request: Request, response: Response) -> dict:
+    _console_origin(request)
+    response.headers["Cache-Control"] = "no-store"
+    return _queue_controller().store.settings()
+
+
+@app.put("/api/scan-queue/settings")
+def update_scan_queue_settings(body: QueueSettingsBody, request: Request) -> dict:
+    _console_origin(request)
+    try:
+        return _queue_controller().store.update_settings(body.max_active_targets)
+    except QueueError as exc:
+        raise _queue_http_error(exc) from exc
 
 
 # ---------------------------------------------------------------- projects
@@ -2026,6 +2219,47 @@ def run_evidence_file(name: str, file_path: str, request: Request) -> Response:
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="evidence file not found") from exc
     return _file_stream(fd, "application/octet-stream", request)
+
+
+def _install_discovery_and_queue() -> None:
+    from strixops.fofa.api import install as install_fofa
+
+    install_fofa(app)
+    prior = app.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def lifespan(application):
+        async with prior(application):
+            stop = asyncio.Event()
+
+            async def service() -> None:
+                reported = False
+                while not stop.is_set():
+                    try:
+                        await asyncio.to_thread(_queue_controller().scheduler.tick)
+                        reported = False
+                    except Exception as exc:
+                        if not reported:
+                            logging.getLogger(__name__).warning(
+                                "Task queue unavailable (%s)", type(exc).__name__,
+                            )
+                        reported = True
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(stop.wait(), timeout=1.0)
+
+            worker = asyncio.create_task(service(), name="console-target-queue")
+            try:
+                yield
+            finally:
+                # Running child processes retain their persistent leases. Only
+                # stop dispatch here; the next Console resumes queue management.
+                stop.set()
+                await asyncio.shield(worker)
+
+    app.router.lifespan_context = lifespan
+
+
+_install_discovery_and_queue()
 
 
 # ----------------------------------------------------------------- static UI

@@ -347,6 +347,7 @@ function Cockpit() {
   const statusLower = status.toLowerCase();
   const terminal = !live && TERMINAL_STATUSES.has(statusLower);
   const stale = Boolean(run.stale);
+  const waitingCapacity = run.queue?.status === "waiting_capacity";
   const findingsTotal = (run.vulnerability_count ?? 0) + (run.internal_finding_count ?? 0);
   const hintsTotal = run.hints_summary?.total ?? 0;
 
@@ -361,7 +362,9 @@ function Cockpit() {
     return translated === key ? value : translated;
   };
 
-  const statusLine = live
+  const statusLine = waitingCapacity
+    ? t("run.summary.waitingCapacity")
+    : live
     ? t("run.summary.live")
     : status === "completed"
       ? t("run.summary.completed", {
@@ -444,7 +447,7 @@ function Cockpit() {
               </p>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <StatusPill status={live ? "live" : status} label={displayStatus(live ? "live" : status)} live={live} />
+              <StatusPill status={waitingCapacity ? "waiting_capacity" : live ? "live" : status} label={displayStatus(waitingCapacity ? "waiting_capacity" : live ? "live" : status)} live={live && !waitingCapacity} />
               {stale && <StatusPill status="stale" label={displayStatus("stale")} />}
               <Chip tone={run.scan_type === "internal" ? "success" : "accent"}>
                 {t("run.scope", { type: run.scan_type || "web" })}
@@ -473,6 +476,16 @@ function Cockpit() {
                 </span>
               )}
               {run.crypto && <Chip tone="warning">crypto</Chip>}
+              {run.batch_id && (
+                <Link className="mono-chip hover:text-accent" href={`/batches/detail?id=${encodeURIComponent(run.batch_id)}`}>
+                  {locale === "zh-CN" ? "批次" : "Batch"} ↗
+                </Link>
+              )}
+              {run.source?.kind === "fofa" && run.source.search_id && (
+                <Link className="mono-chip hover:text-accent" href={`/fofa?search=${encodeURIComponent(run.source.search_id)}`}>
+                  FOFA ↗
+                </Link>
+              )}
               <span className="mono-chip" title={name}>
                 {name}
               </span>

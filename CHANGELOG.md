@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0 — 2026-09-12
+
+- Add a FOFA page with server-side Email/API Key settings, saved searches,
+  sortable and filterable asset tables, exports and target drafts.
+- Run multi-target submissions as persistent batches of independent Web or
+  Internal tasks, each with its own sandbox, context, evidence and report.
+- Add per-batch concurrency and a shared host capacity limit for Console and
+  CLI assessments, with cancellation and restart recovery.
+- Preserve launch settings, prompts, skills and FOFA provenance while checking
+  project scope again at target admission; keep historical reports readable.
+- Add batch progress pages, per-target task/report links and responsive layouts.
+
+Upgrade and behavior: [v1.2.0 release notes](docs/v1.2.0.md).
+
 ## 1.1.10 — 2026-09-12
 
 - Update root and child Agent role guidance and expand the task skill library

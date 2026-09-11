@@ -20,6 +20,8 @@ import { readStorage, removeStorage, LLM_CFG_KEY } from "@/lib/storage";
 import { Chip, ConfirmButton, EmptyState, MicroLabel, Panel, Spinner } from "@/components/ui";
 import { ModelRouteDialog, OPENROUTER_BASE, type ModelRouteDraft as Draft } from "@/components/settings/ModelRouteDialog";
 import { WebSearchSettings } from "@/components/settings/WebSearchSettings";
+import { FofaSettings } from "@/components/settings/FofaSettings";
+import { QueueSettings } from "@/components/settings/QueueSettings";
 import { relTime } from "@/lib/format";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { allowedModelEfforts, modelOptionError, normalizeModelEndpoint, resolveModelApiMode } from "@/lib/model-options";
@@ -315,6 +317,8 @@ export default function SettingsPage() {
 
       {/* ---- integrations (web_search API key) ------------------------------ */}
       <WebSearchSettings />
+      <FofaSettings />
+      <QueueSettings />
 
       {/* ---- engine card -------------------------------------------------- */}
       <Panel code="ENGINE" title={t("settings.engine")} tone="cyan">

@@ -36,6 +36,8 @@ import { Select } from "@/components/Select";
 import { useI18n } from "@/lib/i18n";
 import { INSTRUCTION_KEY, readStorage, writeStorage } from "@/lib/storage";
 import styles from "./scan.module.css";
+import { taskRequest, taskError, TaskApiError, type BatchCreated, type QueueSettings } from "@/lib/task-batches";
+import { fofaError, type FofaDraft } from "@/lib/fofa";
 
 const INSTRUCTION_SOFT_LIMIT = 4000;
 type ScanMode = "web" | "internal";
@@ -89,11 +91,11 @@ const COPY = {
     profileRequired: "选择模型配置后即可启动",
     manageProfiles: "管理模型",
     status: "启动状态",
-    multiTarget: "多目标任务",
+    multiTarget: "批次目标",
     singleTarget: "返回单目标",
     singleMode: "单目标任务",
-    multiLaunch: "启动多目标任务",
-    multiReady: "个目标 · 一次任务 · 一份报告",
+    multiLaunch: "创建独立任务批次",
+    multiReady: "个目标 · 各自独立任务与报告",
     importingTargets: "正在导入目标清单…",
   },
   en: {
@@ -129,11 +131,11 @@ const COPY = {
     profileRequired: "Select a model profile to launch",
     manageProfiles: "Manage models",
     status: "Launch status",
-    multiTarget: "Multi-target task",
+    multiTarget: "Batch targets",
     singleTarget: "Back to single target",
     singleMode: "Single-target task",
-    multiLaunch: "Launch multi-target task",
-    multiReady: "targets · One task · One report",
+    multiLaunch: "Create task batch",
+    multiReady: "targets · Independent tasks and reports",
     importingTargets: "Importing target list…",
   },
 };
@@ -239,12 +241,25 @@ function FieldError({ children }: { children: React.ReactNode }) {
 
 export default function ScanLauncherPage() {
   const router = useRouter();
+  const launchMounted = React.useRef(true);
+  React.useEffect(() => {
+    launchMounted.current = true;
+    return () => { launchMounted.current = false; };
+  }, []);
   const { t, locale } = useI18n();
   const copy = COPY[locale];
   const [mode, setMode] = React.useState<ScanMode>("web");
   const [target, setTarget] = React.useState("");
   const [multiple, setMultiple] = React.useState(false);
   const [targetsText, setTargetsText] = React.useState("");
+  const [batchName, setBatchName] = React.useState("");
+  const [concurrency, setConcurrency] = React.useState("2");
+  const [queueSettings, setQueueSettings] = React.useState<QueueSettings | null>(null);
+  const [sourceDraftId, setSourceDraftId] = React.useState("");
+  const [sourceTargets, setSourceTargets] = React.useState<string[]>([]);
+  const [sourceSearchId, setSourceSearchId] = React.useState("");
+  const [draftLoading, setDraftLoading] = React.useState(false);
+  const [draftError, setDraftError] = React.useState("");
   const [multiRetry, setMultiRetry] = React.useState(0);
   const [importingTargets, setImportingTargets] = React.useState(false);
   const [socks5, setSocks5] = React.useState("");
@@ -272,11 +287,14 @@ export default function ScanLauncherPage() {
   const multiValidation = useMultiTargetCheck({ enabled: multiple, text: targetsText, scanType: mode, projectId, retry: multiRetry });
 
   React.useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
     const saved = readStorage(INSTRUCTION_KEY);
     if (typeof saved === "string" && saved) setInstruction(saved);
     const params = new URLSearchParams(window.location.search);
     const requestedProject = params.get("project_id");
     if (requestedProject) setProjectId(requestedProject);
+    if (params.get("batch") === "1") setMultiple(true);
     const requestedTarget = params.get("target");
     if (requestedTarget) setTarget(requestedTarget);
     const requestedMode = params.get("scan_type");
@@ -289,7 +307,25 @@ export default function ScanLauncherPage() {
         setMultiple(true);
       }
     } catch { /* An invalid optional URL draft does not change the single-target form. */ }
+    const fofaDraft = params.get("fofa_draft");
+    if (fofaDraft) {
+      setDraftLoading(true);
+      taskRequest<FofaDraft>(`/api/fofa/drafts/${encodeURIComponent(fofaDraft)}`, { signal: controller.signal }).then(draft => {
+        if (!active) return;
+        const targets = draft.targets?.map(item => item.target);
+        if (!Array.isArray(targets) || targets.length < 1 || targets.length > MAX_TARGETS
+          || targets.some(value => typeof value !== "string" || value.length > 4096 || /[\r\n]/.test(value))) throw new TaskApiError("invalid_response");
+        setSourceDraftId(draft.draft_id); setSourceTargets(targets); setSourceSearchId(draft.search_id); setMode("web");
+        if (targets.length === 1) { setTarget(targets[0]); setMultiple(false); }
+        else { setTargetsText(targets.join("\n")); setMultiple(true); }
+      }).catch(error => { if (active) setDraftError(fofaError(error, locale === "en")); })
+        .finally(() => { if (active) setDraftLoading(false); });
+    }
+    taskRequest<QueueSettings>("/api/scan-queue/settings", { signal: controller.signal }).then(data => { if (active) setQueueSettings(data); }, () => undefined);
     setHydrated(true);
+    return () => { active = false; controller.abort(); };
+    // URL imports are read once; subsequent target edits belong to this form.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   React.useEffect(() => {
@@ -423,7 +459,11 @@ export default function ScanLauncherPage() {
       : scopeState === "blocked" ? copy.scopeBlocked
         : scopeState === "error" ? currentScope?.failure === "missing" ? copy.scopeMissing
           : currentScope?.failure === "invalid" ? copy.scopeInvalid : copy.scopeError : "";
+  const concurrencyValue = Number(concurrency);
+  const concurrencyValid = concurrency.trim() !== "" && Number.isInteger(concurrencyValue) && concurrencyValue >= 1 && concurrencyValue <= 16;
   const blockers = [
+    draftLoading ? (locale === "en" ? "Loading FOFA target draft…" : "正在载入 FOFA 目标草稿…") : draftError,
+    multiple && !concurrencyValid ? (locale === "en" ? "Enter a concurrency limit from 1 to 16." : "请输入 1–16 的批次并行数。") : "",
     importingTargets ? copy.importingTargets : "",
     multiple ? !multiValidation.accepted ? multiValidation.message : ""
       : !targetValid ? targetError || copy.inputRequired : "",
@@ -443,7 +483,7 @@ export default function ScanLauncherPage() {
     setLaunchError("");
     const socks = socks5.trim();
     try {
-      const response = await postJSON<ScanLaunched>("/api/scans", {
+      const body = {
         ...(multiple ? { targets: multiValidation.targets } : { target: trimmedTarget }),
         scan_type: mode,
         crypto: internal && crypto,
@@ -456,11 +496,22 @@ export default function ScanLauncherPage() {
         language,
         profile_id: effectiveProfile?.id ?? "",
         project_id: projectId,
-      });
+        ...(sourceDraftId ? { source_draft_id: sourceDraftId } : {}),
+      };
+      if (multiple) {
+        const response = await taskRequest<BatchCreated>("/api/scan-batches", { method: "POST", body: { ...body, name: batchName.trim(), max_concurrent: concurrencyValue } });
+        if (!launchMounted.current) return;
+        if (!response.batch_id || response.kind !== "batch") throw new TaskApiError("request_failed");
+        router.push(`/batches/detail?id=${encodeURIComponent(response.batch_id)}`);
+        return;
+      }
+      const response = await postJSON<ScanLaunched>("/api/scans", body);
+      if (!launchMounted.current) return;
       if (!response.run_name) throw new Error(t("scan.launch.missingRunName"));
       router.push(`/run?name=${encodeURIComponent(response.run_name)}`);
     } catch (error) {
-      setLaunchError(parseLaunchError(error));
+      if (!launchMounted.current) return;
+      setLaunchError(multiple ? taskError(error, locale === "en") : parseLaunchError(error));
       setBusy(false);
       // A project may have changed while the form was open. Refresh the
       // displayed verdict after rejection; launch remains server-validated.
@@ -488,6 +539,9 @@ export default function ScanLauncherPage() {
         </span>
       </header>
 
+      {(draftLoading || draftError || sourceDraftId) && <div className={styles.batchImport} role="status">
+        {draftLoading ? <><Spinner />{locale === "en" ? "Loading FOFA target draft…" : "正在载入 FOFA 目标草稿…"}</> : draftError ? <><span>{draftError}</span><button type="button" className="button-secondary button-compact" onClick={() => setDraftError("")}>{locale === "en" ? "Enter targets manually" : "改为手动输入"}</button></> : <><span>{locale === "en" ? `Imported ${sourceTargets.length} FOFA targets. Review settings before creating tasks.` : `已导入 ${sourceTargets.length} 个 FOFA 目标，请检查配置后建立任务。`}{JSON.stringify(multiple ? multiValidation.targets : [trimmedTarget]) !== JSON.stringify(sourceTargets) && <small>{locale === "en" ? " Targets have been edited; unchanged imported targets retain their source." : " 已调整导入目标，原有目标仍保留来源。"}</small>}</span><Link href={sourceSearchId ? `/fofa?search=${encodeURIComponent(sourceSearchId)}` : "/fofa"}>FOFA →</Link></>}
+      </div>}
       <section className={cn(styles.launchPanel, multiple && styles.multiPanel)} aria-label={copy.setup}>
         <div className={styles.setupRow}>
           <div className={styles.projectField}>
@@ -520,7 +574,7 @@ export default function ScanLauncherPage() {
               {(["web", "internal"] as const).map((value) => {
                 const Icon = value === "web" ? Globe : Network;
                 return (
-                  <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} disabled={busy}>
+                  <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} disabled={busy || draftLoading}>
                     <Icon size={15} aria-hidden="true" />
                     {t(`scan.mode.${value}`)}
                   </button>
@@ -539,7 +593,7 @@ export default function ScanLauncherPage() {
             <button
               type="button"
               className={styles.targetModeButton}
-              disabled={busy}
+              disabled={busy || draftLoading}
               aria-pressed={multiple}
               onClick={() => {
                 if (!multiple && !targetsText && trimmedTarget) setTargetsText(trimmedTarget);
@@ -556,12 +610,17 @@ export default function ScanLauncherPage() {
           {multiple ? (
             <>
               {projectId && <div className={styles.multiScopeLink}><Link className={styles.textLink} href={`/projects/detail?id=${encodeURIComponent(projectId)}&tab=scope`}>{copy.scopeSettings} ↗</Link></div>}
+              <div className={styles.batchOptions}>
+                <label htmlFor="batch-name"><span>{locale === "en" ? "Batch name (optional)" : "批次名称（可选）"}</span><input id="batch-name" className="input-shell" value={batchName} onChange={event => setBatchName(event.target.value)} maxLength={120} disabled={busy || draftLoading} /></label>
+                <label htmlFor="batch-concurrency"><span>{locale === "en" ? "Concurrent targets" : "批次同时执行目标数"}</span><input id="batch-concurrency" className="input-shell" type="number" min={1} max={16} step={1} value={concurrency} onChange={event => setConcurrency(event.target.value)} disabled={busy || draftLoading} /></label>
+                <p>{locale === "en" ? `Host limit: ${queueSettings?.max_active_targets ?? "—"}. Excess targets remain queued. Each target uses its own container and report; the batch does not imply any relationship between targets.` : `主机并行上限：${queueSettings?.max_active_targets ?? "—"}。超出的目标保持排队；每个目标使用独立容器与报告，批次不代表目标之间有关联。`} <Link href="/settings#task-queue">{locale === "en" ? "Queue settings" : "队列设置"} →</Link></p>
+              </div>
               <MultiTargetEditor
                 text={targetsText}
                 onChange={(value) => { setTargetsText(value); setLaunchError(""); }}
                 internal={internal}
                 projectId={projectId}
-                disabled={busy}
+                disabled={busy || draftLoading}
                 validation={multiValidation}
                 onRetry={() => setMultiRetry((value) => value + 1)}
                 onImportingChange={setImportingTargets}
@@ -585,7 +644,7 @@ export default function ScanLauncherPage() {
               onChange={(event) => setTarget(event.target.value)}
               spellCheck={false}
               autoComplete="off"
-              disabled={busy}
+              disabled={busy || draftLoading}
               aria-invalid={Boolean(targetError || scopeState === "blocked")}
               aria-describedby="scan-target-status"
             />
@@ -623,7 +682,7 @@ export default function ScanLauncherPage() {
                   type="button"
                   title={t("scan.recent.fill", { mode: t(`scan.mode.${value.scan_type}`) })}
                   onClick={() => { setTarget(value.target); setMode(value.scan_type); }}
-                  disabled={busy}
+                  disabled={busy || draftLoading}
                 >
                   {value.scan_type === "internal" ? <Network size={13} /> : <Globe size={13} />}
                   <span>{value.target}</span>
@@ -639,7 +698,7 @@ export default function ScanLauncherPage() {
             <legend>{t("scan.language")}</legend>
             <div className={styles.languageOptions}>
               {(["zh-CN", "en"] as const).map((value) => (
-                <button key={value} type="button" aria-pressed={language === value} onClick={() => setLanguage(value)} disabled={busy}>
+                <button key={value} type="button" aria-pressed={language === value} onClick={() => setLanguage(value)} disabled={busy || draftLoading}>
                   {t(value === "zh-CN" ? "scan.language.zh" : "scan.language.en")}
                 </button>
               ))}
@@ -708,7 +767,7 @@ export default function ScanLauncherPage() {
                         type="button"
                         aria-pressed={effectiveProfile?.id === profile.id}
                         onClick={() => setProfileId(profile.id === activeProfileId ? "" : profile.id)}
-                        disabled={busy}
+                        disabled={busy || draftLoading}
                       >
                         <span className={styles.profileMark}>{effectiveProfile?.id === profile.id && <Check size={13} />}</span>
                         <span className={styles.profileMain}>
@@ -739,19 +798,19 @@ export default function ScanLauncherPage() {
               <div className={styles.routeGrid}>
                 <div>
                   <label htmlFor="scan-socks5">{t("scan.route.socks5")}</label>
-                  <input id="scan-socks5" className="input-shell" placeholder="socks5://10.0.0.1:1080" value={socks5} onChange={(event) => setSocks5(event.target.value)} spellCheck={false} autoComplete="off" disabled={busy} />
+                  <input id="scan-socks5" className="input-shell" placeholder="socks5://10.0.0.1:1080" value={socks5} onChange={(event) => setSocks5(event.target.value)} spellCheck={false} autoComplete="off" disabled={busy || draftLoading} />
                   {socksError ? <FieldError>{socksError}</FieldError> : <p className={styles.help}>{t("scan.route.socks5.hint")}</p>}
                 </div>
                 <div>
                   <label htmlFor="scan-gsocket">{t("scan.route.gsocket")}</label>
-                  <input id="scan-gsocket" type="password" className="input-shell" placeholder={t("scan.route.gsocket.placeholder")} value={gsocket} onChange={(event) => setGsocket(event.target.value)} autoComplete="off" disabled={busy} />
+                  <input id="scan-gsocket" type="password" className="input-shell" placeholder={t("scan.route.gsocket.placeholder")} value={gsocket} onChange={(event) => setGsocket(event.target.value)} autoComplete="off" disabled={busy || draftLoading} />
                   {gsocketError ? <FieldError>{gsocketError}</FieldError> : <p className={styles.help}>{t("scan.route.gsocket.hint")}</p>}
                 </div>
               </div>
               {bothTransports && <FieldError>{t("scan.route.exclusive")}</FieldError>}
               <div className={styles.cryptoRow}>
                 <div><strong>{t("scan.crypto")}</strong><p className={styles.help}>{t("scan.crypto.hint")}</p></div>
-                <button type="button" role="switch" aria-checked={crypto} aria-label={t("scan.crypto")} className={styles.toggle} onClick={() => setCrypto(!crypto)} disabled={busy}><span /></button>
+                <button type="button" role="switch" aria-checked={crypto} aria-label={t("scan.crypto")} className={styles.toggle} onClick={() => setCrypto(!crypto)} disabled={busy || draftLoading}><span /></button>
               </div>
             </div>
           </details>
@@ -767,7 +826,7 @@ export default function ScanLauncherPage() {
           {instructionPreview && <p className={styles.draftPreview} title={copy.savedInstruction}>{instructionPreview}{instruction.trim().length > 90 ? "…" : ""}</p>}
           <div className={styles.optionBody}>
             <label htmlFor="scan-instruction">{t("scan.instruction")}</label>
-            <textarea id="scan-instruction" className="textarea-shell" placeholder={t("scan.instruction.placeholder")} value={instruction} onChange={(event) => setInstruction(event.target.value)} spellCheck={false} disabled={busy} />
+            <textarea id="scan-instruction" className="textarea-shell" placeholder={t("scan.instruction.placeholder")} value={instruction} onChange={(event) => setInstruction(event.target.value)} spellCheck={false} disabled={busy || draftLoading} />
             <div className={styles.instructionMeta}>
               <span>{t("scan.instruction.remembered")}</span>
               <span className={cn(instructionCount > INSTRUCTION_SOFT_LIMIT && styles.warning)}>{t("scan.instruction.chars", { n: instructionCount.toLocaleString() })}</span>

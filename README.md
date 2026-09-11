@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.1.10** · [Release notes](docs/v1.1.10.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Version **1.2.0** · [Release notes](docs/v1.2.0.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -47,7 +47,8 @@ coverage require review; a completed task is not a guarantee that a target is se
 | Web assessments | URL, domain, and IP targets; browser and HTTP tooling; Caido interception in the sandbox | Investigate application behavior and record reproducible findings |
 | Internal assessments | Host, IP, and CIDR targets; shared network-tool image; optional SOCKS5 or GSocket access | Assess an authorized internal environment with explicit scope and access instructions |
 | MCP traffic workbench | Independent proxy tasks, website capture scope, request inspection and replay, selected-request Agent tests, and Markdown reports | Capture browser traffic and investigate observed pages and APIs with persistent evidence |
-| Multi-target tasks | Up to 100 distinct targets in one run | Keep related services under one context, evidence archive, and final report |
+| Target batches | Up to 100 independent targets, with batch and host concurrency limits | Queue targets and keep a separate task, sandbox, context, evidence archive, and report for each |
+| FOFA discovery | Saved searches, sortable/filterable results, exports and selected-target handoff | Discover assets and review a target draft before creating assessments |
 | [Live Console](docs/task-page.md) | Five task tabs, Agent selection with an inline hint composer, notes, and a unified file browser | Follow execution, direct the selected Agent, and review results without duplicate panels |
 | Projects | Scope validation, task grouping, report aggregation, and skill-use analytics | Organize repeated assessments of the same environment |
 | Model profiles | Custom OpenAI-compatible or OpenRouter routes; separate Web/internal models, API types, and reasoning effort | Reuse and compare model configurations without changing engine code |
@@ -99,7 +100,7 @@ remain available as advanced overrides.
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[1.1.10 release notes](docs/v1.1.10.md) for upgrade commands.
+[1.2.0 release notes](docs/v1.2.0.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -172,7 +173,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.1.10 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.2.0 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -201,9 +202,9 @@ Use an **absolute runs path**, as shown above. The Console starts engine process
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.1.10` **release tag**, leaving a detached HEAD
+The clone command selects the `v1.2.0` **release tag**, leaving a detached HEAD
 at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.1.10`.
+In an existing checkout, the exact reference is `refs/tags/v1.2.0`.
 
 After installation, subsequent starts only require:
 
@@ -225,12 +226,12 @@ The health endpoint does not validate Docker, a model key, or target reachabilit
 
 A wheel contains the built Console and runtime prompt/skill library. It does
 not contain the Docker sandbox image. Use this route when you already have a
-trusted `strixops-1.1.10-py3-none-any.whl`; it does not assume a PyPI publication or
+trusted `strixops-1.2.0-py3-none-any.whl`; it does not assume a PyPI publication or
 an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.1.10-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.2.0-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -291,7 +292,8 @@ saved Console profiles are separate: configure a saved profile for Console launc
 | 6. Review | Final report, finding details, unresolved coverage, and evidence delivery status |
 
 The Console keeps the single-target form as its default. **Multi-target task**
-creates one native run rather than a queue of independent scans.
+creates a persistent batch of independent runs. Set concurrent targets for the batch;
+Settings also provides a host-wide active-target limit. Both default to two.
 
 | Limit | Console | CLI |
 |---|---|---|
@@ -301,10 +303,12 @@ creates one native run rather than a queue of independent scans.
 | Normalization | Ignore blank lines and full-line `#` comments; merge exact duplicates | Same |
 | Shared settings | One task type, model route, and instruction set | Same |
 
-All targets share agent context, assessment state, evidence, and the final report.
-Project scope is checked for the full target list again at launch. Reruns, search,
-and report aggregation preserve that list. Importing targets does not stage a
-source repository or an API specification.
+Each target has its own agent context, assessment state, sandbox, evidence, and
+final report. Batch members are not assumed to be related. Common settings and
+prompt/skill resources are saved at submission; project scope is rechecked for
+each target before it starts. Existing historical shared reports remain readable.
+See the [FOFA and batch guide](docs/fofa-and-target-batches.md) for the workflow,
+limits, storage and recovery behavior.
 
 ## CLI usage
 
@@ -326,13 +330,14 @@ uv run --no-dev strixops \
   --report-language en
 ```
 
-Multiple targets, including a list file, are combined into one ordered scope:
+Multiple targets, including a list file, form a batch with independent reports:
 
 ```bash
 uv run --no-dev strixops \
   -t https://app.lab.example \
   -t https://api.lab.example \
   --target-list ./targets.txt \
+  --max-concurrent 2 \
   --instruction-file ./engagement.md
 ```
 
@@ -356,6 +361,9 @@ does not itself establish a remote shell.
 |---|---|
 | `-t`, `--target` | Add a target; can be repeated |
 | `--target-list` | Add targets from a UTF-8 file; can be repeated |
+| `--max-concurrent` | Concurrent targets per batch, 1–16; default 2 |
+| `--batch-name` | Optional batch display name |
+| `--resume-batch ID` | Resume supervision of an existing CLI batch; does not repeat completed targets |
 | `--scan-type web\|internal` | Select the assessment workflow |
 | `--instruction-file` | Load operator instructions from Markdown |
 | `--instruction` | Inline fallback when no instruction file is supplied |
@@ -366,8 +374,9 @@ does not itself establish a remote shell.
 
 For a wheel installation, replace `uv run --no-dev strixops` with
 `.venv/bin/strixops`. A successful run returns exit code `0`; failures return a
-nonzero code, with details in the run directory. There is no resume command;
-a rerun starts a new assessment.
+nonzero code, with details in the run directory. `--resume-batch` supervises
+the remaining targets of a CLI batch; it does not restore an interrupted Agent
+conversation. An ordinary rerun starts a new assessment.
 
 ## Server deployment
 
@@ -502,7 +511,7 @@ tool inventory and architecture-specific best-effort installs.
 
 Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
 remote `DOCKER_HOST` alone does not make local workspace directories available on
-that remote host. The product version `1.1.10` and sandbox tag `1.3.0` are separate
+that remote host. The product version `1.2.0` and sandbox tag `1.3.0` are separate
 version numbers.
 
 ## Configuration reference

@@ -10,6 +10,8 @@ import {
   FileSearch,
   FolderOpen,
   LibraryBig,
+  Globe2,
+  Layers,
   Menu,
   Moon,
   Radar,
@@ -50,12 +52,14 @@ const NAV_GROUPS: NavGroup[] = [
     key: "nav.group.manage",
     items: [
       { href: "/projects", key: "nav.projects", icon: FolderOpen },
+      { href: "/batches", key: "nav.batches", icon: Layers },
       { href: "/results", key: "nav.results", icon: FileSearch },
     ],
   },
   {
     key: "nav.group.intelligence",
     items: [
+      { href: "/fofa", key: "nav.fofa", icon: Globe2 },
       { href: "/skills", key: "nav.skills", icon: LibraryBig },
       { href: "/insights", key: "nav.insights", icon: BarChart3 },
     ],
@@ -235,7 +239,7 @@ function EnginePanel({ stats }: { stats: EngineStats }) {
       <div className="engine-panel-meta">
         <span>{stats.liveRuns.toString().padStart(2, "0")} LIVE</span>
         <span>{stats.totalRuns.toString().padStart(2, "0")} RUNS</span>
-        <span>v1.1.10</span>
+        <span>v1.2.0</span>
       </div>
     </div>
   );

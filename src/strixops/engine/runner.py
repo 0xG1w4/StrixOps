@@ -67,7 +67,11 @@ def _evidence_failure_detail(evidence: dict[str, Any]) -> str:
 
 async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     targets = spec.all_targets()
-    spec = dataclasses.replace(spec, target=targets[0], targets=targets if len(targets) > 1 else [])
+    if len(targets) > 1:
+        from strixops.queue.cli import run_batch
+
+        return await run_batch(spec, settings)
+    spec = dataclasses.replace(spec, target=targets[0], targets=[])
     # 1. Contract surface first: run dir + events.jsonl + run.configured.
     runs_root = resolve_runs_root(settings.strix_runs)
     run_name = generate_run_name(spec.target, spec.scan_type)
@@ -88,8 +92,6 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             scan_config["llm_api_mode"] = resolved_api_mode(settings.strix_llm, settings.llm_api_mode)
     events.run_configured(scan_config)
     _stdout_log(f"StrixOps run {run_name} starting (scan_type={spec.scan_type}, target={spec.target})")
-    if len(targets) > 1:
-        _stdout_log(f"Multi-target run: {len(targets)} targets share this run and report.")
 
     coordinator = AgentCoordinator(run_dir, events)
     run_state = RunState(run_dir, events)
@@ -107,6 +109,15 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     scan_succeeded = False
     interrupted = False
     cleanup_errors: list[dict[str, str]] = []
+    capacity_lease = None
+
+    def capture_sandbox(bundle: Any) -> None:
+        nonlocal sandbox
+        sandbox = bundle
+        if capacity_lease is not None:
+            capacity_lease.register_resource(
+                owner=bundle._owner_token, container=bundle._container_id, daemon=bundle._daemon_id,
+            )
 
     def prepare_workspace() -> str:
         nonlocal workspace_dir
@@ -186,6 +197,14 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     model_for: Any = None
 
     try:
+        from strixops.queue.leases import RunLease
+
+        capacity_lease = RunLease(run_name, run_dir)
+        run_state.run_record["queue"] = {"status": "waiting_capacity"}
+        run_state.save()
+        await capacity_lease.acquire()
+        run_state.run_record["queue"] = {"status": "running"}
+        run_state.save()
         context_settings = ContextSettings()
         if settings.dry_run:
             import os
@@ -237,6 +256,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                     socks5_proxy=spec.socks5_proxy,
                     gsocket_key=spec.gsocket_key,
                     host_workspace_dir=prepare_workspace(),
+                    on_created=capture_sandbox,
                 )
         else:
             problems = settings.validate()
@@ -261,6 +281,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 gsocket_key=spec.gsocket_key,
                 host_workspace_dir=prepare_workspace(),
                 use_caido=spec.scan_type == "web",  # web scans: intercept HTTP via Caido
+                on_created=capture_sandbox,
             )
 
         if sandbox is not None:
@@ -515,6 +536,30 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             except Exception as exc:
                 run_state.run_record["cleanup"]["status"] = "failed"
                 cleanup_failed("state", exc)
+            if capacity_lease is not None:
+                resource_errors = {"agents", "session", "sandbox_delete", "gateway"}
+                resources_clean = agents_settled and not any(
+                    error["stage"] in resource_errors for error in cleanup_errors
+                )
+                sandbox_cleanup = getattr(sandbox, "cleanup", None)
+                if sandbox is not None and isinstance(sandbox_cleanup, dict):
+                    resources_clean = resources_clean and (
+                        sandbox_cleanup.get("verified") is True
+                        and sandbox_cleanup.get("status") == "removed"
+                    )
+                # Failed evidence/report writes do not imply living resources.
+                run_state.run_record["queue"] = {
+                    "status": "released" if resources_clean else "blocked",
+                    "cleanup_complete": resources_clean,
+                }
+                try:
+                    run_state.save()
+                except Exception as exc:
+                    cleanup_failed("state", exc)
+                try:
+                    capacity_lease.finish(cleanup_complete=resources_clean)
+                except Exception as exc:
+                    cleanup_failed("queue", exc)
 
         cleanup_task = asyncio.create_task(finalize(), name="strixops-run-finalize")
         while True:

@@ -95,6 +95,9 @@ export interface RunSummary {
   target_count?: number;
   target_error?: string;
   scan_type: string;
+  batch_id?: string;
+  source?: { kind: "fofa"; search_id: string; result_id: string };
+  queue?: { status: string };
   project_id: string;
   /** Whether the target still matches the project's current launch scope. */
   scope_match?: boolean;

@@ -4,7 +4,7 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.1.10** · [版本说明](docs/v1.1.10.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.2.0** · [版本说明](docs/v1.2.0.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -41,7 +41,8 @@ Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。�
 | Web 评估 | URL、域名和 IP 目标；浏览器与 HTTP 工具；沙箱内的 Caido 流量拦截 | 分析应用行为，记录可复现的安全发现 |
 | 内网评估 | 主机、IP 和 CIDR 目标；共用网络工具镜像；可选 SOCKS5 或 GSocket 接入 | 在明确范围与接入说明的前提下评估已授权内网 |
 | MCP 流量工作台 | 独立代理任务、网站捕获范围、请求查看与重放、选定请求的 Agent 测试及 Markdown 报告 | 捕获浏览器流量，针对观察到的页面与 API 测试并保存证据 |
-| 多目标任务 | 单次运行最多包含 100 个不同目标 | 为相关服务共用上下文、证据归档和最终报告 |
+| 目标批次 | 最多 100 个独立目标，支持批次和主机并行上限 | 其余目标排队，每个目标保留独立任务、容器、上下文、证据和报告 |
+| FOFA 搜索 | 保存查询与结果、逐列筛选排序、导出和选中目标送入任务 | 先检索和审阅资产，再确认创建测试任务 |
 | [实时控制台](docs/task-page.md) | 五个任务页签、代理选择与对话内指令输入、笔记及统一文件浏览 | 跟踪执行、指导选定代理并集中查看结果 |
 | 项目管理 | 范围校验、任务分组、报告汇总和技能使用统计 | 组织同一环境的多次评估 |
 | 模型配置 | 自定义 OpenAI 兼容路由或 OpenRouter；Web 与内网分别设置模型、API 类型及推理强度 | 无需修改引擎代码即可复用和比较模型配置 |
@@ -68,7 +69,7 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 通过控制台 IP 打开 MCP 即可自动初始化，沿用控制台部署的访问边界。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 与代理配置仍保留为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.1.10 版本说明](docs/v1.1.10.md)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.2.0 版本说明](docs/v1.2.0.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -135,7 +136,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.1.10 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.2.0 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -157,7 +158,7 @@ uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 
 请像示例一样使用**绝对运行目录路径**。控制台使用自身的工作目录启动引擎进程；相对运行路径在控制台和引擎中可能解析为不同位置，wheel 安装方式尤其需要注意。
 
-上面的克隆命令选择 `v1.1.10` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.1.10`。
+上面的克隆命令选择 `v1.2.0` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.2.0`。
 
 安装完成后，再次启动只需执行：
 
@@ -178,11 +179,11 @@ curl --fail http://127.0.0.1:8300/api/health
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.1.10-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.2.0-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.1.10-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.2.0-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -228,7 +229,7 @@ python3 -m venv .venv
 | 5. 执行 | 实时对话、智能体树、覆盖记录、安全发现和操作员提示 |
 | 6. 审阅 | 最终报告、发现详情、尚未完成的覆盖项及证据交付状态 |
 
-控制台默认使用单目标表单。**多目标任务**会创建一次原生运行，而非多个独立扫描组成的队列。
+控制台默认使用单目标表单。**多目标任务**会创建一批独立运行，可设置批次同时测试的目标数量；设置页另有主机总并行上限，两者默认均为 2。
 
 | 限制 | 控制台 | CLI |
 |---|---|---|
@@ -238,7 +239,7 @@ python3 -m venv .venv
 | 标准化处理 | 忽略空行和整行 `#` 注释；合并完全相同的重复项 | 相同 |
 | 共用设置 | 同一任务类型、模型路由和指令集 | 相同 |
 
-所有目标共用智能体上下文、评估状态、证据和最终报告。任务启动时，会再次对完整目标列表进行项目范围校验。重新运行、搜索和报告汇总也会保留该列表。导入目标不会同时准备源码仓库或 API 规范文件。
+每个目标拥有独立的智能体上下文、评估状态、容器、证据和最终报告，批次成员不被视为彼此关联。提交时保存共用设置和 prompt/skill 资源；各目标启动前重新检查项目范围。旧版本的共享报告仍可读取。操作、限制、存储和恢复行为见 [FOFA 与批次指南](docs/fofa-and-target-batches.md)。
 
 <a id="cli-usage"></a>
 
@@ -261,13 +262,14 @@ uv run --no-dev strixops \
   --report-language en
 ```
 
-多个目标及列表文件中的目标会合并为同一个有序范围：
+多个目标及列表文件中的目标会组成批次，每个目标独立执行并产出报告：
 
 ```bash
 uv run --no-dev strixops \
   -t https://app.lab.example \
   -t https://api.lab.example \
   --target-list ./targets.txt \
+  --max-concurrent 2 \
   --instruction-file ./engagement.md
 ```
 
@@ -287,6 +289,9 @@ uv run --no-dev strixops \
 |---|---|
 | `-t`、`--target` | 添加目标，可重复使用 |
 | `--target-list` | 从 UTF-8 文件添加目标，可重复使用 |
+| `--max-concurrent` | 批次同时测试的目标数，1–16，默认 2 |
+| `--batch-name` | 可选的批次名称 |
+| `--resume-batch ID` | 恢复管理已有 CLI 批次，不重复已完成目标 |
 | `--scan-type web\|internal` | 选择评估工作流程 |
 | `--instruction-file` | 从 Markdown 文件加载操作员指令 |
 | `--instruction` | 未提供指令文件时，使用此内联指令 |
@@ -295,7 +300,7 @@ uv run --no-dev strixops \
 | `--report-language en\|zh-CN` | 选择报告和安全发现的语言，默认 `zh-CN` |
 | `--version`、`--help` | 查看已安装版本和 CLI 参数 |
 
-使用 wheel 安装时，将 `uv run --no-dev strixops` 替换为 `.venv/bin/strixops`。运行成功时退出码为 `0`；失败时返回非零退出码，详情保存在运行目录中。当前没有恢复运行命令；重新运行会开始一次新的评估。
+使用 wheel 安装时，将 `uv run --no-dev strixops` 替换为 `.venv/bin/strixops`。运行成功时退出码为 `0`；失败时返回非零退出码，详情保存在运行目录中。`--resume-batch` 可继续管理 CLI 批次的排队目标；不会恢复已经中断的 Agent 对话。普通重新运行会开始一次新的评估。
 
 <a id="server-deployment"></a>
 
@@ -407,7 +412,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.1.10` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.2.0` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 
