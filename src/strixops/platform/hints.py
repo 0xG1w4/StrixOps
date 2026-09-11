@@ -1,34 +1,21 @@
-"""Operator-hints inbox poller — the read side the platform never had.
+"""Deliver operator instructions to their explicit agent in its existing session.
 
-The platform writes hint JSON files into ``STRIX_OPERATOR_HINTS_DIR``
-(``apps/api/services/operator_hints.py``: atomic ``.tmp``→rename, payload
-``{message_id, task_id, phase, target, agent_id, agent_name, message,
-created_at, status, hint_token}``). No strix version ever read them — this
-is StrixOps' implementation:
-
-* poll every 2 s; skip ``*.tmp`` and already-processed ``message_id``s
-* route by ``agent_id`` when it names a registered agent, else to root
-* deliver through the coordinator with force-interrupt so a mid-scan agent
-  sees the hint immediately (non-interactive agents otherwise drain
-  mailboxes only at ``wait_for_agents``)
-* flip the hint file's ``status`` to ``delivered`` after a successful
-  delivery, so the console can observe queued → delivered → acked
-* frame the content with the hint token; the system prompt instructs the
-  agent to echo the token in its next message, which the platform's
-  token-echo detection consumes to mark the hint delivered/acked
+Empty legacy targets mean root. Explicit targets never fall back to another
+agent. Queue admission and actual delivery are separate: terminal/unknown agents
+produce a persisted failed record instead of a misleading permanent queue item.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger("strixops.hints")
+from strixops.platform import hint_store as store
 
+logger = logging.getLogger("strixops.hints")
 POLL_INTERVAL_SECONDS = 2.0
 
 
@@ -37,90 +24,138 @@ class OperatorHintsPoller:
         self._dir = Path(hints_dir) if hints_dir else None
         self._coordinator = coordinator
         self._processed: set[str] = set()
+        self._pending_updates: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._inflight: str | None = None
         self._stop = asyncio.Event()
 
     async def run(self) -> None:
-        """Poll until stopped. Delivery failures are logged, never fatal."""
+        """Storage/model-delivery failures never abort the scan."""
         if self._dir is None:
             return
-        while not self._stop.is_set():
-            try:
-                await self._poll_once()
-            except Exception as exc:  # noqa: BLE001 — poller must survive anything
-                logger.warning("hints poll failed: %s", exc)
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self._stop.wait(), timeout=POLL_INTERVAL_SECONDS)
+        try:
+            while not self._stop.is_set():
+                try:
+                    await self._poll_once()
+                except Exception:  # noqa: BLE001 — the scan must survive a damaged inbox
+                    logger.warning("operator instruction inbox could not be processed")
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(self._stop.wait(), timeout=POLL_INTERVAL_SECONDS)
+        finally:
+            self._close()
 
     def stop(self) -> None:
         self._stop.set()
+        self._close()
+
+    def _entries(self) -> list[tuple[str, dict[str, Any]]]:
+        if self._dir is None:
+            return []
+        with store.inbox_directory(self._dir) as directory:
+            if directory is not None and store.is_closed(directory):
+                return []
+            return store.read_entries(directory)
+
+    def _flush_updates(self) -> None:
+        if self._dir is None or not self._pending_updates:
+            return
+        try:
+            with store.inbox_directory(self._dir, locked=True) as directory:
+                if directory is None:
+                    return
+                for filename, (message_id, update) in list(self._pending_updates.items()):
+                    try:
+                        existing = store.read_hint(directory, filename)
+                        existing_id = (
+                            str(existing.get("message_id") or Path(filename).stem) if existing else ""
+                        )
+                        if existing is None or existing_id != message_id:
+                            self._pending_updates.pop(filename, None)
+                            continue
+                        if str(existing.get("status") or "queued") not in store.FINAL_HINT_STATUSES:
+                            store.write_hint(directory, filename, {**existing, **update})
+                        self._pending_updates.pop(filename, None)
+                    except (store.HintError, OSError):
+                        logger.warning("operator instruction status could not be saved; retrying")
+        except store.HintError:
+            logger.warning("operator instruction status storage is unavailable")
 
     async def _poll_once(self) -> None:
-        if not self._dir.is_dir():
+        self._flush_updates()
+        if self._stop.is_set():
             return
-        candidates: list[tuple[str, Path]] = []
-        for path in sorted(self._dir.glob("*.json")):
-            if path.name.endswith(".tmp"):
-                continue
-            hint = self._read_hint(path)
-            if hint is None:
-                continue
-            message_id = str(hint.get("message_id") or path.stem)
-            if message_id in self._processed:
+        entries = sorted(self._entries(), key=lambda item: (str(item[1].get("created_at") or ""), item[0]))
+        for filename, hint in entries:
+            if self._stop.is_set():
+                break
+            message_id = str(hint.get("message_id") or Path(filename).stem)
+            already_final = str(hint.get("status") or "queued") in store.FINAL_HINT_STATUSES
+            if message_id in self._processed or already_final:
                 continue
             self._processed.add(message_id)
-            created = str(hint.get("created_at") or "")
-            candidates.append((created, path, hint))  # type: ignore[misc]
+            self._inflight = filename
+            try:
+                try:
+                    target, agent_name = await self._deliver(hint)
+                    update = {
+                        "status": "delivered", "agent_id": target, "agent_name": agent_name,
+                        "delivered_at": store.now(),
+                    }
+                except store.HintError as exc:
+                    update = {"status": "failed", "failure_code": exc.code, "failed_at": store.now()}
+                except Exception:  # noqa: BLE001 — no provider exception or private path in the ledger
+                    update = {"status": "failed", "failure_code": "delivery_failed", "failed_at": store.now()}
+                self._pending_updates[filename] = (message_id, update)
+            finally:
+                self._inflight = None
+                self._flush_updates()
+                if self._stop.is_set():
+                    self._close()
 
-        for _, path, hint in sorted(candidates, key=lambda item: item[0]):
-            if await self._deliver(hint):
-                self._mark_delivered(path, hint)
-
-    def _read_hint(self, path: Path) -> dict[str, Any] | None:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        return data if isinstance(data, dict) else None
-
-    async def _deliver(self, hint: dict[str, Any]) -> bool:
-        """Deliver one hint; True when the target agent (or root) accepted it."""
-        message = str(hint.get("message") or "").strip()
-        if not message:
-            return False
+    async def _deliver(self, hint: dict[str, Any]) -> tuple[str, str]:
+        if self._stop.is_set():
+            raise store.HintError("run_not_active")
+        payload = store.canonical_payload(
+            str(hint.get("message") or ""), str(hint.get("agent_id") or ""),
+            str(hint.get("phase") or "1"),
+        )
+        target = payload["agent_id"]
+        root = self._coordinator.entry_of("root")
+        if root is not None and root.get("status") not in store.ACTIVE_AGENT_STATUSES:
+            raise store.HintError("run_not_active")
+        entry = self._coordinator.entry_of(target)
+        if entry is None:
+            raise store.HintError("unknown_agent")
+        if entry.get("status") not in store.ACTIVE_AGENT_STATUSES:
+            raise store.HintError("agent_not_active")
         token = str(hint.get("hint_token") or "").strip()
-        phase = str(hint.get("phase") or "").strip()
-        agent_id = str(hint.get("agent_id") or "").strip()
+        framed = (
+            f"[Operator hint | token={token} | phase={payload['phase']}]\n{payload['message']}"
+            if token else payload["message"]
+        )
+        if not await self._coordinator.deliver_hint(
+            target, framed, admission_check=lambda: not self._stop.is_set()
+        ):
+            # The target may have completed between the checks and locked send.
+            raise store.HintError("run_not_active" if self._stop.is_set() else "agent_not_active")
+        return target, str(entry.get("name") or target)[:200]
 
-        framed = f"[Operator hint | token={token} | phase={phase}]\n{message}" if token else message
-
-        target = agent_id if agent_id and self._coordinator.entry_of(agent_id) else "root"
-        delivered = await self._coordinator.deliver_hint(target, framed)
-        if not delivered and target != "root":
-            # Unknown target — fall back to root rather than dropping the hint.
-            target = "root"
-            delivered = await self._coordinator.deliver_hint(target, framed)
-        if delivered:
-            logger.info(
-                "delivered operator hint %s to %s (token=%s)",
-                hint.get("message_id"),
-                target,
-                token,
-            )
-            return True
-        logger.warning("operator hint %s could not be delivered", hint.get("message_id"))
-        return False
-
-    def _mark_delivered(self, path: Path, hint: dict[str, Any]) -> None:
-        """Flip the hint file's status to ``delivered`` (atomic rewrite, best-effort).
-
-        The console's GET /api/runs/{name}/hints reads this field; the queued →
-        delivered transition is what makes delivery observable. Token-echo
-        detection upgrades it further to ``acked`` on the console side.
-        """
+    def _close(self) -> None:
+        """Close admission and persist undelivered items, including shutdown races."""
+        if self._dir is None:
+            return
+        self._flush_updates()
         try:
-            updated = dict(hint, status="delivered")
-            tmp = path.with_name(f"{path.name}.tmp")
-            tmp.write_text(json.dumps(updated, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
-        except OSError:
-            logger.debug("could not mark hint %s delivered", hint.get("message_id"))
+            with store.inbox_directory(self._dir, locked=True) as directory:
+                if directory is None:
+                    return
+                store.close_inbox(directory)
+                for filename, hint in store.read_entries(directory):
+                    if filename in self._pending_updates or filename == self._inflight:
+                        continue  # Never relabel an accepted message after a failed status write.
+                    if str(hint.get("status") or "queued") not in store.FINAL_HINT_STATUSES:
+                        store.write_hint(directory, filename, {
+                            **hint, "status": "failed", "failure_code": "run_not_active",
+                            "failed_at": store.now(),
+                        })
+        except (store.HintError, OSError):
+            logger.warning("operator instruction inbox finalization could not be saved")

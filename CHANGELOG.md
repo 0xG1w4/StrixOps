@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.8 — 2026-09-11
+
+- Consolidate the task page into Conversation, Findings, Notes, Files and Report,
+  while preserving links to the former tabs.
+- Combine Agent selection, conversation history and a recipient-aware hint
+  composer, with separate drafts and safe handling of in-flight submissions.
+- Enforce explicit hint recipients, persist failed delivery states, and dedupe
+  retries of uncertain submissions without changing the model execution path.
+- Group shared notes, coverage and threat models under Notes; combine evidence
+  and artifacts into one file browser with retained delivery metadata.
+
+Upgrade and behavior: [v1.1.8 release notes](docs/v1.1.8.md).
+Operation: [task page guide](docs/task-page.md).
+
 ## 1.1.7 — 2026-09-11
 
 - Add persistent task-owned notes shared by Web/Internal root and child Agents,

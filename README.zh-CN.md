@@ -4,7 +4,7 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.1.7** · [版本说明](docs/v1.1.7.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.1.8** · [版本说明](docs/v1.1.8.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -42,7 +42,7 @@ Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。�
 | 内网评估 | 主机、IP 和 CIDR 目标；共用网络工具镜像；可选 SOCKS5 或 GSocket 接入 | 在明确范围与接入说明的前提下评估已授权内网 |
 | MCP 流量工作台 | 独立代理任务、网站捕获范围、请求查看与重放、选定请求的 Agent 测试及 Markdown 报告 | 捕获浏览器流量，针对观察到的页面与 API 测试并保存证据 |
 | 多目标任务 | 单次运行最多包含 100 个不同目标 | 为相关服务共用上下文、证据归档和最终报告 |
-| 实时控制台 | 任务看板、对话流、智能体树、操作员提示、安全发现与下载 | 跟踪执行过程，并在任务中补充指引 |
+| [实时控制台](docs/task-page.md) | 五个任务页签、代理选择与对话内指令输入、笔记及统一文件浏览 | 跟踪执行、指导选定代理并集中查看结果 |
 | 项目管理 | 范围校验、任务分组、报告汇总和技能使用统计 | 组织同一环境的多次评估 |
 | 模型配置 | 自定义 OpenAI 兼容路由或 OpenRouter；Web 与内网分别设置模型、API 类型及推理强度 | 无需修改引擎代码即可复用和比较模型配置 |
 | 提示词与技能编辑 | 内置 Markdown 资源库、编辑器、预览及每次运行的资源快照 | 维护指令，同时保留历史运行实际使用的资源 |
@@ -68,7 +68,7 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 通过控制台 IP 打开 MCP 即可自动初始化，沿用控制台部署的访问边界。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 与代理配置仍保留为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.1.7 版本说明](docs/v1.1.7.md)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.1.8 版本说明](docs/v1.1.8.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -135,7 +135,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.1.7 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.1.8 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -157,7 +157,7 @@ uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 
 请像示例一样使用**绝对运行目录路径**。控制台使用自身的工作目录启动引擎进程；相对运行路径在控制台和引擎中可能解析为不同位置，wheel 安装方式尤其需要注意。
 
-上面的克隆命令选择 `v1.1.7` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.1.7`。
+上面的克隆命令选择 `v1.1.8` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.1.8`。
 
 安装完成后，再次启动只需执行：
 
@@ -178,11 +178,11 @@ curl --fail http://127.0.0.1:8300/api/health
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.1.7-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.1.8-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.1.7-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.1.8-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -407,7 +407,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.1.7` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.1.8` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 

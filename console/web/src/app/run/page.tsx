@@ -6,7 +6,7 @@
    Header carries the live status pill, target, scan-type chip, timeline
    tiles, failure diagnostics (reason + engine.log tail), and the lifecycle
    actions (Stop / Delete / CSV export / artifacts path). Below it, a single
-   tabbed console panel: Conversation · Agents · Findings · Report · Hints.
+   tabbed console panel: Conversation · Findings · Notes · Files · Report.
 
    Desktop (≥1360×760) switches to a full-height console layout where the
    transcript and ledger panels scroll internally and the page never scrolls.
@@ -25,14 +25,10 @@ import {
   Square,
 } from "lucide-react";
 import { Chip, ConfirmButton, EmptyState, StatusPill } from "@/components/ui";
-import AgentsPanel from "@/components/AgentsPanel";
-import AssessmentPanel from "@/components/AssessmentPanel";
-import ArtifactsBrowser from "@/components/ArtifactsBrowser";
-import EvidencePanel from "@/components/EvidencePanel";
 import ConversationView from "@/components/ConversationView";
+import FilesPanel from "@/components/FilesPanel";
 import FindingsPanel from "@/components/FindingsPanel";
-import HintsPanel from "@/components/HintsPanel";
-import NotesPanel from "@/components/NotesPanel";
+import NotebookPanel from "@/components/NotebookPanel";
 import ProxyStatusPanel from "@/components/ProxyStatusPanel";
 import WebSearchDiagnostics from "@/components/WebSearchDiagnostics";
 import ReportPanel from "@/components/ReportPanel";
@@ -42,6 +38,7 @@ import { apiURL, getJSON, postJSON, del, runTargetLabel, runTargets } from "@/li
 import type { Health, LogPage, RunDetail } from "@/lib/api";
 import { fmtDuration, fmtTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
+import { readRunNavigation, type RunTab } from "@/lib/run-navigation";
 
 /** 12345 -> "12.3k" — compact token counts for the info tile. */
 function fmtTokens(n: number | undefined): string {
@@ -59,8 +56,6 @@ const TERMINAL_STATUSES = new Set([
   "stopped",
   "crashed",
 ]);
-
-type TabKey = "conversation" | "agents" | "findings" | "evidence" | "assessment" | "notes" | "report" | "hints" | "artifacts";
 
 const FAILED_STATUSES = new Set(["failed", "crashed"]);
 
@@ -89,9 +84,15 @@ export default function RunPage() {
         </div>
       }
     >
-      <Cockpit />
+      <CockpitRoute />
     </Suspense>
   );
+}
+
+function CockpitRoute() {
+  const params = useSearchParams();
+  // A different run starts with fresh readers and selection state.
+  return <Cockpit key={params.get("name") || ""} />;
 }
 
 /* ============================================================================
@@ -165,22 +166,6 @@ function NoNamePanel() {
    Cockpit
    ========================================================================= */
 
-const TAB_KEYS: readonly TabKey[] = [
-  "conversation",
-  "agents",
-  "findings",
-  "evidence",
-  "assessment",
-  "notes",
-  "report",
-  "hints",
-  "artifacts",
-];
-
-function parseTab(value: string | null): TabKey {
-  return TAB_KEYS.includes(value as TabKey) ? (value as TabKey) : "conversation";
-}
-
 function Cockpit() {
   const { t, locale } = useI18n();
   const params = useSearchParams();
@@ -192,8 +177,9 @@ function Cockpit() {
   const [offline, setOffline] = React.useState(false);
   const [starting, setStarting] = React.useState(false);
   const [rerunOpen, setRerunOpen] = React.useState(false);
-  const [tab, setTab] = React.useState<TabKey>(() => parseTab(params.get("tab")));
-  const [hintTarget, setHintTarget] = React.useState<{ id: string; name: string } | null>(null);
+  const [navigation, setNavigation] = React.useState(() => readRunNavigation(params));
+  const { tab, noteView, fileFilter, agentId } = navigation;
+  const tabButtons = React.useRef<Partial<Record<RunTab, HTMLButtonElement | null>>>({});
   const [notice, setNotice] = React.useState("");
   const [noticeTone, setNoticeTone] = React.useState<"success" | "error">("success");
   const [logText, setLogText] = React.useState<string | null>(null);
@@ -202,20 +188,25 @@ function Cockpit() {
   const [now, setNow] = React.useState(() => Date.now());
   const [viewport, setViewport] = React.useState({ width: 0, height: 0 });
 
-  const requestedTab = params.get("tab");
+  const requestedLocation = params.toString();
   React.useEffect(() => {
-    setTab(parseTab(requestedTab));
-  }, [requestedTab]);
+    setNavigation(readRunNavigation(new URLSearchParams(requestedLocation)));
+  }, [requestedLocation]);
 
-  const selectTab = React.useCallback(
-    (nextTab: TabKey) => {
-      setTab(nextTab);
+  const navigate = React.useCallback(
+    (change: Partial<ReturnType<typeof readRunNavigation>>) => {
+      const next = { ...navigation, ...change };
+      setNavigation(next);
       const nextParams = new URLSearchParams(params.toString());
-      nextParams.set("tab", nextTab);
+      nextParams.set("tab", next.tab);
+      nextParams.set("agent", next.agentId || "all");
+      nextParams.set("note_view", next.noteView);
+      nextParams.set("file_filter", next.fileFilter);
       router.replace(`/run?${nextParams.toString()}`, { scroll: false });
     },
-    [params, router]
+    [navigation, params, router]
   );
+  const selectTab = (nextTab: RunTab) => navigate({ tab: nextTab });
 
   /* Latest run record + first-404 timestamp, readable inside poll closures. */
   const runRef = React.useRef<RunDetail | null>(null);
@@ -356,7 +347,6 @@ function Cockpit() {
   const statusLower = status.toLowerCase();
   const terminal = !live && TERMINAL_STATUSES.has(statusLower);
   const stale = Boolean(run.stale);
-  const agents = run.agents ? Object.keys(run.agents).length : 0;
   const findingsTotal = (run.vulnerability_count ?? 0) + (run.internal_finding_count ?? 0);
   const hintsTotal = run.hints_summary?.total ?? 0;
 
@@ -384,16 +374,12 @@ function Cockpit() {
           ? run.failure_reason || t("run.summary.failed")
           : t("run.summary.status", { status: displayStatus(status) });
 
-  const tabs: Array<{ key: TabKey; label: string; count?: number }> = [
+  const tabs: Array<{ key: RunTab; label: string; count?: number }> = [
     { key: "conversation", label: t("run.tab.conversation") },
-    { key: "agents", label: t("run.tab.agents"), count: agents },
     { key: "findings", label: t("run.tab.findings"), count: findingsTotal },
-    { key: "evidence", label: t("run.tab.evidence") },
-    { key: "assessment", label: locale === "en" ? "Assessment" : "评估" },
     { key: "notes", label: t("run.tab.notes") },
+    { key: "files", label: t("run.tab.files") },
     { key: "report", label: t("run.tab.report") },
-    { key: "hints", label: t("run.tab.hints"), count: hintsTotal },
-    { key: "artifacts", label: t("run.tab.artifacts") },
   ];
 
   const csvHref = apiURL(`/api/runs/${encodeURIComponent(name)}/artifacts/vulnerabilities.csv`);
@@ -402,36 +388,26 @@ function Cockpit() {
   const tabContent = (() => {
     switch (tab) {
       case "conversation":
-        return <ConversationView name={name} run={run} />;
-      case "agents":
         return (
-          <AgentsPanel
+          <ConversationView
             name={name}
             run={run}
-            onSendHint={(agentId, agentName) => {
-              setHintTarget({ id: agentId, name: agentName });
-              selectTab("hints");
-            }}
+            selectedAgentId={agentId}
+            onSelectAgent={(id) => navigate({ agentId: id })}
           />
         );
       case "findings":
         return <FindingsPanel name={name} run={run} />;
-      case "evidence":
-        return <EvidencePanel name={name} run={run} />;
-      case "assessment":
-        return <AssessmentPanel key={name} name={name} run={run} />;
       case "notes":
-        return <NotesPanel key={name} runName={name} live={live} />;
+        return <NotebookPanel name={name} run={run} view={noteView} onViewChange={(view) => navigate({ noteView: view })} />;
+      case "files":
+        return <FilesPanel key={`${name}:${fileFilter}`} name={name} live={live} initialFilter={fileFilter} />;
       case "report":
         return <ReportPanel name={name} run={run} />;
-      case "hints":
-        return <HintsPanel name={name} run={run} target={hintTarget} />;
-      case "artifacts":
-        return <ArtifactsBrowser name={name} live={live} />;
     }
   })();
 
-  const internalScroll = tab === "conversation" || tab === "hints" || tab === "artifacts";
+  const internalScroll = tab === "conversation" || tab === "files";
 
   return (
     <div
@@ -692,9 +668,24 @@ function Cockpit() {
               key={t.key}
               type="button"
               role="tab"
+              id={`run-tab-${t.key}`}
+              aria-controls="run-tab-content"
               aria-selected={tab === t.key}
+              tabIndex={tab === t.key ? 0 : -1}
+              ref={node => { tabButtons.current[t.key] = node; }}
               className={cn("tab-item", tab === t.key && "tab-item-active")}
               onClick={() => selectTab(t.key)}
+              onFocus={event => event.currentTarget.scrollIntoView({ block: "nearest", inline: "nearest" })}
+              onKeyDown={event => {
+                const index = tabs.findIndex(item => item.key === t.key);
+                const nextIndex = event.key === "ArrowRight" ? (index + 1) % tabs.length
+                  : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+                    : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+                if (nextIndex < 0) return;
+                event.preventDefault();
+                selectTab(tabs[nextIndex].key);
+                tabButtons.current[tabs[nextIndex].key]?.focus();
+              }}
             >
               {t.label}
               {t.count !== undefined && t.count > 0 && (
@@ -704,14 +695,16 @@ function Cockpit() {
           ))}
         </div>
         <div
+          id="run-tab-content"
+          role="tabpanel"
+          aria-labelledby={`run-tab-${tab}`}
           className={cn(
             "min-h-0 flex-1",
             internalScroll
               ? cn(
                   "flex flex-col overflow-hidden",
                   !desktop && tab === "conversation" && "h-[72dvh] max-h-[44rem] min-h-[26rem]",
-                  !desktop && tab === "hints" && "h-[64dvh] max-h-[40rem] min-h-[24rem]",
-                  !desktop && tab === "artifacts" && "h-[76dvh] max-h-[52rem] min-h-[26rem]"
+                  !desktop && tab === "files" && "h-[76dvh] max-h-[52rem] min-h-[26rem]"
                 )
               : desktop
                 ? "overflow-y-auto"

@@ -303,7 +303,7 @@ export interface AssessmentPage {
 
 /* -------------------------------------------------------------------- hints */
 
-export type HintStatus = "queued" | "delivered" | "acked";
+export type HintStatus = "queued" | "delivered" | "acked" | "failed";
 
 export interface Hint {
   message_id: string;
@@ -313,6 +313,10 @@ export interface Hint {
   status: HintStatus;
   hint_token: string;
   created_at: string;
+  failure_code?: string;
+  failure_reason?: string;
+  delivered_at?: string;
+  failed_at?: string;
 }
 
 export interface HintsPage {
@@ -323,6 +327,47 @@ export interface HintSendResult {
   ok: boolean;
   message_id: string;
   hint_token: string;
+  agent_id?: string;
+  status?: HintStatus;
+  failure_code?: string;
+  failure_reason?: string;
+}
+
+export class HintRequestError extends Error {
+  constructor(public status: number | null, public code: string, public uncertain: boolean) {
+    super(code);
+    this.name = "HintRequestError";
+  }
+}
+
+/** A network failure never establishes whether a hint was accepted. Retry its UUID. */
+export async function sendHint(name: string, body: {
+  message: string; agent_id: string; client_request_id: string;
+}): Promise<HintSendResult> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/hints`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new HintRequestError(response.status, typeof payload?.error_code === "string" ? payload.error_code : "request_rejected", response.status >= 500);
+    }
+    if (payload?.ok !== true || typeof payload.message_id !== "string" || typeof payload.hint_token !== "string") {
+      throw new HintRequestError(response.status, "delivery_unknown", true);
+    }
+    return payload as HintSendResult;
+  } catch (error) {
+    if (error instanceof HintRequestError) throw error;
+    throw new HintRequestError(null, "delivery_unknown", true);
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 /* --------------------------------------------------------------------- log */

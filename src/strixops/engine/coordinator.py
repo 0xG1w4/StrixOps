@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -293,25 +294,33 @@ class AgentCoordinator:
     def detach_stream(self, agent_id: str) -> None:
         self._streams.pop(agent_id, None)
 
-    async def deliver_hint(self, agent_id: str, content: str) -> bool:
+    async def deliver_hint(
+        self, agent_id: str, content: str, *, admission_check: Callable[[], bool] | None = None
+    ) -> bool:
         """Mail a hint to an agent and interrupt its active turn.
 
         Non-interactive agents drain mailboxes only at ``wait_for_agents``,
         so an operator hint must also cancel the in-flight stream
         (``immediate``); the loop then replays with the mailbox contents.
         """
-        sent = await self.send(
-            agent_id,
-            {
+        async with self._lock:
+            entry = self._agents.get(agent_id)
+            root = self._agents.get("root")
+            if (
+                self._closing or entry is None or entry["status"] not in {STATUS_RUNNING, STATUS_WAITING}
+                or (admission_check is not None and not admission_check())
+                or agent_id in self._finishing
+                or (root is not None and root["status"] in TERMINAL_STATUSES)
+                or "root" in self._finishing
+            ):
+                return False
+            self._mailboxes.setdefault(agent_id, []).append({
                 "from": "operator",
                 "from_name": "operator",
                 "type": "operator_hint",
                 "priority": "high",
                 "content": content,
-            },
-        )
-        if not sent:
-            return False
+            })
         stream = self._streams.get(agent_id)
         if stream is not None:
             with contextlib.suppress(Exception):

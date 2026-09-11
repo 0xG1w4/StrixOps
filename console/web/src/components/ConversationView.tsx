@@ -11,10 +11,13 @@
    ========================================================================= */
 
 import * as React from "react";
-import { ArrowUp, Check, ChevronDown, Radio, RotateCcw } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, PanelLeft, Radio, RotateCcw } from "lucide-react";
 import { EmptyState, SeverityChip } from "@/components/ui";
-import { Select } from "@/components/Select";
-import { getJSON, streamURL } from "@/lib/api";
+import ConversationAgents from "@/components/ConversationAgents";
+import HintComposer from "@/components/HintComposer";
+import { subscribeAcceptedHints } from "./hint-state";
+import styles from "./ConversationControls.module.css";
+import { apiURL, streamURL } from "@/lib/api";
 import type { ConversationPage, Hint, HintsPage, Message, RunDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -421,7 +424,7 @@ function TodoList({ items }: { items: TodoItem[] }) {
    ========================================================================= */
 
 const MessageCard = React.memo(function MessageCard({ message }: { message: Message }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const agent = message.agent_name || message.agent_id || "";
   const time = clockOf(message.timestamp);
   const args = asRecord(message.args);
@@ -587,10 +590,12 @@ const MessageCard = React.memo(function MessageCard({ message }: { message: Mess
     case "operator_hint":
     case "hints": {
       const status = String(message.hint_status || "queued").toLowerCase();
-      const tone = status === "acked" ? "warning" : status === "delivered" ? "success" : "accent";
-      const statusKey = `hints.status.${status}`;
-      const translatedStatus = t(statusKey);
-      const label = translatedStatus === statusKey ? status : translatedStatus;
+      const tone = status === "failed" ? "danger" : status === "acked" ? "warning" : status === "delivered" ? "success" : "accent";
+      const labels: Record<string, [string, string]> = {
+        queued: ["等待交付", "Queued"], delivered: ["已交付", "Delivered"],
+        acked: ["已確認收到", "Receipt confirmed"], failed: ["交付失敗", "Delivery failed"],
+      };
+      const label = labels[status]?.[locale === "en" ? 1 : 0] || (locale === "en" ? "Unknown status" : "狀態未知");
       return (
         <MessageFrame variant="ml-auto max-w-[85%] border-accent/16 bg-accent/7">
           <div className="mb-1 flex items-center gap-2">
@@ -605,6 +610,8 @@ const MessageCard = React.memo(function MessageCard({ message }: { message: Mess
           <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
             {String(message.content ?? message.title ?? "")}
           </div>
+          {status === "acked" && <p className="mt-2 text-[10px] text-fg-muted">{locale === "en" ? "The agent echoed the receipt token. This does not mean the requested work is complete." : "代理已回覆確認 token；這不代表指令要求的工作已完成。"}</p>}
+          {status === "failed" && <p className={styles.failure}>{argStr(message, "failure_reason") || (locale === "en" ? "The hint could not be delivered." : "指令無法交付。")}</p>}
         </MessageFrame>
       );
     }
@@ -654,20 +661,36 @@ type ConnState = "connecting" | "stream" | "reconnecting" | "closed";
 export default function ConversationView({
   name,
   run,
+  selectedAgentId,
+  onSelectAgent,
 }: {
   name: string;
   run: RunDetail | null;
+  selectedAgentId?: string;
+  onSelectAgent?: (id: string) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const c = (zh: string, en: string) => locale === "en" ? en : zh;
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [phase, setPhase] = React.useState<"loading" | "ready" | "error">("loading");
-  const [error, setError] = React.useState("");
   const [conn, setConn] = React.useState<ConnState>("connecting");
   const [closedStatus, setClosedStatus] = React.useState<string | null>(null);
   const [follow, setFollow] = React.useState(true);
-  const [agentFilter, setAgentFilter] = React.useState("");
+  const [localAgent, setLocalAgent] = React.useState("root");
+  const agentFilter = selectedAgentId ?? localAgent;
+  const [agentsOpen, setAgentsOpen] = React.useState(false);
+  const [focusVersion, setFocusVersion] = React.useState(0);
+  const agentToggle = React.useRef<HTMLButtonElement>(null);
+  const chooseAgent = (id: string) => {
+    if (onSelectAgent) onSelectAgent(id); else setLocalAgent(id);
+    setFocusVersion(value => value + 1);
+    if (window.innerWidth <= 900) setAgentsOpen(false);
+  };
+  const closeAgents = () => { setAgentsOpen(false); agentToggle.current?.focus(); };
   const [windowSize, setWindowSize] = React.useState(DOM_WINDOW);
 
+  const transportEpoch = React.useRef(0);
+  const requests = React.useRef(new Set<AbortController>());
   const cursorRef = React.useRef(-1);
   const idsRef = React.useRef<Set<string>>(new Set());
   const esRef = React.useRef<EventSource | null>(null);
@@ -680,27 +703,57 @@ export default function ConversationView({
      The engine emits no hint event; the ledger (/api/runs/:name/hints) is
      the source of truth for what the operator sent and its delivery state. */
   const [hints, setHints] = React.useState<Hint[]>([]);
+  const [hintError, setHintError] = React.useState(false);
+  const [hintRevision, setHintRevision] = React.useState(0);
   const runLive = Boolean(run?.live);
+  React.useEffect(() => subscribeAcceptedHints((runName, hint) => {
+    if (runName !== name) return;
+    setHints(previous => [...previous.filter(item => item.message_id !== hint.message_id), hint]);
+    setHintRevision(value => value + 1);
+  }), [name]);
   React.useEffect(() => {
     let disposed = false;
+    let timer: number | undefined;
+    let controller: AbortController | null = null;
+    let resume = false;
     const loadHints = async () => {
+      if (disposed || document.hidden || controller) return;
+      const current = new AbortController();
+      controller = current;
+      let timedOut = false;
+      const deadline = window.setTimeout(() => { timedOut = true; current.abort(); }, 10_000);
       try {
-        const page = await getJSON<HintsPage>(`/api/runs/${encodeURIComponent(name)}/hints`);
-        if (!disposed) setHints(page.hints);
+        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/hints`), { cache: "no-store", signal: current.signal });
+        if (!response.ok) throw new Error("unavailable");
+        const page: HintsPage = await response.json();
+        if (!Array.isArray(page.hints)) throw new Error("unavailable");
+        if (!disposed && !current.signal.aborted) { setHints(page.hints); setHintError(false); }
       } catch {
-        /* ledger is best-effort in the transcript */
+        if (!disposed && (!current.signal.aborted || timedOut)) setHintError(true);
+      } finally {
+        window.clearTimeout(deadline);
+        controller = null;
+        if (!disposed && !document.hidden) {
+          if (resume) { resume = false; void loadHints(); }
+          else if (runLive) timer = window.setTimeout(() => void loadHints(), HINTS_POLL_MS);
+        }
       }
     };
+    const visibility = () => {
+      window.clearTimeout(timer);
+      if (document.hidden) { resume = false; controller?.abort(); }
+      else if (controller) resume = true;
+      else void loadHints();
+    };
     void loadHints();
-    if (!runLive) return;
-    const timer = window.setInterval(() => {
-      if (!document.hidden) void loadHints();
-    }, HINTS_POLL_MS);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", visibility);
     };
-  }, [name, runLive]);
+  }, [name, runLive, hintRevision]);
 
   const append = React.useCallback((incoming: Message[]) => {
     if (!incoming.length) return;
@@ -714,9 +767,21 @@ export default function ConversationView({
 
   const fetchPage = React.useCallback(
     async (after: number, replace: boolean) => {
-      const data = await getJSON<ConversationPage>(
-        `/api/runs/${encodeURIComponent(name)}/conversation?after=${after}`
-      );
+      const epoch = transportEpoch.current;
+      const controller = new AbortController();
+      requests.current.add(controller);
+      const deadline = window.setTimeout(() => controller.abort(), 12_000);
+      let data: ConversationPage;
+      try {
+        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/conversation?after=${after}`), { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error("unavailable");
+        data = await response.json();
+      } finally {
+        window.clearTimeout(deadline);
+        requests.current.delete(controller);
+      }
+      if (epoch !== transportEpoch.current || controller.signal.aborted) return;
+
       if (replace) {
         const sorted = [...data.messages].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
         idsRef.current = new Set(sorted.map((m) => m.id));
@@ -737,13 +802,14 @@ export default function ConversationView({
     esRef.current?.close();
     esRef.current = null;
     /* drain any tail lines the stream never delivered */
-    void fetchPage(cursorRef.current, false).catch(() => undefined);
+    if (!document.hidden) void fetchPage(cursorRef.current, false).catch(() => undefined);
   }, [fetchPage]);
 
   /* ---- initial load, SSE, fallback poll, visibility pause ---- */
   React.useEffect(() => {
     let disposed = false;
     let pollTimer: number | undefined;
+    transportEpoch.current += 1;
     cursorRef.current = -1;
     idsRef.current = new Set();
     closedRef.current = null;
@@ -751,10 +817,9 @@ export default function ConversationView({
     setConn("connecting");
     setClosedStatus(null);
     setPhase("loading");
-    setError("");
 
     const openStream = () => {
-      if (disposed || closedRef.current || esRef.current) return;
+      if (disposed || document.hidden || closedRef.current || esRef.current) return;
       let es: EventSource;
       try {
         es = new EventSource(
@@ -765,6 +830,7 @@ export default function ConversationView({
       }
       esRef.current = es;
       es.onmessage = (ev: MessageEvent<string>) => {
+        if (disposed || document.hidden) return;
         if (ev.lastEventId) {
           const idx = Number(ev.lastEventId);
           if (!Number.isNaN(idx)) cursorRef.current = Math.max(cursorRef.current, idx);
@@ -777,6 +843,7 @@ export default function ConversationView({
         }
       };
       es.addEventListener("run_closed", (ev) => {
+        if (disposed) return;
         try {
           const data = JSON.parse((ev as MessageEvent<string>).data) as { status?: string };
           closeStream(String(data.status ?? "closed"));
@@ -785,6 +852,7 @@ export default function ConversationView({
         }
       });
       es.onerror = () => {
+        if (disposed) return;
         /* EventSource auto-reconnects with Last-Event-ID; polling covers gaps */
         setConn((prev) => (closedRef.current || prev === "closed" ? prev : "reconnecting"));
       };
@@ -793,22 +861,21 @@ export default function ConversationView({
 
     const start = async () => {
       try {
-        await fetchPage(-1, true);
+        if (!document.hidden) await fetchPage(-1, true);
         if (disposed) return;
         setPhase("ready");
         requestAnimationFrame(() => {
           scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
         });
         openStream();
-      } catch (e) {
+      } catch {
         if (!disposed) {
           setPhase("error");
-          setError(String(e));
         }
       }
       if (disposed) return;
       pollTimer = window.setInterval(() => {
-        if (disposed || document.hidden || closedRef.current) return;
+        if (disposed || document.hidden || closedRef.current || requests.current.size > 0) return;
         void fetchPage(cursorRef.current, false)
           .then(() => {
             if (!disposed && !closedRef.current && !esRef.current) {
@@ -823,12 +890,13 @@ export default function ConversationView({
 
     const onVisibility = () => {
       if (document.hidden) {
+        requests.current.forEach(controller => controller.abort());
         esRef.current?.close();
         esRef.current = null;
-      } else if (!closedRef.current) {
+      } else {
         void fetchPage(cursorRef.current, false)
           .then(() => {
-            if (!disposed) openStream();
+            if (!disposed) { setPhase("ready"); openStream(); }
           })
           .catch(() => undefined);
       }
@@ -837,6 +905,9 @@ export default function ConversationView({
 
     return () => {
       disposed = true;
+      transportEpoch.current += 1;
+      requests.current.forEach(controller => controller.abort());
+      requests.current.clear();
       if (pollTimer !== undefined) window.clearInterval(pollTimer);
       document.removeEventListener("visibilitychange", onVisibility);
       esRef.current?.close();
@@ -852,15 +923,6 @@ export default function ConversationView({
     }
   }, [run, closeStream]);
 
-  /* ---- follow-scroll on append ---- */
-  const seenRef = React.useRef(0);
-  React.useEffect(() => {
-    if (messages.length > seenRef.current && followRef.current) {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-    }
-    seenRef.current = messages.length;
-  }, [messages]);
-
   /* ---- agent filter ---- */
   const agents = React.useMemo(
     () => (run?.agents ? Object.entries(run.agents) : []),
@@ -874,21 +936,23 @@ export default function ConversationView({
         type: "operator_hint",
         timestamp: hint.created_at,
         agent_id: hint.agent_id,
-        agent_name: hint.agent_name ?? "operator",
+        agent_name: hint.agent_name || run?.agents?.[hint.agent_id || "root"]?.name || hint.agent_id || "root",
         content: hint.message,
         hint_status: hint.status,
+        args: { failure_reason: hint.failure_reason || "", failure_code: hint.failure_code || "" },
       })),
-    [hints]
+    [hints, run?.agents]
   );
   const filtered = React.useMemo(() => {
     const nameLower = (filterEntry?.name || "").toLowerCase();
+    const transcript = messages.filter(message => message.type !== "operator_hint" && message.type !== "hints");
     const events = agentFilter
-      ? messages.filter(
+      ? transcript.filter(
           (m) =>
             m.agent_id === agentFilter ||
-            (nameLower && (m.agent_name || "").toLowerCase() === nameLower)
+            (!m.agent_id && nameLower && agents.filter(([, agent]) => agent.name.toLowerCase() === nameLower).length === 1 && (m.agent_name || "").toLowerCase() === nameLower)
         )
-      : messages;
+      : transcript;
     /* Hints route to the target agent ("" means root) — under an agent
      * filter keep only that agent's hints; otherwise show them all. */
     const ownHints = agentFilter
@@ -896,7 +960,16 @@ export default function ConversationView({
       : hintMessages;
     if (ownHints.length === 0) return events;
     return [...events, ...ownHints].sort(messageOrder);
-  }, [messages, hintMessages, agentFilter, filterEntry]);
+  }, [messages, hintMessages, agentFilter, filterEntry, agents]);
+  const seenRef = React.useRef(0);
+  const seenAgent = React.useRef(agentFilter);
+  React.useEffect(() => {
+    if ((filtered.length > seenRef.current || seenAgent.current !== agentFilter) && followRef.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    }
+    seenRef.current = filtered.length;
+    seenAgent.current = agentFilter;
+  }, [filtered, agentFilter]);
   const visible = filtered.slice(-windowSize);
   const hidden = filtered.length - visible.length;
   const live = Boolean(run?.live) && !closedStatus;
@@ -917,7 +990,11 @@ export default function ConversationView({
           : t("conversation.connection.connecting");
 
   return (
-    <section className="panel panel-hairline flex h-full min-h-0 flex-col overflow-hidden bg-surface/92">
+    <section
+      className="panel panel-hairline flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/92"
+      aria-label={c("任務對話", "Task conversation")}
+      onKeyDown={event => { if (event.key === "Escape" && agentsOpen) closeAgents(); }}
+    >
       {/* header bar */}
       <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line/6 px-4 py-3 text-xs text-fg-muted">
         <div className="flex min-w-0 items-center gap-2">
@@ -955,27 +1032,25 @@ export default function ConversationView({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {agents.length > 0 && (
-            <Select
-              aria-label={t("conversation.filterAgent")}
-              className="select-shell min-h-9 w-auto py-1 text-xs"
-              value={agentFilter}
-              onValueChange={setAgentFilter}
-              options={[
-                { value: "", label: t("conversation.allAgents") },
-                ...agents.map(([id, entry]) => ({ value: id, label: `${entry.name || id} (${id})` })),
-              ]}
-            />
-          )}
-          {agentFilter && (
-            <button
-              type="button"
-              className="button-ghost min-h-8 px-2 text-[10px] uppercase tracking-[0.14em]"
-              onClick={() => setAgentFilter("")}
-            >
-              {t("common.back")}
-            </button>
-          )}
+          <button
+            ref={agentToggle}
+            type="button"
+            className={styles.toggle}
+            aria-expanded={agentsOpen}
+            onClick={() => setAgentsOpen(value => !value)}
+          >
+            <PanelLeft size={14} />{c("代理", "Agents")} · {agents.length}
+          </button>
+          <select
+            className={styles.agentSelect}
+            aria-label={t("conversation.filterAgent")}
+            value={agentFilter}
+            onChange={event => chooseAgent(event.target.value)}
+          >
+            <option value="">{t("conversation.allAgents")}</option>
+            {agentFilter && !run?.agents?.[agentFilter] && <option value={agentFilter}>{agentFilter} · {c("狀態未知", "Unknown")}</option>}
+            {agents.map(([id, entry]) => <option key={id} value={id}>{entry.name || id} ({id})</option>)}
+          </select>
           <label className="checkbox-line cursor-pointer gap-1.5 text-[10px] uppercase tracking-[0.14em] text-fg-muted">
             <input
               type="checkbox"
@@ -988,8 +1063,17 @@ export default function ConversationView({
         </div>
       </div>
 
+      {hintError && (
+        <div className={styles.ledgerError} role="status">
+          <span>{c("指令交付狀態暫時無法更新。", "Hint delivery status could not be refreshed.")}</span>
+          <button type="button" onClick={() => setHintRevision(value => value + 1)}>{t("common.retry")}</button>
+        </div>
+      )}
+      <div className={styles.workspace}>
+        {agentsOpen && <ConversationAgents name={name} run={run} selected={agentFilter} onSelect={chooseAgent} onClose={closeAgents} />}
+        <div className={styles.main}>
       {/* scroll area */}
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-deep/32 p-4">
+      <div ref={scrollRef} aria-label={c("對話時間軸", "Conversation timeline")} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-deep/32 p-4">
         {phase === "loading" && messages.length === 0 ? (
           <div className="space-y-3 p-2">
             <div className="skeleton-line w-5/6" />
@@ -1003,19 +1087,17 @@ export default function ConversationView({
         ) : phase === "error" && messages.length === 0 ? (
           <div className="space-y-3 p-2">
             <div className="alert-error" role="alert">
-              {t("conversation.unavailable")} — {error}
+              {t("conversation.unavailable")}
             </div>
             <button
               type="button"
               className="button-secondary button-compact"
               onClick={() => {
+                const epoch = transportEpoch.current;
                 setPhase("loading");
                 void fetchPage(-1, true)
-                  .then(() => setPhase("ready"))
-                  .catch((e) => {
-                    setPhase("error");
-                    setError(String(e));
-                  });
+                  .then(() => { if (epoch === transportEpoch.current) setPhase("ready"); })
+                  .catch(() => { if (epoch === transportEpoch.current) setPhase("error"); });
               }}
             >
               {t("common.retry")}
@@ -1080,6 +1162,9 @@ export default function ConversationView({
             {t("conversation.footer.window", { n: visible.length })}
           </span>
         )}
+      </div>
+      <HintComposer name={name} run={run} selectedAgentId={agentFilter} focusVersion={focusVersion} />
+        </div>
       </div>
     </section>
   );

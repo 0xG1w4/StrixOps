@@ -47,6 +47,9 @@ from starlette.types import Scope
 from strixops import __version__
 from strixops.config.model_options import resolved_api_mode, validate_model_options
 from strixops.console import (
+    hints as operator_hints,
+)
+from strixops.console import (
     model_catalog,
     model_probe,
     notes,
@@ -62,6 +65,7 @@ from strixops.console import (
     web_search_settings,
 )
 from strixops.engine.targets import MAX_TARGETS, normalize_targets
+from strixops.platform import hint_store
 from strixops.platform.runname import generate_run_name
 
 RUN_SUFFIX_LENGTH = 4  # `<slug>_<4hex>`
@@ -870,74 +874,86 @@ class HintBody(BaseModel):
     message: str
     agent_id: str = ""
     phase: str = "1"
+    client_request_id: str | None = None
 
 
 def _load_hints(run_dir: Path) -> list[dict[str, Any]]:
-    hints_dir = run_dir / "operator_hints"
-    if not hints_dir.is_dir():
+    with hint_store.inbox_directory(run_dir / "operator_hints") as directory:
+        entries = hint_store.read_entries(directory)
+    if not entries:
         return []
+    live = _run_summary(run_dir)["live"]
     acked = parser.hint_ack_tokens(run_dir / "events.jsonl")
     hints: list[dict[str, Any]] = []
-    for path in hints_dir.glob("*.json"):
-        hint = parser.json_load(path)
-        if not hint:
-            continue
-        status = str(hint.get("status") or "queued")
-        token = str(hint.get("hint_token") or "")
-        if token and token in acked:
-            status = "acked"
-        hints.append(
-            {
-                "message_id": str(hint.get("message_id") or path.stem),
-                "agent_id": str(hint.get("agent_id") or ""),
-                "agent_name": str(hint.get("agent_name") or ""),
-                "message": str(hint.get("message") or ""),
-                "status": status,
-                "hint_token": token,
-                "created_at": str(hint.get("created_at") or ""),
-            }
-        )
+    for filename, data in entries:
+        hint = hint_store.project_hint(data, filename)
+        # Legacy queued records may have an echo even if their status rewrite
+        # failed. An explicitly failed record must never be upgraded by a token.
+        if hint["status"] != "failed" and hint["hint_token"] and hint["hint_token"] in acked:
+            hint["status"] = "acked"
+        elif hint["status"] == "queued" and not live:
+            hint = hint_store.project_hint({**hint, "status": "failed", "failure_code": "run_not_active"})
+        hints.append(hint)
     hints.sort(key=lambda hint: (hint["created_at"], hint["message_id"]))
     return hints
 
 
 def _hints_summary(run_dir: Path) -> dict[str, int]:
-    hints = _load_hints(run_dir)
+    try:
+        hints = _load_hints(run_dir)
+    except hint_store.HintError:
+        return {"total": 0, "delivered": 0}
     delivered = sum(1 for hint in hints if hint["status"] in ("delivered", "acked"))
     return {"total": len(hints), "delivered": delivered}
 
 
 @app.get("/api/runs/{name}/hints")
-def get_hints(name: str) -> dict:
-    return {"hints": _load_hints(state.run_dir(name))}
+def get_hints(name: str) -> Response:
+    try:
+        hint_store.validate_run_name(name)
+        return JSONResponse(
+            {"hints": _load_hints(state.run_dir(name))}, headers={"Cache-Control": "no-store"}
+        )
+    except hint_store.HintError as exc:
+        return _hint_error(exc)
+
+
+def _hint_error(exc: hint_store.HintError) -> Response:
+    return JSONResponse(
+        status_code=exc.status, content={"detail": exc.message, "error_code": exc.code},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/runs/{name}/hints")
-async def post_hint(name: str, body: HintBody) -> dict:
-    if not body.message.strip():
-        raise HTTPException(status_code=400, detail="message is required")
-    run_dir = state.run_dir(name)
-    hints_dir = run_dir / "operator_hints"
-    hints_dir.mkdir(parents=True, exist_ok=True)
-    message_id = uuid.uuid4().hex[:12]
-    hint = {
-        "message_id": message_id,
-        "task_id": "",
-        "phase": body.phase or "1",
-        "target": "",
-        "agent_id": body.agent_id,
-        "agent_name": "",
-        "message": body.message,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "status": "queued",
-        "hint_token": secrets.token_hex(4),
-    }
-    payload = json.dumps(hint, ensure_ascii=False)
-    tmp = hints_dir / f".{int(time.time())}_{message_id}.json.tmp"
-    final = hints_dir / f"{int(time.time())}_{message_id}.json"
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(final)
-    return {"ok": True, "message_id": message_id, "hint_token": hint["hint_token"]}
+async def post_hint(name: str, body: HintBody) -> Response:
+    try:
+        hint_store.validate_run_name(name)
+        run_dir = state.run_dir(name)
+
+        def admission(agent_id: str) -> str:
+            if not _run_summary(run_dir)["live"]:
+                raise hint_store.HintError("run_not_active")
+            agents = operator_hints.read_agents(run_dir, _open_run_file)
+            entry = agents.get(agent_id)
+            if not isinstance(entry, dict):
+                raise hint_store.HintError("unknown_agent")
+            if entry.get("status") not in hint_store.ACTIVE_AGENT_STATUSES:
+                raise hint_store.HintError("agent_not_active")
+            root = agents.get("root")
+            if agent_id != "root" and (
+                not isinstance(root, dict) or root.get("status") not in hint_store.ACTIVE_AGENT_STATUSES
+            ):
+                raise hint_store.HintError("run_not_active")
+            return str(entry.get("name") or agent_id)[:200]
+
+        result = operator_hints.enqueue(
+            run_dir, message=body.message, agent_id=body.agent_id, phase=body.phase,
+            client_request_id=body.client_request_id, admission=admission,
+        )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except hint_store.HintError as exc:
+        return _hint_error(exc)
 
 
 # ------------------------------------------------------------ stop / delete
@@ -1118,6 +1134,12 @@ async def safe_integration_validation(request: Request, exc: RequestValidationEr
     # Pydantic's normal validation output includes the rejected input, which
     # can contain a key even when an invalid outer body never reaches a route.
     route_path = getattr(request.scope.get("route"), "path", request.url.path)
+    if request.method == "POST" and route_path.rstrip("/") == "/api/runs/{name}/hints":
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "The instruction request is invalid.", "error_code": "invalid_request"},
+            headers={"Cache-Control": "no-store"},
+        )
     if (request.method, route_path.rstrip("/")) in {
         ("PUT", "/api/settings/integrations"),
         ("POST", "/api/settings/integrations/test"),

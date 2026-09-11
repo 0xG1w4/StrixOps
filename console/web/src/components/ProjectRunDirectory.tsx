@@ -253,7 +253,7 @@ export default function ProjectRunDirectory({
                           </span>
                         </Link>
                         <Link
-                          href={`/run?name=${encodeURIComponent(run.name)}&tab=artifacts`}
+                          href={`/run?name=${encodeURIComponent(run.name)}&tab=files`}
                           className="project-task-artifacts"
                           aria-label={t("projects.openTaskArtifacts", { name: runTargetLabel(run) })}
                           title={t("run.tab.artifacts")}

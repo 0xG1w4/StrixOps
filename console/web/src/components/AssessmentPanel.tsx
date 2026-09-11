@@ -11,6 +11,22 @@ import { useI18n } from "@/lib/i18n";
 
 const RESOLVED = new Set(["reported", "no_issue_found", "ruled_out", "not_applicable"]);
 
+function AssessmentMarkdown({ content, en }: { content: string; en: boolean }) {
+  return <ReactMarkdown
+    skipHtml
+    remarkPlugins={[remarkGfm]}
+    urlTransform={value => {
+      if (value.startsWith("#")) return value;
+      try { return ["https:", "http:"].includes(new URL(value).protocol) ? value : ""; }
+      catch { return ""; }
+    }}
+    components={{
+      img: ({ alt }) => <span>{en ? "Image omitted" : "圖片未載入"}{alt ? `: ${alt}` : ""}</span>,
+      a: ({ href, children }) => href ? <a href={href} target={href.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
+    }}
+  >{content}</ReactMarkdown>;
+}
+
 function outcomeLabel(value: string, en: boolean): string {
   const labels: Record<string, [string, string]> = {
     reported: ["已报告发现", "Finding reported"],
@@ -81,9 +97,15 @@ function isAssessment(value: AssessmentPage): boolean {
       && (model.amendments == null || (Array.isArray(model.amendments) && model.amendments.every((item) => item && typeof item.content === "string"))));
 }
 
-export default function AssessmentPanel({ name, run }: { name: string; run: RunDetail | null }) {
+export default function AssessmentPanel({ name, run, view = "all" }: {
+  name: string;
+  run: RunDetail | null;
+  view?: "all" | "coverage" | "threat_models";
+}) {
   const { locale, t } = useI18n();
   const en = locale === "en";
+  const showCoverage = view !== "threat_models";
+  const showModels = view !== "coverage";
   const [data, setData] = React.useState<AssessmentPage | null>(null);
   const [phase, setPhase] = React.useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = React.useState("");
@@ -145,10 +167,10 @@ export default function AssessmentPanel({ name, run }: { name: string; run: RunD
     ? data.coverage.unresolved_count : null;
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="min-w-0 space-y-4 p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium text-fg">{en ? "Assessment records" : "评估记录"}</h2>
+          <h2 className="text-sm font-medium text-fg">{view === "coverage" ? (en ? "Test coverage" : "測試覆蓋") : view === "threat_models" ? (en ? "Threat models" : "威脅模型") : (en ? "Assessment records" : "評估紀錄")}</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-fg-muted">
             {en
               ? "These are agent-reported checks. A completed run or resolved recorded items do not establish full coverage or the absence of vulnerabilities."
@@ -174,12 +196,14 @@ export default function AssessmentPanel({ name, run }: { name: string; run: RunD
         <>
           <div className="grid gap-2 sm:grid-cols-3">
             {[
-              [en ? "Recorded checks" : "已记录检查", recordedCoverage ? entries.length : unrecorded],
-              [en ? "Unresolved items" : "未完成项目", unresolvedCount ?? unrecorded],
-              [en ? "Threat models" : "威胁模型", recordedModels ? models.length : unrecorded],
+              ...(showCoverage ? [
+                [en ? "Recorded checks" : "已记录检查", recordedCoverage ? entries.length : unrecorded],
+                [en ? "Unresolved items" : "未完成项目", unresolvedCount ?? unrecorded],
+              ] : []),
+              ...(showModels ? [[en ? "Threat models" : "威胁模型", recordedModels ? models.length : unrecorded]] : []),
             ].map(([label, value]) => <div className="info-tile" key={label}><div className="info-label">{label}</div><div className="info-value text-sm">{value}</div></div>)}
           </div>
-          <section className="space-y-3" aria-label={en ? "Coverage" : "测试覆盖"}>
+          {showCoverage && <section className="space-y-3" aria-label={en ? "Coverage" : "测试覆盖"}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="micro-label">{en ? "Coverage" : "测试覆盖"} · {en ? "Agent reported" : "智能体记录"}</h3>
               {recordedCoverage && <label className="flex cursor-pointer items-center gap-2 text-xs text-fg-muted"><input type="checkbox" className="accent-accent" checked={unresolvedOnly} onChange={(event) => setUnresolvedOnly(event.target.checked)} />{en ? "Unresolved only" : "只看未完成项目"}</label>}
@@ -187,22 +211,22 @@ export default function AssessmentPanel({ name, run }: { name: string; run: RunD
             {!recordedCoverage ? <p className="text-xs text-fg-muted">{unrecorded}</p> : visible.length === 0 ? (
               <p className="text-xs text-fg-muted">{en ? "No matching recorded items. Full coverage remains unverified." : "没有符合条件的已记录项目，完整覆盖范围仍未经验证。"}</p>
             ) : visible.map((entry, index) => <CoverageRow key={entry.id || entry.entry_id || index} entry={entry} en={en} />)}
-          </section>
-          <section className="space-y-3 border-t border-line/6 pt-4" aria-label={en ? "Threat models" : "威胁模型"}>
+          </section>}
+          {showModels && <section className={`min-w-0 space-y-3 ${showCoverage ? "border-t border-line/6 pt-4" : ""}`} aria-label={en ? "Threat models" : "威胁模型"}>
             <h3 className="micro-label">{en ? "Threat models" : "威胁模型"}</h3>
             {!recordedModels && <p className="text-xs text-fg-muted">{unrecorded}</p>}
             {models.map((model, index) => (
               <details key={`${model.target}-${index}`} className="rounded-xl border border-line/8 bg-surface/42 p-3">
                 <summary className="cursor-pointer break-words text-sm font-medium text-fg">{model.target}</summary>
                 <p className="mt-2 text-[10px] text-fg-muted">{[model.written_by_name || model.written_by, model.updated_at, model.revision != null ? `${en ? "Revision" : "版本"} ${model.revision}` : ""].filter(Boolean).join(" · ")}</p>
-                <div className="prose-report mt-3"><ReactMarkdown remarkPlugins={[remarkGfm]}>{model.content}</ReactMarkdown></div>
+                <div className="prose-report mt-3"><AssessmentMarkdown content={model.content} en={en} /></div>
                 {Array.isArray(model.amendments) && model.amendments.length > 0 && (
                   <div className="mt-3 space-y-3 border-t border-line/6 pt-3">
                     <div className="micro-label text-[9px]">{en ? "Amendments" : "补充修订"}</div>
                     {model.amendments.map((amendment, amendmentIndex) => (
                       <div key={amendmentIndex} className="border-l-2 border-accent/30 pl-3">
                         <p className="text-[10px] text-fg-muted">{[amendment.agent_name || amendment.agent_id, amendment.timestamp].filter(Boolean).join(" · ")}</p>
-                        <div className="prose-report mt-1"><ReactMarkdown remarkPlugins={[remarkGfm]}>{amendment.content}</ReactMarkdown></div>
+                        <div className="prose-report mt-1"><AssessmentMarkdown content={amendment.content} en={en} /></div>
                       </div>
                     ))}
                   </div>
@@ -210,7 +234,7 @@ export default function AssessmentPanel({ name, run }: { name: string; run: RunD
                 <History entries={model.history} en={en} />
               </details>
             ))}
-          </section>
+          </section>}
           {data.generated_at && <p className="font-mono text-[10px] text-fg-faint">{en ? "Record updated" : "记录更新"} · {data.generated_at}</p>}
         </>
       )}
