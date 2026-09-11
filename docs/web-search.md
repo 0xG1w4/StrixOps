@@ -49,8 +49,10 @@ Task cancellation still cancels outstanding search work.
 
 ## Search activity
 
-After the first search call, the task details show calls, outbound requests,
-outcomes, elapsed search time and available usage. Perplexity usage is separate
+Open **Web search** in the task header to view calls, outbound requests,
+outcomes, elapsed search time and available usage in a side drawer (full-screen
+on phones). The records cover all Agents in the task, and opening the panel
+does not initiate a search. Perplexity usage is separate
 from the primary scan model's usage. Cost is the provider-reported USD total;
 missing values are unknown, and incomplete totals are marked partial.
 
@@ -58,7 +60,7 @@ The run-local `.state/web_search.json` stores aggregate counters and up to 20
 recent metadata records, without queries, answers, credentials or provider error
 bodies. This does not remove ordinary search tool arguments/results from existing
 Agent transcripts. Diagnostics failures do not stop the scan. Older runs without
-search metadata remain readable and omit the activity card.
+search metadata remain readable and show that no records are available.
 
 ## CLI configuration
 

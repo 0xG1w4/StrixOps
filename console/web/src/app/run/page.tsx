@@ -493,6 +493,7 @@ function Cockpit() {
               )}
             </div>
             <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+              <WebSearchDiagnostics key={`search-${name}`} runName={name} live={live} />
               {live && (
                 <ConfirmButton
                   label={t("run.stop")}
@@ -653,7 +654,6 @@ function Cockpit() {
       </div>
 
       <ProxyStatusPanel key={name} runName={name} live={live} enabled={run.scan_type === "web" && !run.dry_run} />
-      <WebSearchDiagnostics key={`search-${name}`} runName={name} live={live} />
 
       {/* ============================ console ============================ */}
       <section

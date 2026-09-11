@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.9 — 2026-09-11
+
+- Move task web-search diagnostics into a compact header button and an overlay
+  drawer, preserving space for the conversation and its hint composer.
+- Show task-wide call counts and diagnostic alerts at the entry point; retain
+  timing, usage, cost and recent records inside the drawer.
+- Use a full-screen panel on phones, with keyboard dismissal and focus return.
+  Keep the existing search execution and nonfatal failure behavior.
+
+Upgrade and behavior: [v1.1.9 release notes](docs/v1.1.9.md).
+
 ## 1.1.8 — 2026-09-11
 
 - Consolidate the task page into Conversation, Findings, Notes, Files and Report,

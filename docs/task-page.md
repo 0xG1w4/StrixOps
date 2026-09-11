@@ -12,6 +12,24 @@ Web and Internal assessment tasks share five main tabs:
 
 The separate MCP workbench keeps its existing navigation and task lifecycle.
 
+## Web search diagnostics
+
+The **Web search** button in the task header opens a side drawer on desktop
+and a full-screen panel on phones. It shows call counts and any recorded
+diagnostic alerts without placing a statistics panel above the conversation.
+The drawer contains success/failure/skip counts, actual API requests, timing,
+reported token usage and cost, and the most recent calls.
+
+These records cover the entire task, regardless of the selected Agent.
+Opening the drawer reads existing task records; it does not initiate a search.
+Closing it preserves the conversation, selected Agent and unsent hint draft.
+Use Escape or the close button to return to the task.
+
+Missing records and unavailable usage stay unknown rather than being shown as
+zero. A read failure offers a retry, and prior data remains visibly marked as
+stale when available. Search-service failures keep their existing nonfatal
+behavior and do not stop the assessment.
+
 ## Conversation and hints
 
 Choose an Agent in the conversation controls. Its timeline and the hint
