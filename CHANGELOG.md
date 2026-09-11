@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.6 — 2026-09-11
+
+- Include the new sandbox environment prompt in Web/Internal root and child
+  instructions while preserving older run snapshots that lack this section.
+- Guide focused, reactive delegation and independent vulnerability validation,
+  including handoffs and an explicit unverified outcome when capacity is exhausted.
+- Prefer available established tools and bounded batches, with operator traffic
+  constraints and interaction requirements preserved.
+- Clarify sandbox identity, reusable wordlists, evidence paths, HTTPQL filtering
+  and evidence-based diagnosis of Caido versus upstream errors.
+
+Upgrade and behavior: [v1.1.6 release notes](docs/v1.1.6.md).
+
 ## 1.1.5 — 2026-09-11
 
 - Guide Web/Internal Agents to use current public research when useful and to

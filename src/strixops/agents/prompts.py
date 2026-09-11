@@ -54,6 +54,14 @@ def _part(name: str) -> str:
     return content
 
 
+def _environment_part() -> str:
+    """Keep pre-environment snapshots intact without reading newer live text."""
+    frozen = _FROZEN_PARTS.get()
+    if frozen is not None and "environment.md" not in frozen:
+        return ""
+    return _part("environment.md")
+
+
 def list_prompt_parts() -> list[dict]:
     """Inventory for the console editor."""
     out: list[dict] = []
@@ -163,6 +171,7 @@ def root_instructions(spec: ScanSpec) -> str:
     ]
     sections += [
         _part("tooling.md"),
+        _environment_part(),
         language_instruction(spec.report_language),
         _part("common_tail.md"),
     ]
@@ -181,6 +190,7 @@ def child_instructions(task: str, spec: ScanSpec | None = None, skills: list[str
         _part("child_frame.md").format(task=task, internal_extra=internal_extra),
         engagement_context(spec),
         _part("tooling.md"),
+        _environment_part(),
         language_instruction(spec.report_language) if spec is not None else "",
         _part("common_tail.md"),
     ]

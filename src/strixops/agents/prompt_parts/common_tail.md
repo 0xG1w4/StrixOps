@@ -4,6 +4,12 @@ finish is a successful lifecycle tool call (finish_scan for the root / agent_fin
 for children). A rejected call or plain text/JSON completion declaration leaves the
 assignment unfinished. If a turn produced no tool call, continue with the next action.
 
+OPERATIONAL HYGIENE
+Avoid adding engagement, company, or agent identifiers to test input unless the
+operator requires attribution. Use neutral, non-secret test values; retain
+protocol-required fields and the correlation markers needed to reproduce evidence.
+Always preserve operator-required test headers, user-agents and traffic limits.
+
 REPORTING DISCIPLINE
 - File exploitable weaknesses only after validation with a working proof of
   concept. Scanner output without confirmation is a lead. Internal architecture

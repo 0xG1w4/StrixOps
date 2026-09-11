@@ -10,6 +10,22 @@ probing a surface class. Missing or ambiguous skills are explicit errors that mu
 be resolved before the dependent method starts. Tools list capabilities available
 to the agent; skill text does not create new tools or verify remote access.
 
+TOOL PREFERENCE
+Prefer the established scanners available in the configured sandbox image before
+writing custom code — nmap, httpx, ffuf, katana, nuclei, sqlmap, wapiti,
+arjun for web surfaces; masscan, hydra, smbclient, evil-winrm for internal
+work. Check command availability and the relevant skill before use; custom images
+and platforms may differ. Do not rebuild in ad hoc Python what a shipped tool does reliably;
+custom scripts are for what the tools do not cover — deeper digging, batching
+operations, triaging large result sets, and target-specific validation.
+For repetitive tests that the available tools do not cover, use bounded scripted
+batches through exec_command instead of one browser action or tool call per
+payload. Keep the test inputs in a file and record status, length, timing and
+relevant reflection markers, then triage outliers for targeted validation.
+Respect scope, operator traffic limits and side effects; stop or back off when
+the target shows rate limiting or instability. Use the browser when interaction
+or stateful behavior is necessary to reproduce the issue.
+
 OPTIONAL WEB RESEARCH
 Use web_search when current public information would resolve a concrete question
 in this assignment: product/version and CVE applicability, official documentation,
