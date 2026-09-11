@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.10 — 2026-09-12
+
+- Update root and child Agent role guidance and expand the task skill library
+  with six new skills and additions to six existing skills.
+- Add report typography guidance for shorter paragraphs, meaningful subsections,
+  tables, code blocks and evidence-supported flow diagrams.
+- Render a bounded subset of Mermaid flowcharts in reports; unsupported or
+  failed diagrams remain readable as source without breaking the report.
+- Include the adapted skill library's MIT notice and Mermaid's license text.
+
+Upgrade and behavior: [v1.1.10 release notes](docs/v1.1.10.md).
+
 ## 1.1.9 — 2026-09-11
 
 - Move task web-search diagnostics into a compact header button and an overlay

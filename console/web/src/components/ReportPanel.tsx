@@ -12,6 +12,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, FileText, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/ui";
+import MermaidDiagram from "@/components/MermaidDiagram";
 import { apiURL, getJSON } from "@/lib/api";
 import type { ReportPage, RunDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -19,6 +20,21 @@ import { useI18n } from "@/lib/i18n";
 const REPORT_POLL_MS = 5000;
 
 type LoadOutcome = "ready" | "missing" | "error" | "stale";
+
+/* A fenced ```mermaid block arrives as <pre><code class="language-mermaid">.
+ * Intercept it at the <pre> level (inline code has no pre) and hand the chart
+ * to the diagram renderer; every other block falls through unchanged. */
+function mermaidSource(children: React.ReactNode): string | null {
+  const child = Array.isArray(children) ? children[0] : children;
+  if (!React.isValidElement(child)) return null;
+  const props = child.props as { className?: unknown; children?: unknown };
+  const className = typeof props.className === "string" ? props.className : "";
+  if (!className.split(/\s+/).includes("language-mermaid")) return null;
+  const raw = props.children;
+  const text = Array.isArray(raw) ? raw.join("") : String(raw ?? "");
+  const chart = text.trim();
+  return chart || null;
+}
 
 export default function ReportPanel({ name, run }: { name: string; run: RunDetail | null }) {
   const { t } = useI18n();
@@ -173,7 +189,17 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
         </a>
       </div>
       <div className="prose-report">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            pre: ({ children }) => {
+              const chart = mermaidSource(children);
+              return chart ? <MermaidDiagram chart={chart} /> : <pre>{children}</pre>;
+            },
+          }}
+        >
+          {markdown}
+        </ReactMarkdown>
       </div>
     </div>
   );

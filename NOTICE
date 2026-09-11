@@ -31,5 +31,70 @@ Copyright usestrix / Strix contributors) and are used under that license:
 The sandbox base image ghcr.io/usestrix/strix-sandbox is a third-party
 artifact extended with internal-network tools for the shared web/internal sandbox.
 
+Technique coverage in parts of the skills corpus was taken from the
+claude-red skill library (https://github.com/SnailSploit/claude-red, MIT
+License, Copyright (c) 2024-2025 SnailSploit / Kai Aizen), adapted into this
+project's discipline format with engagement gating and cross-references:
+
+  * internal/ augmentations (lateral movement, privilege escalation,
+    persistence, TOCTOU) and the new relay_and_coercion skill;
+  * cloud/container_escape.md, cloud/kubernetes.md attack-chain additions;
+  * vulnerabilities/tls_attacks.md, vulnerabilities/crypto_attacks.md and
+    the authentication_jwt header-injected-key additions;
+  * custom/api_attacks.md (merged from api-abuse and api-security);
+  * reconnaissance/osint.md, scoped to authorized-engagement intelligence.
+
 All other source code in this repository is original work of the StrixOps
 authors, licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------
+Third-party license: claude-red
+https://github.com/SnailSploit/claude-red
+
+MIT License
+
+Copyright (c) 2024-2025 SnailSploit / Kai Aizen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------
+Third-party license: Mermaid
+https://github.com/mermaid-js/mermaid
+
+The MIT License (MIT)
+
+Copyright (c) 2014 - 2022 Knut Sveidqvist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

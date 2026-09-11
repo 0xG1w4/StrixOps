@@ -1704,6 +1704,22 @@
     font-size: 0.85em;
   }
 
+  .prose-report figure.mermaid-block {
+    margin: 1.1rem 0;
+    padding: 1rem;
+    border: 1px solid rgb(var(--gold-rgb) / 0.14);
+    border-radius: 0.9rem;
+    background: rgba(5, 11, 18, 0.6);
+    overflow-x: auto;
+    text-align: center;
+  }
+
+  .prose-report figure.mermaid-block svg {
+    max-width: none;
+    height: auto;
+    margin: 0 auto;
+  }
+
   .prose-report pre {
     overflow-x: auto;
     padding: 1rem;

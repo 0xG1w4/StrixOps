@@ -164,3 +164,114 @@ JWT/OIDC failures often enable token forgery, token confusion, cross-service acc
 ## Summary
 
 Verification must bind the token to the correct issuer, audience, key, and client context on every acceptance path. Any missing binding enables forgery or confusion.
+
+## Header-Injected Key Attacks (jku / x5u / kid)
+
+
+### Algorithm Vulnerabilities
+
+- **alg:none** — Some libraries disable signature validation when `alg` is `none` or a case variant (`None`, `NONE`, `nOnE`)
+- **Algorithm Confusion (RS256→HS256)** — Server uses RSA public key as HMAC secret when attacker switches `alg` to HS256; attacker re-signs token with the public key
+- **Key ID (`kid`) Manipulation** — Exploiting `kid` to load wrong keys or inject file paths / SQL; enforce strict lookups
+
+### Signature Vulnerabilities
+
+- **Weak HMAC Secrets** — Brute-forceable with dictionary or hashcat
+- **Missing Signature Validation** — Token accepted without any verification
+- **Broken Validation** — Implementation errors in signature checking logic
+
+### Implementation Issues
+
+- **Missing Claims Validation** — `exp`, `nbf`, `aud`, `iss` not verified
+- **Insufficient Entropy** — Predictable JWT IDs or tokens
+- **No Expiration** — Tokens valid indefinitely
+- **Insecure Transport** — Token sent over HTTP
+- **Debug Leakage** — Detailed error messages expose implementation
+
+### Header Injection Attacks
+
+- **JWK Injection** — Supply a custom attacker-controlled public key via the `jwk` header
+- **JKU Manipulation** — Point `jku` (JWK Set URL) to attacker-controlled JWKS endpoint
+- **x5u Misuse** — Load untrusted X.509 key URL; exploit lax TLS validation or open redirects
+- **JWKS Cache Poisoning** — Force caches to accept attacker keys via `kid` collisions or response header manipulation
+- **`crit` Header Abuse** — Server ignores unknown critical parameters, enabling bypass
+
+### Information Disclosure
+
+- Sensitive data (PII, credentials, session details) stored unencrypted in payload
+- Internal service/backend information leaked via claims
+
+## Additional Attack Vectors
+
+### Mobile App JWT Storage
+
+**Android:**
+- `SharedPreferences`: Check if world-readable; location `/data/data/<package>/shared_prefs/`
+- Keystore extraction: root device or exploit app
+- Backup extraction: `adb backup -f backup.ab <package>` (if `allowBackup=true`)
+- Tools: Frida, objection, MobSF
+
+**iOS:**
+- Keychain: Check `kSecAttrAccessible` — `kSecAttrAccessibleAlways` is insecure
+- iTunes/iCloud backup extraction: unencrypted backups expose Keychain
+- Jailbreak + Keychain-Dumper for full extraction
+- Tools: Frida, objection, idb
+
+**React Native / Hybrid:**
+- `AsyncStorage` stored in plain text (Android SQLite DB, iOS plist); no encryption by default
+
+```bash
+# Android — check SharedPreferences
+adb shell "run-as com.target.app cat /data/data/com.target.app/shared_prefs/auth.xml"
+
+# iOS — extract from backup
+idevicebackup2 backup --full /path/to/backup
+# Use plist/sqlite tools to extract JWT
+```
+
+### JWT Confusion Attacks
+
+- **SAML-JWT Confusion** — App accepts both SAML and JWT; send JWT where SAML expected or vice versa to exploit weaker validation path
+- **API Key-JWT Confusion** — Test sending JWT where API key expected and vice versa
+- **Session Cookie-JWT Hybrid** — Test expired JWT with valid session cookie; inject JWT claims into session
+- **OAuth Token Confusion** — Send ID token (JWT) to resource server expecting opaque access token
+
+```bash
+# Try API key where JWT expected
+curl -H "Authorization: Bearer <api_key>" https://api.target/resource
+
+# Try JWT where API key expected
+curl -H "X-API-Key: <jwt_token>" https://api.target/resource
+```
+
+### Timing Attacks on HMAC
+
+Non-constant-time comparison leaks the HMAC secret character by character via response time differences.
+
+```python
+import requests, time
+
+def time_request(signature):
+    start = time.perf_counter()
+    r = requests.get('https://target/api',
+                     headers={'Authorization': f'Bearer header.payload.{signature}'})
+    return time.perf_counter() - start
+
+# Brute-force first byte — longer response time indicates correct byte
+for byte in range(256):
+    sig = bytes([byte]) + b'\x00' * 31
+    t = time_request(sig.hex())
+```
+
+### JWT in URL Parameters
+
+- Tokens in GET URLs appear in server logs, proxy logs, browser history
+- Leaked via `Referer` header to external sites; CDN/cache logs may persist tokens
+
+```bash
+curl "https://api.target/resource?token=eyJ..."
+curl "https://api.target/resource?access_token=eyJ..."
+curl "https://api.target/resource?jwt=eyJ..."
+```
+
+Check Wayback Machine for historical URLs with tokens; monitor Referer headers to third-party analytics.

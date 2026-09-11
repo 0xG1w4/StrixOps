@@ -257,9 +257,8 @@ Then include these sections (in order, with ## headings, when evidence exists):
 {sections}
 
 EDITORIAL RULES:
-- Make the report detailed and concrete, not terse. Prefer rich technical
-  explanation over short bullet summaries; length should be proportional to
-  the evidence, never padded.
+- Make the report detailed and concrete, not terse — and structured, never a
+  wall of text. Length should be proportional to the evidence, never padded.
 - In the findings section, for each theme: root cause, technical mechanism,
   concrete evidence (response excerpts, values, error messages), PoC summary
   (runnable code blocks allowed from poc_script_code), impact and severity
@@ -276,6 +275,24 @@ EDITORIAL RULES:
   says the execution ended early or failed, clearly state coverage is partial.
 - Do NOT include remediation advice anywhere.
 - Do NOT cite source file names unless necessary to explain the operation.
+
+TYPOGRAPHY — the viewer renders full markdown (headings, lists, GFM tables,
+fenced code blocks and mermaid diagrams), so use it:
+- Keep paragraphs short: at most 5 lines each. Anything a section enumerates
+  becomes bullets or a table, not run-on prose.
+- Break major sections into ### subsections with meaningful titles, one per
+  theme, stage or host (e.g. a numbered stage inside the attack-path section,
+  one ### per host in the architecture section).
+- Use GFM tables with a header row for anything tabular: host/service
+  inventories, credentials, affected parameters, per-finding summaries.
+- Bold the facts a reader must not miss: severity, endpoints, finding ids.
+- PoC steps, commands and response excerpts go in fenced code blocks with
+  their language tag.
+- When a flow shows more than prose — an attack chain (entry → pivot →
+  objective), an access path, or the environment layout — add ONE fenced
+  mermaid flowchart (```mermaid, flowchart TD, ASCII node ids, labels in the
+  report language, roughly 12 nodes at most). Diagrams support the written
+  evidence; they never replace it, and a section gets at most one.
 {_SEVERITY_RULES_ZH}
 
 The report language is {deliverable}"""

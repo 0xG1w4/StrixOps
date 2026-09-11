@@ -12,6 +12,11 @@ Web and Internal assessment tasks share five main tabs:
 
 The separate MCP workbench keeps its existing navigation and task lifecycle.
 
+The Report view supports a bounded subset of Mermaid flowcharts alongside
+ordinary Markdown. Supported diagrams use basic nodes and directed edges;
+unsupported syntax and render failures remain visible as code. The Markdown
+download preserves the original report text.
+
 ## Web search diagnostics
 
 The **Web search** button in the task header opens a side drawer on desktop

