@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import { apiURL } from "@/lib/api";
 
 export type PromptProbeKind = "prompt" | "skill";
@@ -78,7 +81,7 @@ const invalidResponse = () => new PromptProbeError("console_invalid_response", "
 async function request(path: string, signal: AbortSignal, body?: PromptProbeRequest): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(apiURL(path), {
+    response = await authFetch(apiURL(path), {
       method: body ? "POST" : "GET",
       cache: "no-store",
       signal,

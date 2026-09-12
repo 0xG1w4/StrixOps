@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 /* ============================================================================
    FindingsPanel — vulnerabilities + internal findings of the run cockpit.
 
@@ -388,7 +391,7 @@ function InternalModalBody({
 
   React.useEffect(() => {
     let disposed = false;
-    fetch(
+    authFetch(
       apiURL(`/api/runs/${encodeURIComponent(name)}/artifacts/internal_findings/${finding.id}.md`)
     )
       .then(async (res) =>

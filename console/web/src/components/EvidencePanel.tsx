@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 /* ============================================================================
    EvidencePanel — evidence files collected from the agent's workspace.
 
@@ -214,7 +217,7 @@ function EvidenceModal({
 
   React.useEffect(() => {
     let disposed = false;
-    fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/evidence/${encodeURIComponent(entry.filename)}`))
+    authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/evidence/${encodeURIComponent(entry.filename)}`))
       .then(async (res) => (res.ok ? res.text() : "(unable to load)"))
       .then((text) => {
         if (!disposed) setContent(text.slice(0, 5000));

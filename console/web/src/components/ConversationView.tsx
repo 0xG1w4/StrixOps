@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch, refreshAuthSession } from "@/lib/auth";
+
+
 /* ============================================================================
    ConversationView — the live transcript panel of the run cockpit.
 
@@ -723,7 +726,7 @@ export default function ConversationView({
       let timedOut = false;
       const deadline = window.setTimeout(() => { timedOut = true; current.abort(); }, 10_000);
       try {
-        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/hints`), { cache: "no-store", signal: current.signal });
+        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/hints`), { cache: "no-store", signal: current.signal });
         if (!response.ok) throw new Error("unavailable");
         const page: HintsPage = await response.json();
         if (!Array.isArray(page.hints)) throw new Error("unavailable");
@@ -773,7 +776,7 @@ export default function ConversationView({
       const deadline = window.setTimeout(() => controller.abort(), 12_000);
       let data: ConversationPage;
       try {
-        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/conversation?after=${after}`), { cache: "no-store", signal: controller.signal });
+        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/conversation?after=${after}`), { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("unavailable");
         data = await response.json();
       } finally {
@@ -853,6 +856,7 @@ export default function ConversationView({
       });
       es.onerror = () => {
         if (disposed) return;
+        void refreshAuthSession();
         /* EventSource auto-reconnects with Last-Event-ID; polling covers gaps */
         setConn((prev) => (closedRef.current || prev === "closed" ? prev : "reconnecting"));
       };

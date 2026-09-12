@@ -1,5 +1,7 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
 export type McpTaskStatus = "idle" | "capturing" | "stopped" | "ended" | "error" | "starting" | "stopping" | "ending" | "deleting" | "delete_failed";
 export type McpFlowKind = "page" | "api" | "asset" | "other";
 export type McpFlowSource = "user" | "replay" | "agent";
@@ -284,6 +286,10 @@ export const mcpAuth = {
   },
 };
 
+if (typeof window !== "undefined") {
+  window.addEventListener("strixops:auth-cleared", () => mcpAuth.clear(false));
+}
+
 function assertCurrent(generation: number, signal: AbortSignal) {
   if (generation !== authGeneration || signal.aborted) throw new DOMException("MCP request cancelled", "AbortError");
 }
@@ -300,7 +306,7 @@ async function mcpFetch<T>(path: string, init: RequestInit, decode: (response: R
   if (token) headers.set("X-MCP-Token", token);
   try {
     // Tokens are confined to same-origin MCP requests, including binary downloads.
-    const response = await fetch(`/api/mcp${path}`, { cache: "no-store", ...init, headers, signal: controller.signal, credentials: "same-origin", redirect: "error" });
+    const response = await authFetch(`/api/mcp${path}`, { cache: "no-store", ...init, headers, signal: controller.signal, credentials: "same-origin", redirect: "error" });
     assertCurrent(generation, controller.signal);
     if (!response.ok && !(path === "/access" && response.status === 403)) {
       let message = `${response.status} ${response.statusText}`;

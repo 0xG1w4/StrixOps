@@ -4,7 +4,7 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.2.5** · [版本说明](docs/v1.2.5.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.3.0** · [版本说明](docs/v1.3.0.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -53,7 +53,7 @@ Python 引擎、FastAPI 服务与 Next.js 控制台共同组成完整产品。�
 | 报告 | 动态测试发现与依赖项发现、CVSS 校验、源码与修复元数据、项目报告 | 结合证据审阅修复细节 |
 | 证据管理 | 保留工作区、SHA256 元数据、二进制文件下载和 ZIP 导出 | 保存安全发现与最终报告引用的文件 |
 
-控制台是**单用户应用**，不提供用户账户、租户隔离或身份验证边界。远程部署时，应通过 SSH 隧道或具备身份验证的访问层使用。
+控制台使用唯一的本地账号，提供密码登录、Session 保护及首次强制改密码，不提供多用户或租户隔离。远程使用 HTTPS 或 SSH 隧道；详见[账号指南](docs/authentication.md)。
 
 <a id="mcp-traffic-workbench"></a>
 
@@ -67,9 +67,9 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 长任务名称和 URL 不再撑破列宽，详情保留完整内容。删除任务需确认，随后停止其代理与测试工作，并清除保存的流量、结果和报告；共用 CA 与其他任务继续保留。
 
-通过控制台 IP 打开 MCP 即可自动初始化，沿用控制台部署的访问边界。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 与代理配置仍保留为高级覆盖选项。
+MCP 页面直接沿用 Console 的登录状态。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 仅用于外部 MCP 协议端点，代理配置仍可作为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.2.5 版本说明](docs/v1.2.5.md)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.3.0 版本说明](docs/v1.3.0.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -136,7 +136,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.2.5 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.3.0 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 ./strixops.sh install --build-images
@@ -144,6 +144,11 @@ cd StrixOps
 ```
 
 打开 **[http://127.0.0.1:8300](http://127.0.0.1:8300)**。
+
+控制台使用唯一账号 **`strix`** 登录，初始密码 **`strix123`**，首次登录后必须修改。
+右上角头像菜单提供密码设置与最近五次成功登录记录。已有数据会保留；远程部署请使用 HTTPS。
+详见[账号与安全说明](docs/authentication.md)。
+
 
 脚本会先构建前端，再执行 `uv sync`：Python 包会包含 `console/web/out`，需完成前端构建才能生成。
 
@@ -154,7 +159,7 @@ cd StrixOps
 
 脚本会保存**绝对运行目录路径**，默认使用本项目下的 `strix_runs`。手动启动时也应使用绝对路径，避免控制台与引擎对相对路径的解析不同。
 
-上面的克隆命令选择 `v1.2.5` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.2.5`。
+上面的克隆命令选择 `v1.3.0` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.3.0`。
 
 安装完成后，再次启动只需执行：
 
@@ -194,11 +199,11 @@ curl --fail http://127.0.0.1:8300/api/health
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.2.5-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.3.0-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.2.5-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.3.0-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -381,7 +386,7 @@ sudo journalctl -u strixops-console -f
 ssh -N -L 18300:127.0.0.1:8300 user@your-server
 ```
 
-然后在本机打开 [http://127.0.0.1:18300](http://127.0.0.1:18300)。如果改用反向代理，请在该层配置身份验证和 TLS，同时转发 UI 与 `/api/*`，并支持不经缓冲的长连接流式响应。请勿将 `--host 0.0.0.0` 直接暴露为没有身份验证的公共服务。
+然后在本机打开 [http://127.0.0.1:18300](http://127.0.0.1:18300)。如果改用反向代理，请在该层配置 TLS、保留 Console 登录，同时转发 UI 与 `/api/*`，并支持不经缓冲的长连接流式响应。公开使用前需完成首次改密码并配置 HTTPS。
 
 ### 备份与升级
 
@@ -427,7 +432,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.2.5` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.3.0` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 

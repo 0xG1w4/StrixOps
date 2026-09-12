@@ -1,4 +1,7 @@
 "use client";
+
+import { authFetch } from "@/lib/auth";
+
 import * as React from "react";
 import { FileText, X } from "lucide-react";
 import { StatusPill } from "@/components/ui";
@@ -25,13 +28,13 @@ export default function ConversationAgents({ name, run, selected, onSelect, onCl
     const load = async () => {
       let file: string | null = null;
       try {
-        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/prompts/prompt_manifest.json`), { cache: "no-store", signal: controller.signal });
+        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/prompts/prompt_manifest.json`), { cache: "no-store", signal: controller.signal });
         if (response.ok) {
           const manifest: PromptManifest = await response.json();
           const candidate = manifest.agents?.find(agent => agent.agent_id === selected)?.prompt_file;
           if (promptFile(candidate)) file = candidate;
         } else if (response.status === 404) {
-          const inventory = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/prompts`), { cache: "no-store", signal: controller.signal });
+          const inventory = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/prompts`), { cache: "no-store", signal: controller.signal });
           const data = await inventory.json() as { prompts?: Array<{ agent: string; file: string }> };
           const candidate = data.prompts?.find(item => item.agent === selected)?.file;
           if (promptFile(candidate)) file = candidate;

@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import * as React from "react";
 import { CircleAlert, CircleCheck, FileUp, ListChecks, X } from "lucide-react";
 import { apiURL } from "@/lib/api";
@@ -140,7 +143,7 @@ export function useMultiTargetCheck({ enabled, text, scanType, projectId, retry 
     const timer = window.setTimeout(async () => {
       timeout = window.setTimeout(() => controller.abort(), 20000);
       try {
-        const response = await fetch(apiURL("/api/scans/validate-targets"), {
+        const response = await authFetch(apiURL("/api/scans/validate-targets"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ targets, scan_type: scanType, project_id: projectId }),

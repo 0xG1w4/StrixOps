@@ -36,7 +36,7 @@
 监听地址、端口与绝对数据路径会保存，后续不需重复输入。首次运行会读取现有
 `STRIX_RUNS`、`STRIXOPS_CONSOLE_CONFIG`、`STRIXOPS_PROJECTS_FILE`、
 `STRIXOPS_PROJECT_REPORTS_DIR`、`STRIXOPS_QUEUE_DB`、`STRIXOPS_MCP_ROOT`、
-`STRIXOPS_FOFA_ROOT`，后续保留这些路径。模型凭证仍从原 Console 设置读取。
+`STRIXOPS_FOFA_ROOT`、`STRIXOPS_AUTH_DB`，后续保留这些路径。模型凭证仍从原 Console 设置读取。Console 登录账号与密码也会保留。
 其他运行环境变量继承调用脚本的终端；脚本不会 source `.env` 或把凭证复制到管理记录。
 如果要调整已保存的数据路径，请停止服务后修改 `.strixops/manager/config.json`；
 任务目录也可通过 `restart --runs-root ...` 修改。
@@ -59,6 +59,8 @@
 不会按名称／端口批量终止，也不会终止独立扫描进程或清理 Docker。
 默认等待 30 秒；可用 `stop --timeout 60` 或 `restart --timeout 60` 延长至最多 300 秒。
 超时不会自动 SIGKILL，记录保留，可检查日志后重试。
+
+启动与 status 会分别显示监听地址和本机网址；监听 `0.0.0.0` 时本机网址仍可用 `127.0.0.1`。
 
 日志为 `.strixops/manager/console.log`；配置、安装清单和 PID 记录也在该目录，
 均属于忽略的本机文件，不会推送 Git。日志不自动删除，可按部署需求轮转。

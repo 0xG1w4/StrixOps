@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 /* ============================================================================
    ArtifactsBrowser — browse everything the engine wrote into a run dir.
 
@@ -354,7 +357,7 @@ export default function ArtifactsBrowser({
     const url = apiURL(
       `/api/runs/${encodeURIComponent(name)}/artifacts/${selected.path.split("/").map(encodeURIComponent).join("/")}`
     );
-    fetch(url)
+    authFetch(url)
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
         return res.text();

@@ -36,7 +36,6 @@ from urllib.parse import quote, urlsplit
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 from starlette.background import BackgroundTask
@@ -65,6 +64,8 @@ from strixops.console import (
     settings_store,
     web_search_settings,
 )
+from strixops.console.auth import AuthMiddleware, static_csp
+from strixops.console.auth import router as auth_router
 from strixops.console.batch_launch import ConsoleBatchController
 from strixops.engine.targets import MAX_TARGETS, normalize_targets
 from strixops.platform import hint_store
@@ -109,13 +110,9 @@ state: ConsoleState = ConsoleState(_runs_root_from())
 _batch_controller: ConsoleBatchController | None = None
 _batch_controller_key: tuple[str, str] | None = None
 
-app = FastAPI(title="StrixOps Console", version=__version__)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="StrixOps Console", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(AuthMiddleware)
+app.include_router(auth_router)
 app.include_router(prompt_probe.router)
 
 # Independent traffic tasks share only the Console HTTP surface, not scan execution.
@@ -337,8 +334,6 @@ def health() -> dict:
         "ok": True,
         "product": "StrixOps",
         "version": __version__,
-        "runs_root": str(state.runs_root),
-        "live_runs": _live_run_count(),
     }
 
 
@@ -1541,6 +1536,8 @@ def _queue_controller() -> ConsoleBatchController:
 
 def _console_origin(request: Request) -> None:
     """Apply the Console origin boundary to credential and queue operations."""
+    if request.scope.get("state", {}).get("strixops_authenticated"):
+        return  # The global boundary has already checked origin and CSRF.
     origin = request.headers.get("origin")
     if request.headers.get("sec-fetch-site", "").lower() == "cross-site":
         raise HTTPException(status_code=403, detail="Use this Console's own page for this operation.")
@@ -2274,6 +2271,14 @@ class _StaticExportFiles(StaticFiles):
     ``scan.html`` files — ``/run`` must resolve to ``run.html`` before the
     404 fallback wins.
     """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if str(full_path).endswith(".html"):
+            response.headers["Content-Security-Policy"] = static_csp(
+                str(full_path), stat_result.st_mtime_ns, stat_result.st_size,
+            )
+        return response
 
     async def get_response(self, path: str, scope: Scope) -> Response:
         if scope.get("path", "").startswith("/api/"):

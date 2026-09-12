@@ -1,0 +1,71 @@
+.gate { min-height: 100dvh; display: grid; place-items: center; padding: 64px 20px 40px; background: var(--bg-void); color: var(--text-primary); }
+.gateTools { position: absolute; top: 20px; right: 24px; display: flex; gap: 4px; }
+.gateTools button { border: 1px solid transparent; background: transparent; color: var(--text-muted); border-radius: 5px; min-width: 36px; min-height: 34px; font: 12px var(--font-mono); }
+.gateTools button[aria-pressed="true"] { color: var(--cyan-primary); border-color: var(--border-primary); background: var(--bg-panel); }
+.loginCard { width: min(100%, 430px); padding: 32px; border: 1px solid var(--border-primary); border-radius: 12px; background: var(--bg-panel); box-shadow: 0 20px 80px rgb(0 0 0 / .13); }
+.brand { display: flex; gap: 16px; align-items: center; padding-bottom: 26px; border-bottom: 1px solid var(--border-secondary); }
+.brand > span { font: 600 22px var(--font-mono); letter-spacing: .16em; color: var(--text-heading); }
+.brand > span > span { display: block; font-size: 10px; letter-spacing: .28em; color: var(--text-muted); margin-top: 5px; }
+.avatar, .avatarLarge { color: var(--cyan-primary); flex: none; }
+.avatar { width: 32px; height: 32px; }
+.avatarLarge { width: 64px; height: 64px; }
+.intro { padding: 26px 0 22px; }
+.eyebrow { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 11px; margin-bottom: 9px; }
+.intro h1 { color: var(--text-heading); font-size: 23px; font-weight: 600; line-height: 1.35; letter-spacing: -.02em; }
+.intro p { color: var(--text-secondary); font-size: 13px; line-height: 1.7; margin-top: 9px; }
+.form { display: flex; flex-direction: column; gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.field label { color: var(--text-primary); font-size: 12px; font-weight: 500; }
+.field input { width: 100%; min-width: 0; height: 42px; padding: 9px 12px; background: var(--bg-void); border: 1px solid var(--border-primary); border-radius: 6px; color: var(--text-heading); font-size: 14px; line-height: 1.4; }
+.field input[readonly] { color: var(--text-muted); font-family: var(--font-mono); }
+.password { display: flex; position: relative; min-width: 0; }
+.password input { padding-right: 45px; }
+.password button { position: absolute; right: 2px; top: 2px; width: 38px; height: 38px; display: grid; place-items: center; background: transparent; color: var(--text-muted); border: 0; border-radius: 4px; }
+.password button:hover { color: var(--text-heading); }
+.form > button { justify-content: center; min-height: 42px; margin-top: 4px; }
+.hint { font-size: 12px; color: var(--text-muted); line-height: 1.6; overflow-wrap: anywhere; }
+.form > .hint { margin-top: -9px; }
+.error, .menuError { color: rgb(var(--danger-rgb)); background: rgb(var(--danger-rgb) / .08); border: 1px solid rgb(var(--danger-rgb) / .18); border-radius: 6px; padding: 10px 12px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.transportNotice { color: var(--gold-primary); border-left: 2px solid rgb(var(--gold-rgb) / .6); margin-bottom: 20px; padding-left: 10px; font-size: 12px; line-height: 1.6; }
+.success { display: flex; gap: 7px; align-items: center; color: rgb(var(--success-rgb)); font-size: 12px; }
+.textButton { display: flex; gap: 7px; align-items: center; justify-content: center; width: 100%; margin-top: 20px; padding: 7px; border: 0; color: var(--text-muted); background: transparent; font-size: 12px; }
+.loading { display: flex; gap: 8px; align-items: center; color: var(--text-muted); font-size: 12px; }
+.accountTrigger { display: grid; place-items: center; width: 38px; height: 38px; flex: none; padding: 2px; border: 1px solid var(--border-primary); border-radius: 10px; background: var(--bg-panel); cursor: pointer; }
+.accountTrigger:hover, .accountTrigger[data-state="open"] { border-color: var(--border-active); background: var(--bg-tertiary); }
+.menu { width: 232px; max-width: calc(100vw - 24px); z-index: 160; background: var(--bg-panel-solid); border: 1px solid var(--border-primary); border-radius: 10px; padding: 6px; box-shadow: 0 12px 38px rgb(0 0 0 / .24); }
+.menuIdentity { display: flex; align-items: center; gap: 10px; padding: 12px 10px; }
+.menuIdentity > span { display: flex; flex-direction: column; gap: 3px; }
+.menuIdentity strong { color: var(--text-heading); font: 500 13px var(--font-mono); }
+.menuIdentity > span > span { color: var(--text-muted); font-size: 11px; }
+.separator { height: 1px; background: var(--border-secondary); margin: 4px 4px 6px; }
+.menuItem { display: flex; align-items: center; gap: 10px; padding: 11px 10px; font-size: 13px; color: var(--text-primary); cursor: pointer; border-radius: 5px; outline: none; }
+.menuItem[data-highlighted] { background: var(--bg-tertiary); color: var(--text-heading); }
+.menuItem[data-disabled] { opacity: .5; cursor: default; }
+.menuError { margin: 6px; }
+.overlay { position: fixed; inset: 0; background: rgb(0 0 0 / .58); backdrop-filter: blur(3px); z-index: 170; }
+.dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); display: flex; flex-direction: column; background: var(--bg-panel-solid); border: 1px solid var(--border-primary); border-radius: 12px; z-index: 171; box-shadow: 0 24px 90px rgb(0 0 0 / .3); overflow: hidden; }
+.dialogHeader { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; padding: 22px 24px; border-bottom: 1px solid var(--border-primary); flex-shrink: 0; }
+.dialogIdentity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.dialogIdentity h2 { font-size: 18px; font-weight: 600; color: var(--text-heading); }
+.dialogIdentity p { margin-top: 4px; font: 12px var(--font-mono); color: var(--text-muted); }
+.closeButton { width: 30px; height: 30px; display: grid; place-items: center; color: var(--text-muted); border: 0; background: transparent; border-radius: 5px; flex: none; }
+.closeButton:hover { color: var(--text-heading); background: var(--bg-tertiary); }
+.dialogBody { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 24px; }
+.sectionTitle { margin-bottom: 17px; font-size: 14px; font-weight: 600; color: var(--text-heading); }
+.history { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border-primary); }
+.history h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; font-size: 14px; color: var(--text-heading); font-weight: 600; }
+.history > .loading, .history > .hint + .hint, .historyError { margin-top: 14px; }
+.historyError { color: var(--text-secondary); font-size: 12px; }
+.historyError button { margin-top: 10px; }
+.historyList { display: flex; flex-direction: column; padding: 0; list-style: none; margin-top: 13px; }
+.historyList li { display: flex; justify-content: space-between; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border-secondary); font-size: 12px; }
+.historyList li:last-child { border-bottom: 0; }
+.historyList time { color: var(--text-primary); }
+.historyList code { color: var(--text-muted); font: 11px/1.6 var(--font-mono); overflow-wrap: anywhere; text-align: right; min-width: 0; max-width: 50%; }
+.gate button:focus-visible, .accountTrigger:focus-visible, .menuItem:focus-visible, .dialog button:focus-visible, .field input:focus-visible { outline: 2px solid var(--cyan-primary); outline-offset: 3px; }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 640px) { .dialog { inset: 0; transform: none; width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0; } .dialogBody { padding: 20px; padding-bottom: max(24px, env(safe-area-inset-bottom)); } .dialogHeader { padding: 20px; } }
+@media (max-width: 380px) { .shellTopbar :global(.mobile-brand) { display: none; } .gate { padding-inline: 12px; } .loginCard { padding: 24px 20px; } .accountTrigger { width: 34px; height: 34px; } .accountTrigger .avatar { width: 28px; height: 28px; } .historyList li { flex-direction: column; gap: 4px; } .historyList code { text-align: left; max-width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }

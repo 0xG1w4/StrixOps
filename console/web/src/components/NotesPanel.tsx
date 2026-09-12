@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -36,7 +39,7 @@ function useNoteResource<T extends { success: boolean; error_code?: string }>(
       const deadline = window.setTimeout(() => { timedOut = true; request.abort(); }, 10_000);
       setState(previous => ({ ...previous, loading: true }));
       try {
-        const response = await fetch(apiURL(url), { cache: "no-store", signal: request.signal });
+        const response = await authFetch(apiURL(url), { cache: "no-store", signal: request.signal });
         const data: T = await response.json();
         if (disposed || request.signal.aborted) return;
         if (!response.ok || data?.success !== true) {

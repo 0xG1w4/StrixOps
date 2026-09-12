@@ -29,7 +29,7 @@ MCP 預設使用 `~/.strixops/mcp_tasks`，與 `STRIX_RUNS` 分開。需要自�
 使用 Next 的本機 `3100` 開發伺服器時，在啟動 Console 的終端明確設定開發來源，再啟動前端：
 
 ```bash
-export STRIXOPS_MCP_TRUSTED_ORIGINS="http://localhost:3100,http://127.0.0.1:3100"
+export STRIXOPS_AUTH_TRUSTED_ORIGINS="http://localhost:3100,http://127.0.0.1:3100"
 uv run --no-dev strixops-console --host 127.0.0.1 --port 8300
 ```
 
@@ -136,13 +136,17 @@ http://127.0.0.1:8300/api/mcp/transport
 
 它與前端操作同一份任務資料，提供建立／刪除任務、共用 CA 資訊、啟停捕獲、查詢請求與端點、重送、建立／取消測試及報告工具。MCP client 斷線不會自動關閉捕獲工作階段。
 
-### 自動初始化
+### Console 登入與 MCP 存取
 
-從 Console 的 IP 或 localhost 開啟 MCP 時，前端會自動初始化存取設定，將控制 Token 保存於 MCP 資料目錄的 `access.json`，瀏覽器在目前分頁的 `sessionStorage` 保存使用副本。重新開啟或重新啟動 Console 會沿用同一份設定；新增／刪除任務不會更換控制 Token 或共用 CA。伺服器檔案權限為 `0600`；內容損壞時會回報錯誤，不會默默覆寫已有設定。
+v1.3.0 起，先用唯一的 Console 帳號 `strix` 登入。初始密碼 `strix123` 必須在首次登入後修改。
+MCP 頁面直接沿用 HttpOnly Cookie Session 與 CSRF 防護，不需要再次輸入 MCP Token，
+也不再將自動控制 Token 當作瀏覽器登入憑證。任務、下載與設定都在相同登入邊界內。
+登出不停止捕獲或 Agent 工作，但會停止該會話繼續取得資料。
 
-初始化沿用整個 Console 的部署存取邊界：**能夠開啟此 Console 的使用者，也能初始化 MCP 並操作共用任務**，沒有另外建立使用者帳號或租戶隔離。初始化只接受符合 Host／protocol 的同來源請求及指定 header；任意 DNS 網域、跨網站或未獲允許的跨來源初始化會被拒絕。明確列入可信來源的本機開發轉送保留例外，允許其瀏覽器 Origin 與 loopback 上游 Host 不同。這項防護處理瀏覽器跨來源呼叫，不是獨立的身份驗證機制。
-
-後續 MCP 請求與 CA 下載透過 header 傳送 Token，不放進 URL。若明確設定 `STRIXOPS_MCP_TOKEN`，則優先使用手動 Token 登入，自動初始化不會繞過該設定。Web／Internal 的流程保持不變。
+外部 MCP client 可明確設定 `STRIXOPS_MCP_TOKEN`，以 `Authorization: Bearer ...` 或
+`X-MCP-Token` 傳到**僅限** `/api/mcp/transport` 的端點；Token 不放在 URL，也不能用於
+Console REST API 或帳號操作。舊版 `access.json` 保留但不能繞過登入。
+完整密碼、登入紀錄與 HTTPS 說明見[帳號指南](authentication.md)。
 
 ### 直接連接主機 IP
 
@@ -152,7 +156,7 @@ http://127.0.0.1:8300/api/mcp/transport
 uv run --no-dev strixops-console --host 0.0.0.0 --port 8300
 ```
 
-1. 開啟 `http://192.168.1.20:8300/mcp`，等待自動初始化。
+1. 開啟 `http://192.168.1.20:8300/mcp`，完成 Console 登入與首次改密碼。
 2. 建立任務並啟動代理，將測試瀏覽器的 HTTP／HTTPS 代理設為頁面顯示的主機與埠。
 3. 在連線資訊中顯示及複製自動產生的代理帳密，填入瀏覽器的代理驗證提示。
 4. 下載並信任共用 CA 一次，即可捕獲範圍內的 HTTPS。
@@ -167,17 +171,20 @@ uv run --no-dev strixops-console --host 0.0.0.0 --port 8300
 
 | 環境變數 | 用途 |
 |---|---|
-| `STRIXOPS_MCP_ROOT` | MCP SQLite、控制 Token、CA 與任務資料的根目錄 |
-| `STRIXOPS_MCP_TOKEN` | 明確指定控制 Token，切回手動登入；API／MCP client 可用 `Authorization: Bearer ...` 或 `X-MCP-Token` |
-| `STRIXOPS_MCP_TRUSTED_ORIGINS` | 逗號分隔的完整 Console 來源；允許該 DNS 來源自動初始化，並保留既有 loopback 可信代理／開發來源豁免 |
+| `STRIXOPS_MCP_ROOT` | MCP SQLite、保留的舊版控制 Token、CA 與任務資料的根目錄 |
+| `STRIXOPS_MCP_TOKEN` | 外部 MCP client 的明確 Token，只適用 `/api/mcp/transport`；不替代 Console 登入 |
+| `STRIXOPS_AUTH_TRUSTED_ORIGINS` | 明確允許 Host 被本機開發代理改寫的瀏覽器来源；只適用 loopback 上游，不繞過登入或 CSRF |
 | `STRIXOPS_MCP_PROXY_BIND_HOST` | 覆寫新代理綁定的 IP；未設定時依啟動請求的 Console 位址選擇 loopback 或 IPv4／IPv6 萬用介面 |
 | `STRIXOPS_MCP_PROXY_PUBLIC_HOST` | 覆寫瀏覽器應使用的 IP／主機名稱；供 NAT 或不同代理主機使用，不填 URL、埠號或萬用位址 |
 | `STRIXOPS_MCP_PROXY_AUTH` | 覆寫代理帳密，格式 `username:password`；未設定時非 loopback 代理自動產生。明確設定的帳密不透過前端揭露 |
 | `STRIXOPS_CONSOLE_CONFIG` | 共用模型設定檔位置，沿用 Console 設定 |
 
-若透過 DNS 網域及 Nginx／Caddy 開啟 Console，將完整來源（例如 `https://console.example.com`）加入 `STRIXOPS_MCP_TRUSTED_ORIGINS`，並保留同來源 UI 與 `/api/mcp`，讓轉送的 protocol／Host 與瀏覽器一致。此清單本身不是登入機制；應由既有部署層負責驗證身份。
+若透過 DNS 網域及 Nginx／Caddy 開啟 Console，保留同來源 UI 與 `/api/*`，讓轉送的
+protocol／Host 與瀏覽器一致。Console 自行驗證登入；反向代理提供 HTTPS，並應只信任明確的代理來源。
+一般同源部署不需要設定來源例外。
 
-若已明確設定 MCP Token，可在 MCP 頁面輸入，或由完成身份驗證的代理覆寫並注入 `X-MCP-Token`。Uvicorn 還原 `X-Forwarded-For` 後，自動初始化仍可發出 Token，不依賴 loopback 來源豁免。直接以 MCP client 工具啟動捕獲時沒有瀏覽器位址提示，預設維持 loopback；若需要遠端代理，可用上列進階設定指定其綁定及公開位址。
+直接以 MCP client 工具啟動捕獲時沒有瀏覽器位址提示，代理預設維持 loopback；
+需要遠端代理時，可用上列進階設定指定其綁定及公開位址。
 
 ## 儲存、限制與故障處理
 
@@ -186,7 +193,7 @@ uv run --no-dev strixops-console --host 0.0.0.0 --port 8300
 ```text
 mcp_tasks/
 ├── traffic.sqlite3
-├── access.json                 # 自動產生的控制 Token（0600）
+├── access.json                 # 舊版控制 Token（保留，不繞過登入）
 ├── ca/                         # 平台共用 CA（含私鑰，須持久保存）
 └── tasks/<task_id>/captures/<session_id>/
     ├── scope.json
@@ -218,8 +225,8 @@ SQLite 保存任務、flow、job、report 與事件；capture journal 保存增�
 | 顯示映像尚未安裝 | 執行上方固定版本與 digest 的 `docker pull`；啟動按鈕不會自動拉取映像 |
 | Docker 無法存取 | 確認 daemon 已啟動，並檢查執行 Console 帳號的 Docker 權限 |
 | 有代理位址但沒有流量 | 確認瀏覽器實際使用該 proxy、SSH 通道連接埠正確，且目標符合允許規則 |
-| MCP 自動初始化失敗 | 確認前後端皆已更新、使用主機 IP 或已設定的可信網域同源開啟；檢查 MCP 資料目錄的寫入權限 |
-| 仍顯示手動 Token 登入 | 檢查服務是否保留明確的 `STRIXOPS_MCP_TOKEN`；它會優先使用手動模式。要改用自動模式，移除該覆寫後重啟 Console |
+| MCP 顯示需要登入 | 重新整理前端並完成 Console 登入；確認 Cookie、同來源轉送與服務版本 |
+| 仍顯示舊手動 Token 頁面 | 確認前後端都已更新並重新整理；v1.3.0 的 MCP 頁面沿用 Console Session |
 | 代理要求登入／回應 407 | 從該任務連線資訊顯示並複製自動帳密；若使用明確的環境覆寫，則使用其帳密。不能以控制 Token 代替 |
 | JSON／HTML 顯示二進位 | 更新前後端與 Python 依賴後重新開啟紀錄；檢查 Content-Encoding 與 charset，新的解碼錯誤提示會區分不支援格式、無效或不完整內容 |
 | Agent 時間用盡 | 查看測試中的模型回合、重送次數與執行紀錄，再依模型及目標耗時調整整次預算；已保存的 120 秒設定不會在升級時被覆寫 |

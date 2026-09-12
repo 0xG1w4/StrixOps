@@ -61,6 +61,9 @@ def bootstrap_host_allowed(scope: dict) -> bool:
 
 def origin_error(scope: dict) -> str:
     """Keep browser-origin checks independent from local or token authentication."""
+    verified = scope.get("state", {})
+    if verified.get("strixops_authenticated") or verified.get("strixops_mcp_token_authenticated"):
+        return ""  # Origin was validated by the enclosing Console boundary.
     headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
     host = headers.get("host", "")
     scheme = scope.get("scheme", "http")
@@ -78,6 +81,11 @@ def origin_error(scope: dict) -> str:
 
 
 def access_error(scope: dict) -> str:
+    # The enclosing Console auth middleware already verified session/CSRF or
+    # an explicit protocol token. Legacy local-host trust cannot bypass it.
+    verified = scope.get("state", {})
+    if verified.get("strixops_authenticated") or verified.get("strixops_mcp_token_authenticated"):
+        return ""
     if error := origin_error(scope):
         return error
     headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
@@ -124,6 +132,11 @@ access_router = APIRouter(prefix="/api/mcp", tags=["mcp-access"])
 @access_router.get("/access")
 def access_status(request: Request):
     """Describe how this browser can authenticate without loading task data."""
+    if request.scope.get("state", {}).get("strixops_authenticated"):
+        return JSONResponse({
+            "allowed": True, "token_configured": False, "reason": "", "message": "",
+            "mode": "automatic", "bootstrap_available": False,
+        }, headers={"Cache-Control": "no-store"})
     origin_problem = origin_error(request.scope)
     headers = {"Cache-Control": "no-store", "Vary": "Origin, Authorization, X-MCP-Token"}
     if origin_problem:

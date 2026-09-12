@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import * as React from "react";
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { apiURL } from "@/lib/api";
@@ -97,7 +100,7 @@ function useProxySnapshot(runName: string, live: boolean, enabled: boolean) {
       let timedOut = false;
       const deadline = setTimeout(() => { timedOut = true; request.abort(); }, 8_000);
       try {
-        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(runName)}/proxy`), {
+        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(runName)}/proxy`), {
           cache: "no-store", signal: request.signal,
         });
         if (!response.ok) throw new Error("Proxy status unavailable");

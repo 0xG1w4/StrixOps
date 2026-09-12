@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import * as React from "react";
 import { Check, Eye, EyeOff, Search, Radio } from "lucide-react";
 import { toast } from "sonner";
@@ -119,7 +122,7 @@ export function WebSearchSettings() {
     setTestResult(null);
     setTestError(null);
     try {
-      const response = await fetch(apiURL(`${ENDPOINT}/test`), {
+      const response = await authFetch(apiURL(`${ENDPOINT}/test`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",

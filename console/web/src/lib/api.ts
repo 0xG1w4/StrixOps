@@ -1,5 +1,7 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
 /* ============================================================================
    API client — the console backend contract.
 
@@ -8,10 +10,10 @@
    on failure so callers can parse FastAPI detail JSON.
    ========================================================================= */
 
-export const API = process.env.NODE_ENV === "production" ? "" : "http://127.0.0.1:8300";
+export const API = "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, { cache: "no-store", ...init });
+  const res = await authFetch(`${API}${path}`, { cache: "no-store", ...init });
   if (!res.ok) {
     let detail = "";
     try {
@@ -72,8 +74,8 @@ export function streamURL(path: string): string {
 export interface Health {
   ok: boolean;
   version?: string;
-  runs_root: string;
-  live_runs: number;
+  runs_root?: string;
+  live_runs?: number;
 }
 
 /* -------------------------------------------------------------------- runs */
@@ -351,7 +353,7 @@ export async function sendHint(name: string, body: {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/hints`), {
+    const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/hints`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -498,7 +500,7 @@ export async function fetchModelCatalog(
 ): Promise<{ models: CatalogModel[]; count: number }> {
   let response: Response;
   try {
-    response = await fetch(`${API}/api/settings/models`, {
+    response = await authFetch(`${API}/api/settings/models`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -587,7 +589,7 @@ export async function testModelRoute(
 ): Promise<ModelTestResult> {
   let response: Response;
   try {
-    response = await fetch(`${API}/api/settings/test-model`, {
+    response = await authFetch(`${API}/api/settings/test-model`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body), cache: "no-store", signal,
     });

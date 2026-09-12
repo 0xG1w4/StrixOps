@@ -252,7 +252,14 @@ def activity_blockers(paths: dict[str, str], *, health: dict | None = None) -> l
     performs no network requests and never signals a process.
     """
     result: list[str] = []
-    if health is not None:
+    public_health = (
+        isinstance(health, dict)
+        and health.get("ok") is True
+        and health.get("product") == "StrixOps"
+        and isinstance(health.get("version"), str)
+        and "live_runs" not in health
+    )
+    if health is not None and not public_health:
         live = health.get("live_runs") if isinstance(health, dict) else None
         if type(live) is not int or live < 0:
             result.append("Console health: live task activity is unknown.")

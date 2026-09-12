@@ -35,6 +35,7 @@ GENERATED = (
 )
 PATH_ENV = {
     "console_config": "STRIXOPS_CONSOLE_CONFIG",
+    "auth_db": "STRIXOPS_AUTH_DB",
     "projects_file": "STRIXOPS_PROJECTS_FILE",
     "project_reports": "STRIXOPS_PROJECT_REPORTS_DIR",
     "queue_db": "STRIXOPS_QUEUE_DB",
@@ -149,8 +150,8 @@ class Manager:
         finally:
             os.close(fd)
 
-    def config(self, args=None) -> dict:
-        saved = read_json(self.config_path)
+    def config(self, args=None, *, saved: dict | None = None) -> dict:
+        saved = read_json(self.config_path) if saved is None else saved
         config = {
             "host": saved.get("host", "127.0.0.1"),
             "port": saved.get("port", 8300),
@@ -175,6 +176,7 @@ class Manager:
         parent = Path(console).parent
         defaults = {
             "console_config": console,
+            "auth_db": str(parent / "auth.sqlite3"),
             "projects_file": str(Path.home() / ".strixops/projects.json"),
             "project_reports": str(Path.home() / ".strixops/project_reports"),
             "queue_db": str(parent / "scan_queue.sqlite3"),
@@ -195,6 +197,11 @@ class Manager:
         if ":" in host:
             host = f"[{host}]"
         return f"http://{host}:{config['port']}"
+
+    @staticmethod
+    def listener(config: dict) -> str:
+        host = config["host"]
+        return f"[{host}]:{config['port']}" if ":" in host else f"{host}:{config['port']}"
 
     def health(self, config: dict) -> dict | None:
         try:
@@ -223,6 +230,10 @@ class Manager:
         record = read_json(self.record_path)
         if record and (record.get("root") != str(self.root) or not isinstance(record.get("config"), dict)):
             raise ManagerError("程序记录不属于当前项目，拒绝操作。")
+        if record:
+            # Older manager records predate auth_db. Fill new path defaults
+            # from that process's saved config before install resumes it.
+            record["config"] = self.config(saved=record["config"])
         return record
 
     def owned_alive(self, record: dict) -> bool:
@@ -352,7 +363,11 @@ class Manager:
             health = self.health(config)
             if not health or health.get("version") != self.version:
                 raise ManagerError("Console 已执行但尚未就绪或版本不同，请检查 status/logs 后使用 restart。")
-            print(f"Console 已执行：{self.url(config)} · v{health['version']} · PID {record['pid']}")
+            print(
+                f"Console 已执行，监听：{self.listener(config)} · v{health['version']}"
+                f" · PID {record['pid']}\n"
+                f"本机网址：{self.url(config)}"
+            )
             return
         self.verify_installation()
         self.ensure_port_free(config)
@@ -410,10 +425,14 @@ class Manager:
             if (
                 health
                 and health.get("version") == self.version
-                and absolute(health.get("runs_root", ""), self.root) == config["runs_root"]
+                and (
+                    "runs_root" not in health
+                    or absolute(health["runs_root"], self.root) == config["runs_root"]
+                )
             ):
                 print(
-                    f"Console 已启动：{self.url(config)} · v{self.version} · PID {process.pid}\n"
+                    f"Console 已启动，监听：{self.listener(config)} · v{self.version} · PID {process.pid}\n"
+                    f"本机网址：{self.url(config)}\n"
                     f"日志：{self.log_path}"
                 )
                 return
@@ -459,6 +478,9 @@ class Manager:
             "pid": record.get("pid") if managed else None,
             "version": health.get("version") if health else None,
             "source_version": self.version,
+            "listen": self.listener(config),
+            "host": config["host"],
+            "port": config["port"],
             "url": self.url(config),
             "runs_root": config["runs_root"],
             "log": str(self.log_path),
@@ -467,7 +489,7 @@ class Manager:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(
-                f"Console: {result['state']}\n地址：{result['url']}\n"
+                f"Console: {result['state']}\n监听：{result['listen']}\n本机网址：{result['url']}\n"
                 f"运行版本：{result['version'] or '—'} · 源码版本：{self.version}\n"
                 f"PID：{result['pid'] or '—'}\n任务目录：{config['runs_root']}\n日志：{self.log_path}"
             )

@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AlertTriangle, Search, RefreshCw, X } from "lucide-react";
@@ -35,7 +38,7 @@ export default function WebSearchDiagnostics({ runName, live }: { runName: strin
         current.abort();
       }, 8000);
       try {
-        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(runName)}/web-search`), {
+        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(runName)}/web-search`), {
           cache: "no-store",
           signal: current.signal,
         });

@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 import * as React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -56,7 +59,7 @@ function FilesWorkspace({ name, live, initialFilter }: { name: string; live: boo
       controller.signal.addEventListener("abort", abort, { once: true });
       const deadline = setTimeout(() => { timedOut = true; request.abort(); }, REQUEST_TIMEOUT_MS);
       try {
-        const response = await fetch(apiURL(`/api/runs/${encodeURIComponent(name)}/${kind}`), { signal: request.signal, cache: "no-store" });
+        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/${kind}`), { signal: request.signal, cache: "no-store" });
         if (!response.ok) throw new Error("index_unavailable");
         const page = await response.json();
         const rows = kind === "artifacts" ? page?.files : page?.evidence;
@@ -191,7 +194,7 @@ function SelectedFile({ file, files, visible, en }: { file: RunFile; files: RunF
     const deadline = setTimeout(() => {
       if (!disposed) { controller.abort(); setStatus("timeout"); }
     }, REQUEST_TIMEOUT_MS);
-    fetch(apiURL(file.downloadPath), { signal: controller.signal, cache: "no-store", headers: { Range: `bytes=0-${PREVIEW_BYTES}` } })
+    authFetch(apiURL(file.downloadPath), { signal: controller.signal, cache: "no-store", headers: { Range: `bytes=0-${PREVIEW_BYTES}` } })
       .then(async response => {
         // A byte range cannot be satisfied for an empty file; the server reports its exact size.
         if (response.status === 416 && response.headers.get("content-range")?.trim() === "bytes */0") {

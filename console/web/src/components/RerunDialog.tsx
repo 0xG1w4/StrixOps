@@ -1,5 +1,8 @@
 "use client";
 
+import { authFetch } from "@/lib/auth";
+
+
 /* ============================================================================
    RerunDialog — relaunch a finished run with an edited instruction.
 
@@ -71,7 +74,7 @@ export default function RerunDialog({
   /* pre-fill from the run's instruction.md artifact */
   React.useEffect(() => {
     let disposed = false;
-    fetch(
+    authFetch(
       apiURL(`/api/runs/${encodeURIComponent(run.name)}/artifacts/instruction.md`)
     )
       .then(async (res) => (res.ok ? res.text() : ""))

@@ -11,6 +11,7 @@ import * as React from "react";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { I18nProvider } from "@/lib/i18n";
+import AuthGate from "@/components/auth/AuthGate";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
@@ -21,7 +22,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       disableTransitionOnChange
     >
       <I18nProvider>
-        {children}
+        <AuthGate>{children}</AuthGate>
         <Toaster
           position="top-right"
           toastOptions={{

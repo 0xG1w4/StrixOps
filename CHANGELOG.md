@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 — 2026-09-13
+
+- Add the single `strix` account, mandatory first-login password change, private
+  scrypt password storage, bounded login attempts and revocable server sessions.
+- Protect all Console APIs and downloads with sessions and mutation CSRF checks;
+  retain explicit MCP tokens only on the protocol transport endpoint.
+- Add an original Strix avatar, accessible account menu, password settings dialog
+  and the five latest successful login times and IP addresses.
+- Apply static-script CSP, remove wildcard CORS, minimize public health metadata,
+  and patch Next.js's nested PostCSS dependency without a framework major upgrade.
+- Preserve auth data through script maintenance and distinguish the real listener
+  from the local browser URL in start/status output.
+
+Usage: [account and security guide](docs/authentication.md). Upgrade: [v1.3.0 notes](docs/v1.3.0.md).
+
 ## 1.2.5 — 2026-09-12
 
 - Add the Linux/macOS `strixops.sh` checkout manager with install, uninstall,

@@ -28,6 +28,7 @@ strix_runs/
 *.sqlite3
 *.sqlite-*
 *.sqlite3-*
+*.sqlite3.*.lock
 *.db
 *.db-*
 *.bak

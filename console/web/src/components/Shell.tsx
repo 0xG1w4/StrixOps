@@ -24,6 +24,8 @@ import {
 import * as Dialog from "@radix-ui/react-dialog";
 import { MatrixText } from "@/components/MatrixText";
 import CommandPalette from "@/components/CommandPalette";
+import AccountMenu from "@/components/auth/AccountMenu";
+import authStyles from "@/components/auth/auth.module.css";
 import { getJSON, runTargetLabel, runTargets, type Health, type RunSummary, type RunsPage } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -404,7 +406,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <div className="app-main">
-          <header className="shell-topbar">
+          <header className={`shell-topbar ${authStyles.shellTopbar}`}>
             <div className="shell-topbar-leading">
               <Dialog.Trigger asChild>
                 <button type="button" className="drawer-trigger" aria-label={t("shell.openMenu")}>
@@ -424,6 +426,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
               <CommandPalette />
               <LocaleSwitch />
               <ThemeToggle />
+              <AccountMenu />
             </div>
           </header>
 

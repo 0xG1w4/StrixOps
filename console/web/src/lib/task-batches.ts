@@ -1,3 +1,4 @@
+import { authFetch } from "@/lib/auth";
 import { apiURL } from "./api";
 
 export class TaskApiError extends Error {
@@ -25,7 +26,7 @@ export async function taskRequest<T>(
   const timer = window.setTimeout(abort, options.timeout ?? 30000);
   let status: number | null = null;
   try {
-    const response = await fetch(apiURL(path), {
+    const response = await authFetch(apiURL(path), {
       method: options.method ?? "GET",
       cache: "no-store",
       signal: controller.signal,
