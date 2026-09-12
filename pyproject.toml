@@ -1,6 +1,6 @@
 [project]
 name = "strixops"
-version = "1.2.3"
+version = "1.2.4"
 description = "StrixOps — integrated security assessment engine and web console"
 readme = "README.md"
 requires-python = ">=3.12"

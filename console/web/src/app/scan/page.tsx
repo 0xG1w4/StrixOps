@@ -31,6 +31,7 @@ import {
   type ScanLaunched,
 } from "@/lib/api";
 import { EmptyState, Spinner } from "@/components/ui";
+import { useQueueResource } from "@/components/batches/useQueueResource";
 import { MAX_TARGETS, MultiTargetEditor, useMultiTargetCheck } from "@/components/scan/MultiTargetEditor";
 import { Select } from "@/components/Select";
 import { useI18n } from "@/lib/i18n";
@@ -254,7 +255,8 @@ export default function ScanLauncherPage() {
   const [targetsText, setTargetsText] = React.useState("");
   const [batchName, setBatchName] = React.useState("");
   const [concurrency, setConcurrency] = React.useState("2");
-  const [queueSettings, setQueueSettings] = React.useState<QueueSettings | null>(null);
+  const queueResource = useQueueResource<QueueSettings>(multiple ? "/api/scan-queue/settings" : null, false);
+  const queueSettings = queueResource.data;
   const [sourceDraftId, setSourceDraftId] = React.useState("");
   const [sourceTargets, setSourceTargets] = React.useState<string[]>([]);
   const [sourceSearchId, setSourceSearchId] = React.useState("");
@@ -321,7 +323,6 @@ export default function ScanLauncherPage() {
       }).catch(error => { if (active) setDraftError(fofaError(error, locale === "en")); })
         .finally(() => { if (active) setDraftLoading(false); });
     }
-    taskRequest<QueueSettings>("/api/scan-queue/settings", { signal: controller.signal }).then(data => { if (active) setQueueSettings(data); }, () => undefined);
     setHydrated(true);
     return () => { active = false; controller.abort(); };
     // URL imports are read once; subsequent target edits belong to this form.
@@ -462,6 +463,8 @@ export default function ScanLauncherPage() {
   const concurrencyValue = Number(concurrency);
   const concurrencyValid = concurrency.trim() !== "" && Number.isInteger(concurrencyValue) && concurrencyValue >= 1 && concurrencyValue <= 16;
   const blockers = [
+    multiple && queueResource.error ? taskError(queueResource.error, locale === "en")
+      : multiple && !queueSettings ? (locale === "en" ? "Loading task queue settings…" : "正在读取任务队列设置…") : "",
     draftLoading ? (locale === "en" ? "Loading FOFA target draft…" : "正在载入 FOFA 目标草稿…") : draftError,
     multiple && !concurrencyValid ? (locale === "en" ? "Enter a concurrency limit from 1 to 16." : "请输入 1–16 的批次并行数。") : "",
     importingTargets ? copy.importingTargets : "",
@@ -614,6 +617,10 @@ export default function ScanLauncherPage() {
                 <label htmlFor="batch-name"><span>{locale === "en" ? "Batch name (optional)" : "批次名称（可选）"}</span><input id="batch-name" className="input-shell" value={batchName} onChange={event => setBatchName(event.target.value)} maxLength={120} disabled={busy || draftLoading} /></label>
                 <label htmlFor="batch-concurrency"><span>{locale === "en" ? "Concurrent targets" : "批次同时执行目标数"}</span><input id="batch-concurrency" className="input-shell" type="number" min={1} max={16} step={1} value={concurrency} onChange={event => setConcurrency(event.target.value)} disabled={busy || draftLoading} /></label>
                 <p>{locale === "en" ? `Host limit: ${queueSettings?.max_active_targets ?? "—"}. Excess targets remain queued. Each target uses its own container and report; the batch does not imply any relationship between targets.` : `主机并行上限：${queueSettings?.max_active_targets ?? "—"}。超出的目标保持排队；每个目标使用独立容器与报告，批次不代表目标之间有关联。`} <Link href="/settings#task-queue">{locale === "en" ? "Queue settings" : "队列设置"} →</Link></p>
+                {queueResource.error != null && <p role="status">
+                  {taskError(queueResource.error, locale === "en")}{" "}
+                  <button type="button" className={styles.textLink} onClick={() => { queueResource.retry(); setMultiRetry(value => value + 1); }}>{t("common.retry")}</button>
+                </p>}
               </div>
               <MultiTargetEditor
                 text={targetsText}

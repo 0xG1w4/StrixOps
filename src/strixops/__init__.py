@@ -1,3 +1,3 @@
 """StrixOps — autonomous pentest engine, drop-in scan core for the Strix platform."""
 
-__version__ = "1.2.3"
+__version__ = "1.2.4"

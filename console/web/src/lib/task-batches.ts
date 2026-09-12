@@ -23,6 +23,7 @@ export async function taskRequest<T>(
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) controller.abort();
   const timer = window.setTimeout(abort, options.timeout ?? 30000);
+  let status: number | null = null;
   try {
     const response = await fetch(apiURL(path), {
       method: options.method ?? "GET",
@@ -35,7 +36,22 @@ export async function taskRequest<T>(
             body: JSON.stringify(options.body),
           }),
     });
-    const data = response.status === 204 ? undefined : await response.json();
+    status = response.status;
+    let data;
+    if (status !== 204) {
+      try {
+        data = await response.json();
+      } catch {
+        if (response.ok) {
+          throw new TaskApiError(
+            controller.signal.aborted ? "timeout" : "invalid_response",
+            status,
+          );
+        }
+        // Proxies may return HTML or an empty body. Keep the HTTP status,
+        // without exposing the response body or an exception's raw detail.
+      }
+    }
     if (!response.ok) {
       const code =
         data?.error_code ??
@@ -53,7 +69,12 @@ export async function taskRequest<T>(
   } catch (error) {
     if (error instanceof TaskApiError) throw error;
     throw new TaskApiError(
-      controller.signal.aborted ? "timeout" : "request_failed",
+      controller.signal.aborted
+        ? "timeout"
+        : status === null
+          ? "connection_failed"
+          : "invalid_response",
+      status,
     );
   } finally {
     window.clearTimeout(timer);
@@ -152,6 +173,22 @@ export function taskError(error: unknown, en: boolean): string {
         : "request_failed";
   const messages: Record<string, [string, string]> = {
     timeout: ["请求逾时，请重试。", "The request timed out. Try again."],
+    connection_failed: [
+      "无法连接 Console。请检查主机服务、网络与反向代理连接。",
+      "Could not connect to Console. Check the host service, network and reverse proxy connection.",
+    ],
+    invalid_response: [
+      "Console 返回了无法读取的响应。请检查后端服务与 /api 代理路由。",
+      "Console returned an unreadable response. Check the backend service and /api proxy routing.",
+    ],
+    origin_rejected: [
+      "Console 拒绝了当前页面来源。请使用同一 Console 地址，并检查反向代理的来源转发设置。",
+      "Console rejected this page's origin. Use the same Console address and check origin forwarding in the reverse proxy.",
+    ],
+    invalid_request: [
+      "提交参数无效，请检查目标格式与并行数量后重试。",
+      "The submitted parameters are invalid. Check the targets and concurrency values, then try again.",
+    ],
     queue_not_found: [
       "此批次或目标已不存在。",
       "This batch or target no longer exists.",
@@ -230,10 +267,40 @@ export function taskError(error: unknown, en: boolean): string {
       "This batch is still active and cannot be deleted.",
     ],
   };
-  return (
-    messages[code]?.[en ? 1 : 0] ??
-    (en
-      ? "The operation could not be completed. Refresh and try again."
-      : "无法完成操作，请更新后重试。")
-  );
+  const message = messages[code]?.[en ? 1 : 0];
+  if (message) return message;
+  const status = error instanceof TaskApiError ? error.status : null;
+  const httpMessages: Record<number, [string, string]> = {
+    400: messages.invalid_request,
+    401: [
+      "Console 需要身份验证（HTTP 401），请检查访问凭证或重新登录。",
+      "Console requires authentication (HTTP 401). Check your access credentials or sign in again.",
+    ],
+    403: [
+      "Console 拒绝了此操作（HTTP 403），请检查访问权限与页面来源设置。",
+      "Console denied this operation (HTTP 403). Check access permissions and page origin settings.",
+    ],
+    404: [
+      "此功能的 API 无法使用（HTTP 404）。请确认前后端版本一致、重启 Console，并检查 /api 代理转发。",
+      "This feature's API is unavailable (HTTP 404). Confirm matching frontend and backend versions, restart Console, and check /api proxy forwarding.",
+    ],
+    405: [
+      "此功能的 API 不接受当前请求方式（HTTP 405）。请确认前后端版本一致、重启 Console，并检查 /api 代理转发。",
+      "This feature's API rejects the request method (HTTP 405). Confirm matching frontend and backend versions, restart Console, and check /api proxy forwarding.",
+    ],
+    422: messages.invalid_request,
+    429: [
+      "Console 请求频率受限（HTTP 429），请稍后重试。",
+      "Console rate-limited this request (HTTP 429). Try again later.",
+    ],
+  };
+  if (status && httpMessages[status]) return httpMessages[status][en ? 1 : 0];
+  if (status && status >= 500) {
+    return en
+      ? `Console encountered a server error (HTTP ${status}). Check the Console service logs and try again.`
+      : `Console 服务发生错误（HTTP ${status}），请检查 Console 服务日志后重试。`;
+  }
+  return en
+    ? "The operation could not be completed. Check the Console service status and try again."
+    : "无法完成操作，请检查 Console 服务状态后重试。";
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.4 — 2026-09-12
+
+- Detect mismatched Console page/backend versions and show the running backend
+  version, with clear restart/reload guidance.
+- Explain unavailable batch and queue APIs, rejected origins, connection failures
+  and server errors without exposing raw response bodies.
+- Show queue setting loading and retry states, preserve unsaved edits across
+  refreshes and apply saved values from the server response.
+- Check queue availability before batch submission and allow retry without losing
+  the target list. Existing target paths, concurrency rules and reports are unchanged.
+
+Upgrade and behavior: [v1.2.4 release notes](docs/v1.2.4.md).
+
 ## 1.2.3 — 2026-09-12
 
 - Restore report bullets, numbering and nested indentation, with clearer heading

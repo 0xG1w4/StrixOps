@@ -71,6 +71,7 @@ export function streamURL(path: string): string {
 /** GET /api/health */
 export interface Health {
   ok: boolean;
+  version?: string;
   runs_root: string;
   live_runs: number;
 }

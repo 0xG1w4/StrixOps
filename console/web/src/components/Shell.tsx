@@ -27,6 +27,9 @@ import CommandPalette from "@/components/CommandPalette";
 import { getJSON, runTargetLabel, runTargets, type Health, type RunSummary, type RunsPage } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import packageInfo from "../../package.json";
+
+const consoleVersion = packageInfo.version;
 
 interface NavItem {
   href: string;
@@ -84,6 +87,7 @@ function currentPageKey(pathname: string): string {
 
 interface EngineStats {
   online: boolean;
+  version: string | null;
   loaded: boolean;
   liveRuns: number;
   totalRuns: number;
@@ -95,6 +99,7 @@ interface EngineStats {
 function useEngineStats(): EngineStats {
   const [stats, setStats] = React.useState<EngineStats>({
     online: false,
+    version: null,
     loaded: false,
     liveRuns: 0,
     totalRuns: 0,
@@ -118,6 +123,8 @@ function useEngineStats(): EngineStats {
         if (cancelled) return;
         setStats((previous) => ({
           online: Boolean(health.ok),
+          version: typeof health.version === "string" && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(health.version)
+            ? health.version : null,
           loaded: true,
           liveRuns: health.live_runs ?? page?.totals?.live ?? previous.liveRuns,
           totalRuns: page?.totals?.runs ?? page?.runs.length ?? previous.totalRuns,
@@ -239,7 +246,7 @@ function EnginePanel({ stats }: { stats: EngineStats }) {
       <div className="engine-panel-meta">
         <span>{stats.liveRuns.toString().padStart(2, "0")} LIVE</span>
         <span>{stats.totalRuns.toString().padStart(2, "0")} RUNS</span>
-        <span>v1.2.3</span>
+        <span>v{stats.version ?? consoleVersion}</span>
       </div>
     </div>
   );
@@ -381,7 +388,7 @@ function MobileBottomNav({ onMore }: { onMore: () => void }) {
 export default function Shell({ children }: { children: React.ReactNode }) {
   const stats = useEngineStats();
   const pathname = usePathname();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [navOpen, setNavOpen] = React.useState(false);
 
   React.useEffect(() => setNavOpen(false), [pathname]);
@@ -422,6 +429,18 @@ export default function Shell({ children }: { children: React.ReactNode }) {
 
           <CommandRail stats={stats} />
           <main id="main-content" tabIndex={-1} className="page-container animate-enter">
+            {stats.online && stats.version && stats.version !== consoleVersion && (
+              <div className="alert-warning mb-5" role="status">
+                <div className="min-w-0 break-words">
+                  <strong>{locale === "en" ? "Console versions do not match" : "Console 前后端版本不一致"}</strong>
+                  <p className="mt-1">
+                    {locale === "en"
+                      ? `Page v${consoleVersion} · Backend v${stats.version}. Some features may be unavailable. Finish active tasks, update and restart Console, then reload this page.`
+                      : `页面 v${consoleVersion} · 后端 v${stats.version}。部分功能可能无法使用。请等待执行中的任务结束，更新并重启 Console，再重新载入页面。`}
+                  </p>
+                </div>
+              </div>
+            )}
             {children}
           </main>
           <MobileBottomNav onMore={() => setNavOpen(true)} />
