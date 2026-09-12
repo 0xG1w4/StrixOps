@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.2 — 2026-09-12
+
+- List only saved, available evidence attachments, with matching file counts,
+  categories and downloads.
+- Treat evidence collection as best effort and stop missing path references
+  from failing otherwise successful tasks; retain collection diagnostics in
+  run metadata.
+- Use the saved attachment inventory in deterministic and synthesized reports.
+  Preserve failure handling for Agent/runtime, container cleanup, required state
+  persistence and report errors.
+
+Upgrade and behavior: [v1.2.2 release notes](docs/v1.2.2.md).
+
 ## 1.2.1 — 2026-09-12
 
 - Default task conversations to all Agents while preserving explicit Agent links

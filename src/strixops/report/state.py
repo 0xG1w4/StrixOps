@@ -374,8 +374,9 @@ class RunState:
         """Persist all regular output files; count only delivered attachments.
 
         The workspace is retained independently, including on copy failures.
-        Manifest entries distinguish capture, persistence, and delivery. Both
-        explicit metadata.evidence_files and absolute references are checked.
+        Manifest entries distinguish capture, persistence, and delivery.
+        Finding references are diagnostic only: an unwritten attachment must
+        not invalidate files that were successfully saved or fail the run.
         """
         index, errors = collect_files(
             Path(workspace_dir), self.run_dir / "evidence", _infer_evidence_category
@@ -384,7 +385,7 @@ class RunState:
         delivered = [entry for entry in index if entry["deliverable"]]
         missing = [ref for ref in references if not ref["deliverable"]]
         self.run_record["evidence"] = {
-            "status": "incomplete" if errors or missing or len(delivered) != len(index) else "complete",
+            "status": "incomplete" if errors or len(delivered) != len(index) else "complete",
             "count": len(delivered),
             "captured_count": sum(entry["captured"] for entry in index),
             "persisted_count": sum(entry["persisted"] for entry in index),
@@ -602,30 +603,22 @@ class RunState:
 
         evidence = self.run_record.get("evidence")
         if evidence is not None:
-            heading = "证据交付状态" if zh else "Evidence Delivery"
+            heading = "已保存证据" if zh else "Saved Evidence"
             lines += [f"## {heading}", ""]
             if zh:
                 lines += [
-                    f"已获取 {evidence['captured_count']} 件；已持久保存 {evidence['persisted_count']} 件；"
-                    f"可交付 {evidence['count']} 件。状态：{evidence['status']}。",
+                    f"已保存 {evidence['count']} 个附件。"
+                    if evidence["count"] else "本次任务没有已保存的附件。",
                     "",
                 ]
             else:
                 lines += [
-                    f"Captured: {evidence['captured_count']}; persisted: {evidence['persisted_count']}; "
-                    f"deliverable: {evidence['count']}. Status: {evidence['status']}.",
+                    f"Saved attachments: {evidence['count']}."
+                    if evidence["count"] else "No attachments were saved for this run.",
                     "",
                 ]
-            if evidence.get("manifest"):
+            if evidence["count"] and evidence.get("manifest"):
                 lines += ["[Evidence manifest](evidence/.evidence_index.json)", ""]
-            for reference in evidence.get("references", []):
-                if not reference["deliverable"]:
-                    lines += [
-                        f"- {reference['finding_id']}: `{reference['reference']}` — {reference['error']}"
-                    ]
-            for error in evidence.get("errors", []):
-                lines.append(f"- {error}")
-            lines.append("")
 
         recommendations = (fields.get("recommendations") or "").strip()
         if recommendations:

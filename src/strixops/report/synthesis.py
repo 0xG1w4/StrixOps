@@ -22,7 +22,9 @@ import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from agents import ModelSettings, ModelTracing
 
@@ -42,6 +44,9 @@ logger = logging.getLogger(__name__)
 _FIELD_CHAR_LIMIT = 6000
 # Total corpus budget for the full attempt (characters, roughly 50k tokens).
 _SOURCE_CHAR_BUDGET = 200_000
+# Attachment metadata must not crowd out the findings, including on retry.
+_EVIDENCE_FILE_LIMIT = 200
+_EVIDENCE_CHAR_BUDGET = _SOURCE_CHAR_BUDGET // 10
 
 _DEFAULT_TIMEOUT = 900.0
 
@@ -150,6 +155,38 @@ def _dump_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
 
+def _saved_evidence_inventory(run_state: RunState) -> dict[str, Any]:
+    """Expose delivered files only; finding references are not attachments."""
+    evidence = run_state.run_record.get("evidence") or {}
+    names = evidence.get("files", []) if isinstance(evidence, dict) else []
+    if not isinstance(names, list):
+        names = []
+    files: list[dict[str, str]] = []
+    seen: set[str] = set()
+    remaining = _EVIDENCE_CHAR_BUDGET
+    for name in names:
+        if not isinstance(name, str) or not name:
+            continue
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
+            continue
+        filename = path.as_posix()
+        if filename in seen:
+            continue
+        seen.add(filename)
+        entry = {"filename": filename, "link": "evidence/" + quote(filename, safe="/")}
+        # Omit whole entries instead of truncating filenames or breaking links.
+        size = len(_dump_json(entry)) + 8
+        if len(files) < _EVIDENCE_FILE_LIMIT and size <= remaining:
+            files.append(entry)
+            remaining -= size
+    return {
+        "saved_file_count": len(seen),
+        "files": files,
+        "omitted_from_source_count": len(seen) - len(files),
+    }
+
+
 _BR_SUFFIX = re.compile(r"\s*<br\s*/?\s*>\s*$", re.IGNORECASE)
 _TARGET_HEADER = re.compile(r"^(?:[-*]\s+)?(?:targets?|目[标標])(?:\s*[（(][^）)]*[）)])?\s*[:：]", re.I)
 _HEADER_LIST_ITEM = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)")
@@ -234,6 +271,15 @@ ABSOLUTE FIDELITY RULES:
 - Do not omit findings that are in the source. Cluster related findings into
   themes and explain each theme in depth; cite finding ids (e.g. vuln-0001)
   inline where the detail comes from.
+- Attachment lists and download links must use ONLY the Saved Evidence
+  Attachments inventory, which contains successfully saved files. Use its
+  links verbatim. Paths mentioned in finding text or the draft do not establish
+  that an attachment exists; keep the findings themselves as source material.
+  Omit absent attachments and missing-reference diagnostics from attachment
+  lists. Their absence alone does not mean the scan failed or ended early;
+  use run_status for execution status. If the inventory is truncated, do not
+  claim that no other files were saved. If no files were saved, omit the
+  attachment list.
 
 OUTPUT FORMAT — start the report with exactly this header block. Keep the
 blank line between every field: the report viewer renders markdown, and
@@ -333,6 +379,11 @@ def build_report_source(
         header["declared_access"] = "gsocket: <key supplied>"
 
     parts = ["# REPORT SOURCE", "", "## Run Overview", _dump_json(header), ""]
+    parts += [
+        "## Saved Evidence Attachments (authoritative delivery inventory)",
+        _dump_json(_saved_evidence_inventory(run_state)),
+        "",
+    ]
 
     final_fields = run_state.final_fields
     if final_fields:

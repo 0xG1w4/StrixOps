@@ -47,7 +47,7 @@ def _stdout_log(message: str) -> None:
     print(message, flush=True)
 
 
-def _evidence_failure_detail(evidence: dict[str, Any]) -> str:
+def _evidence_collection_detail(evidence: dict[str, Any]) -> str:
     """Explain an incomplete delivery without exposing arbitrary exception bodies."""
     detail = (
         f"{evidence.get('count', 0)} file(s) delivered, "
@@ -143,7 +143,9 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             try:
                 return run_state.collect_evidence(workspace_dir)
             except Exception as exc:
-                logger.exception("failed to persist workspace evidence")
+                logger.warning(
+                    "Evidence collection skipped after %s; continuing finalization", type(exc).__name__
+                )
                 run_state.run_record["evidence"] = {
                     "status": "incomplete",
                     "count": 0,
@@ -354,8 +356,8 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
         )
 
         if payload and payload.get("scan_completed"):
-            # The agent's finish intent is not a successful run until evidence
-            # delivery and sandbox cleanup have also finished.
+            # The agent's finish intent is not a successful run until
+            # finalization and sandbox cleanup have also finished.
             scan_succeeded = True
         else:
             failure_reason = (
@@ -379,7 +381,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
 
         def cleanup_failed(stage: str, exc: BaseException) -> None:
             detail = (
-                _evidence_failure_detail(run_state.run_record.get("evidence", {}))
+                _evidence_collection_detail(run_state.run_record.get("evidence", {}))
                 if stage == "evidence" else ""
             )
             cleanup_errors.append({
@@ -443,7 +445,12 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 try:
                     await collect_run_evidence()
                     if run_state.run_record.get("evidence", {}).get("status") == "incomplete":
-                        cleanup_failed("evidence", RuntimeError("Evidence delivery incomplete"))
+                        # Evidence is best-effort. Keep available attachments
+                        # and private diagnostics without changing scan success.
+                        logger.warning(
+                            "Some evidence could not be saved; continuing finalization: %s",
+                            _evidence_collection_detail(run_state.run_record["evidence"]),
+                        )
                 except BaseException as exc:
                     cleanup_failed("evidence", exc)
             elif workspace_dir is not None:

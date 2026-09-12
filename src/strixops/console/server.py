@@ -2186,15 +2186,16 @@ def _evidence_entries(run_dir: Path) -> list[dict[str, Any]]:
 
 @app.get("/api/runs/{name}/evidence")
 def run_evidence(name: str) -> dict:
-    entries = _evidence_entries(state.run_dir(name))
+    # The file browser lists attachments that can actually be downloaded.
+    # Keep failed/missing entries in the private manifest for diagnostics.
+    entries = [entry for entry in _evidence_entries(state.run_dir(name)) if entry["deliverable"]]
 
     for entry in entries:
         entry["size_human"] = _size_human(entry.get("size", 0))
         entry["category_label"] = _CATEGORY_LABELS.get(entry.get("category", ""), "Other")
         sha = entry.get("sha256", "")
         entry["sha256_short"] = sha[:8] + "…" if len(sha) > 8 else sha
-        if entry["deliverable"]:
-            entry["download_url"] = f"/api/runs/{quote(name, safe='')}/evidence/{quote(entry['filename'])}"
+        entry["download_url"] = f"/api/runs/{quote(name, safe='')}/evidence/{quote(entry['filename'])}"
 
     return {
         "evidence": entries,
