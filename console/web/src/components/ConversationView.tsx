@@ -676,7 +676,7 @@ export default function ConversationView({
   const [conn, setConn] = React.useState<ConnState>("connecting");
   const [closedStatus, setClosedStatus] = React.useState<string | null>(null);
   const [follow, setFollow] = React.useState(true);
-  const [localAgent, setLocalAgent] = React.useState("root");
+  const [localAgent, setLocalAgent] = React.useState("");
   const agentFilter = selectedAgentId ?? localAgent;
   const [agentsOpen, setAgentsOpen] = React.useState(false);
   const [focusVersion, setFocusVersion] = React.useState(0);
@@ -991,17 +991,16 @@ export default function ConversationView({
 
   return (
     <section
-      className="panel panel-hairline flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/92"
+      className={`${styles.conversation} panel panel-hairline flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/92`}
       aria-label={c("任務對話", "Task conversation")}
       onKeyDown={event => { if (event.key === "Escape" && agentsOpen) closeAgents(); }}
     >
       {/* header bar */}
-      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line/6 px-4 py-3 text-xs text-fg-muted">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate">
-            {agentFilter
-              ? `${t("conversation.agent")}: ${filterEntry?.name || agentFilter}`
-              : `${t("run.tab.conversation")} · ${t("conversation.events", { n: filtered.length })}`}
+      <div className={styles.header}>
+        <div className={styles.transcriptInfo}>
+          <span className={styles.transcriptTitle}>
+            {t("run.tab.conversation")}
+            <span className={styles.eventCount}>{t("conversation.events", { n: filtered.length })}</span>
           </span>
           {live && !agentFilter && (
             <span
@@ -1010,7 +1009,7 @@ export default function ConversationView({
             />
           )}
           <span
-            className={`ml-1 inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.16em] ${
+            className={`${styles.connection} font-mono text-[9px] ${
               conn === "stream"
                 ? "text-accent"
                 : conn === "reconnecting"
@@ -1031,7 +1030,7 @@ export default function ConversationView({
               : ""}
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={styles.controls} role="group" aria-label={c("對話檢視設定", "Conversation view controls")}>
           <button
             ref={agentToggle}
             type="button"
@@ -1039,22 +1038,27 @@ export default function ConversationView({
             aria-expanded={agentsOpen}
             onClick={() => setAgentsOpen(value => !value)}
           >
-            <PanelLeft size={14} />{c("代理", "Agents")} · {agents.length}
+            <PanelLeft size={14} aria-hidden="true" />
+            <span>{c("代理", "Agents")}</span>
+            <span className={styles.agentCount}>{agents.length}</span>
           </button>
-          <select
-            className={styles.agentSelect}
-            aria-label={t("conversation.filterAgent")}
-            value={agentFilter}
-            onChange={event => chooseAgent(event.target.value)}
-          >
-            <option value="">{t("conversation.allAgents")}</option>
-            {agentFilter && !run?.agents?.[agentFilter] && <option value={agentFilter}>{agentFilter} · {c("狀態未知", "Unknown")}</option>}
-            {agents.map(([id, entry]) => <option key={id} value={id}>{entry.name || id} ({id})</option>)}
-          </select>
-          <label className="checkbox-line cursor-pointer gap-1.5 text-[10px] uppercase tracking-[0.14em] text-fg-muted">
+          <div className={styles.selectWrap}>
+            <select
+              className={styles.agentSelect}
+              aria-label={t("conversation.filterAgent")}
+              title={agentFilter ? `${filterEntry?.name || agentFilter} (${agentFilter})` : t("conversation.allAgents")}
+              value={agentFilter}
+              onChange={event => chooseAgent(event.target.value)}
+            >
+              <option value="">{t("conversation.allAgents")}</option>
+              {agentFilter && !run?.agents?.[agentFilter] && <option value={agentFilter}>{agentFilter} · {c("狀態未知", "Unknown")}</option>}
+              {agents.map(([id, entry]) => <option key={id} value={id}>{entry.name || id} ({id})</option>)}
+            </select>
+            <ChevronDown size={14} className={styles.selectChevron} aria-hidden="true" />
+          </div>
+          <label className={styles.follow} data-enabled={follow}>
             <input
               type="checkbox"
-              className="h-3.5 w-3.5 rounded border-line/15 bg-surface-deep accent-[var(--accent)]"
               checked={follow}
               onChange={(e) => setFollow(e.target.checked)}
             />

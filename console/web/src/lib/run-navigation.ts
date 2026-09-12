@@ -19,7 +19,6 @@ export function readRunNavigation(params: Pick<URLSearchParams, "get">) {
   const fileFilter: FileFilter = requestedFiles === "all" || requestedFiles === "evidence" || requestedFiles === "artifacts"
     ? requestedFiles : requested === "evidence" ? "evidence" : "all";
   const requestedAgent = params.get("agent");
-  const agentId = requestedAgent === "all" || requestedAgent === "" ? ""
-    : requestedAgent ?? (requested === "agents" ? "" : "root");
+  const agentId = requestedAgent === "all" ? "" : requestedAgent ?? "";
   return { tab, noteView, fileFilter, agentId };
 }

@@ -37,6 +37,12 @@ behavior and do not stop the assessment.
 
 ## Conversation and hints
 
+New task views open on **all Agents**. Links that explicitly select an Agent
+retain that selection. The transcript controls adapt to the panel width: on
+narrow screens the Agent selector gets its own row, above the Agent-panel and
+follow controls. Long names are truncated in the selector and remain available
+in its options and the Agent panel.
+
 Choose an Agent in the conversation controls. Its timeline and the hint
 recipient change together. The Agent hierarchy also exposes status, assignment
 and the saved prompt when it can be matched to that Agent's identity. Identical

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1 — 2026-09-12
+
+- Default task conversations to all Agents while preserving explicit Agent links
+  and the existing hint recipient rules.
+- Rework conversation controls into a responsive grid with a bounded Agent
+  selector, aligned Agent-panel/follow controls and visible keyboard focus.
+
+Upgrade and behavior: [v1.2.1 release notes](docs/v1.2.1.md).
+
 ## 1.2.0 — 2026-09-12
 
 - Add a FOFA page with server-side Email/API Key settings, saved searches,
