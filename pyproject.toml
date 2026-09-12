@@ -1,6 +1,6 @@
 [project]
 name = "strixops"
-version = "1.2.4"
+version = "1.2.5"
 description = "StrixOps — integrated security assessment engine and web console"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -51,7 +51,7 @@ packages = ["src/strixops"]
 exclude = ["/src/strixops/testing"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/console/web", "/containers", "/docs", "/README.md", "/README.zh-CN.md", "/CHANGELOG.md", "/NOTICE", "/LICENSE", "/pyproject.toml", "/uv.lock"]
+include = ["/src", "/console/web", "/containers", "/docs", "/scripts", "/strixops.sh", "/README.md", "/README.zh-CN.md", "/CHANGELOG.md", "/NOTICE", "/LICENSE", "/pyproject.toml", "/uv.lock"]
 exclude = ["/tests", "/src/strixops/testing", "/docs/*-validation.md", "/experiments", "/console/web/node_modules", "/console/web/.next", "**/__pycache__", "**/*.pyc", "**/*.tsbuildinfo", "**/.DS_Store", "**/.env*"]
 
 [tool.hatch.build.targets.sdist.force-include]

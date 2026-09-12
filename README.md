@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.2.4** · [Release notes](docs/v1.2.4.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Version **1.2.5** · [Release notes](docs/v1.2.5.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -100,7 +100,7 @@ remain available as advanced overrides.
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[1.2.4 release notes](docs/v1.2.4.md) for upgrade commands.
+[1.2.5 release notes](docs/v1.2.5.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -173,20 +173,16 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.2.4 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.2.5 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
-npm --prefix console/web ci
-npm --prefix console/web run build
-uv sync --frozen --no-dev
-bash containers/build-images.sh
-
-uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
+./strixops.sh install --build-images
+./strixops.sh start
 ```
 
 Open **[http://127.0.0.1:8300](http://127.0.0.1:8300)**.
 
-Build the frontend before `uv sync`: the Python package includes
+The manager builds the frontend before `uv sync`: the Python package includes
 `console/web/out`, which does not exist in a fresh clone until the frontend
 build finishes.
 
@@ -198,19 +194,20 @@ build finishes.
    start the task.
 4. Use the run page to inspect conversation, agents, findings, reports, and evidence.
 
-Use an **absolute runs path**, as shown above. The Console starts engine processes
+The manager saves an **absolute runs path**, defaulting to this checkout's
+`strix_runs`. The Console starts engine processes
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.2.4` **release tag**, leaving a detached HEAD
+The clone command selects the `v1.2.5` **release tag**, leaving a detached HEAD
 at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.2.4`.
+In an existing checkout, the exact reference is `refs/tags/v1.2.5`.
 
 After installation, subsequent starts only require:
 
 ```bash
 cd /path/to/StrixOps
-uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
+./strixops.sh start
 ```
 
 A health check verifies the Console service, without starting a scan or making a
@@ -222,16 +219,37 @@ curl --fail http://127.0.0.1:8300/api/health
 
 The health endpoint does not validate Docker, a model key, or target reachability.
 
+### Manage this checkout
+
+| Command | Behavior |
+|---|---|
+| `./strixops.sh install` | Build the frontend and sync frozen Python dependencies; resume the managed Console if it was running |
+| `./strixops.sh install --build-images` | Also build the Docker sandbox image |
+| `./strixops.sh start` | Start in the background and verify the running version |
+| `./strixops.sh stop` | Gracefully stop this manager's Console |
+| `./strixops.sh restart` | Restart using the saved address, port and data paths |
+| `./strixops.sh status` | Show running/source versions, PID, URL and log path |
+| `./strixops.sh logs -f` | Follow Console logs; use `-n 200` to change the tail length |
+| `./strixops.sh uninstall` | Remove manager-owned dependencies and build output, preserving source, settings, certificates and task data |
+
+For a different listener or runs directory, use `start` or `restart` with
+`--host`, `--port` and `--runs-root`. Settings are saved under
+`.strixops/manager/`; logs are written to `.strixops/manager/console.log`.
+The script works from other directories and supports paths containing spaces.
+See the [management guide](docs/management.md) for upgrade, migration and data
+preservation details. Existing systemd or manually started services must be
+stopped using their original method before starting script management.
+
 ## Install a built wheel
 
 A wheel contains the built Console and runtime prompt/skill library. It does
 not contain the Docker sandbox image. Use this route when you already have a
-trusted `strixops-1.2.4-py3-none-any.whl`; it does not assume a PyPI publication or
+trusted `strixops-1.2.5-py3-none-any.whl`; it does not assume a PyPI publication or
 an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.2.4-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.2.5-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -511,7 +529,7 @@ tool inventory and architecture-specific best-effort installs.
 
 Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
 remote `DOCKER_HOST` alone does not make local workspace directories available on
-that remote host. The product version `1.2.4` and sandbox tag `1.3.0` are separate
+that remote host. The product version `1.2.5` and sandbox tag `1.3.0` are separate
 version numbers.
 
 ## Configuration reference

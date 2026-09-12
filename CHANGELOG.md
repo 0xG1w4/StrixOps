@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.5 — 2026-09-12
+
+- Add the Linux/macOS `strixops.sh` checkout manager with install, uninstall,
+  start, stop, restart, status and logs commands.
+- Build the frontend before syncing frozen Python dependencies; optionally
+  build the sandbox image and resume an idle, previously managed Console.
+- Persist listener/data paths, verify readiness and version, and validate process
+  birth identity before signalling only the registered Console.
+- Check outstanding scan, queue, MCP and FOFA activity before maintenance;
+  preserve source, settings, credentials, certificates and task data on uninstall.
+
+Usage: [management guide](docs/management.md). Upgrade: [v1.2.5 notes](docs/v1.2.5.md).
+
 ## 1.2.4 — 2026-09-12
 
 - Detect mismatched Console page/backend versions and show the running backend

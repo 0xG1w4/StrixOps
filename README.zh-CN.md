@@ -4,7 +4,7 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.2.4** · [版本说明](docs/v1.2.4.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.2.5** · [版本说明](docs/v1.2.5.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -69,7 +69,7 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 通过控制台 IP 打开 MCP 即可自动初始化，沿用控制台部署的访问边界。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 与代理配置仍保留为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.2.4 版本说明](docs/v1.2.4.md)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.2.5 版本说明](docs/v1.2.5.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -136,35 +136,31 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.2.4 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.2.5 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
-npm --prefix console/web ci
-npm --prefix console/web run build
-uv sync --frozen --no-dev
-bash containers/build-images.sh
-
-uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
+./strixops.sh install --build-images
+./strixops.sh start
 ```
 
 打开 **[http://127.0.0.1:8300](http://127.0.0.1:8300)**。
 
-请在 `uv sync` 之前构建前端：Python 包会包含 `console/web/out`，而刚克隆的源码中尚无该目录，需先完成前端构建才能生成。
+脚本会先构建前端，再执行 `uv sync`：Python 包会包含 `console/web/out`，需完成前端构建才能生成。
 
 1. 打开**设置**，创建模型配置，填写供应商 URL、API Key，以及 Web 和内网模型。
 2. 选择 API 模式与推理强度，然后使用**测试模型**检查流式工具调用和工具结果处理流程。
 3. 打开扫描启动界面，填写已授权目标和指令，然后启动任务。
 4. 在运行详情页查看对话、智能体、安全发现、报告和证据。
 
-请像示例一样使用**绝对运行目录路径**。控制台使用自身的工作目录启动引擎进程；相对运行路径在控制台和引擎中可能解析为不同位置，wheel 安装方式尤其需要注意。
+脚本会保存**绝对运行目录路径**，默认使用本项目下的 `strix_runs`。手动启动时也应使用绝对路径，避免控制台与引擎对相对路径的解析不同。
 
-上面的克隆命令选择 `v1.2.4` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.2.4`。
+上面的克隆命令选择 `v1.2.5` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.2.5`。
 
 安装完成后，再次启动只需执行：
 
 ```bash
 cd /path/to/StrixOps
-uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
+./strixops.sh start
 ```
 
 可以使用健康检查验证控制台服务；该操作不会启动扫描或请求模型：
@@ -175,15 +171,34 @@ curl --fail http://127.0.0.1:8300/api/health
 
 健康检查端点不会验证 Docker、模型密钥或目标可达性。
 
+### 管理本项目
+
+| 命令 | 行为 |
+|---|---|
+| `./strixops.sh install` | 构建前端并同步锁定的 Python 依赖；若原本由脚本启动，完成后恢复服务 |
+| `./strixops.sh install --build-images` | 同时构建 Docker 沙箱镜像 |
+| `./strixops.sh start` | 后台启动并验证实际运行版本 |
+| `./strixops.sh stop` | 平顺停止脚本登记的 Console |
+| `./strixops.sh restart` | 沿用已保存的地址、端口与数据路径重新启动 |
+| `./strixops.sh status` | 显示运行／源码版本、PID、地址与日志路径 |
+| `./strixops.sh logs -f` | 持续查看日志；可用 `-n 200` 调整行数 |
+| `./strixops.sh uninstall` | 删除脚本管理的依赖与构建产物，保留源码、设置、证书与任务数据 |
+
+首次启动或重新启动可附加 `--host`、`--port`、`--runs-root`。
+管理记录位于 `.strixops/manager/`，日志为 `.strixops/manager/console.log`；
+脚本支持从其他目录调用与含空白的路径。
+完整升级、迁移及数据保留规则见[管理脚本说明](docs/management.md)。
+原本由终端或 systemd 启动的服务，需先使用原方式停止，再交由脚本启动。
+
 <a id="install-a-built-wheel"></a>
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.2.4-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.2.5-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.2.4-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.2.5-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -412,7 +427,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.2.4` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.2.5` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 
