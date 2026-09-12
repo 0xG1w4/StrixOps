@@ -1787,15 +1787,26 @@ summary {
 .prose-report h1,
 .prose-report h2,
 .prose-report h3,
-.prose-report h4 { color: var(--signal-strong); text-transform: none; }
+.prose-report h4,
+.prose-report h5,
+.prose-report h6 { color: var(--signal-strong); text-transform: none; }
 .prose-report h2 { border-top-color: var(--signal-line); }
+.prose-report li::marker { color: var(--signal-accent); }
 .prose-report code { border-radius: 2px; background: var(--signal-raised); color: var(--signal-accent); }
 .prose-report pre { border-color: var(--signal-line); border-radius: 3px; background: var(--signal-canvas); }
+.prose-report pre code { color: var(--signal-text); }
+/* Mermaid's existing renderer uses a dark SVG palette in both app themes. */
+.prose-report figure.mermaid-block { border-color: var(--signal-line); border-radius: 3px; background: #0b0f15; }
 .prose-report blockquote { border-left-color: var(--signal-accent); background: var(--signal-raised); color: var(--signal-muted); }
 .prose-report a { color: var(--signal-accent); text-decoration-color: color-mix(in srgb, var(--signal-accent) 40%, transparent); }
 .prose-report th,
 .prose-report td { border-color: var(--signal-line); }
+.prose-report th { color: var(--signal-strong); }
 .prose-report thead { background: var(--signal-raised); }
+/* The project reader's older table rule uses display:block. The wrapper now
+   owns scrolling, so retain the native table layout in both report readers. */
+.prose-report .report-table-scroll > table { display: table; max-width: none; overflow: visible; }
+.prose-report hr { border-color: var(--signal-line); }
 
 .rounded-\[1rem\],
 .rounded-\[1\.1rem\],

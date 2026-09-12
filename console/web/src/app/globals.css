@@ -1646,53 +1646,134 @@
      ======================================================================= */
 
   .prose-report {
+    min-width: 0;
+    max-width: 100%;
     overflow-x: auto;
     border: 1px solid rgb(var(--gold-rgb) / 0.12);
     border-radius: 1.2rem;
     background: rgba(5, 11, 18, 0.78);
-    padding: 1.4rem;
+    padding: clamp(1rem, 2.2vw, 1.6rem);
     color: var(--color-dark-200);
-    line-height: 1.75;
+    font-family: var(--font-sans);
+    line-height: 1.8;
     font-size: 0.95rem;
+    overflow-wrap: anywhere;
+  }
+
+  /* Full report readers give wide content its own scroll region. Other
+     Markdown previews retain the legacy panel scroll fallback. */
+  .prose-report.report-document {
+    overflow: visible;
   }
 
   .prose-report h1,
   .prose-report h2,
   .prose-report h3,
-  .prose-report h4 {
+  .prose-report h4,
+  .prose-report h5,
+  .prose-report h6 {
     color: var(--text-heading);
-    font-weight: 800;
-    letter-spacing: 0.02em;
+    font-weight: 700;
+    line-height: 1.45;
+    letter-spacing: 0;
     font-family: var(--font-mono);
     text-transform: uppercase;
   }
 
   .prose-report h1 {
-    font-size: 1.85rem;
+    font-size: clamp(1.4rem, 2.2vw, 1.85rem);
+    margin: 1.8rem 0 1rem;
   }
 
   .prose-report h2 {
     font-size: 1.28rem;
     border-top: 1px solid rgb(var(--gold-rgb) / 0.14);
     padding-top: 1.1rem;
-    margin-top: 2rem;
+    margin: 2.2rem 0 0.85rem;
   }
 
   .prose-report h3 {
-    font-size: 1.02rem;
-    margin-top: 1.4rem;
+    font-size: 1.08rem;
+    margin: 1.7rem 0 0.7rem;
+  }
+
+  .prose-report h4,
+  .prose-report h5,
+  .prose-report h6 {
+    font-size: 1em;
+    margin: 1.3rem 0 0.6rem;
+  }
+
+  .prose-report h5,
+  .prose-report h6 {
+    font-size: 0.92em;
   }
 
   .prose-report p {
+    margin: 0.85em 0;
     white-space: pre-wrap;
+  }
+
+  .prose-report > :first-child,
+  .prose-report blockquote > :first-child {
+    margin-top: 0;
+  }
+
+  .prose-report > h2:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .prose-report > :last-child,
+  .prose-report blockquote > :last-child {
+    margin-bottom: 0;
   }
 
   .prose-report strong {
     color: var(--text-heading);
   }
 
+  .prose-report ul,
+  .prose-report ol {
+    margin: 0.9em 0;
+    padding-inline-start: 1.65em;
+    list-style-position: outside;
+  }
+
+  .prose-report ul { list-style-type: disc; }
+  .prose-report ol { list-style-type: decimal; }
+  .prose-report ul ul { list-style-type: circle; }
+  .prose-report ul ul ul { list-style-type: square; }
+
+  .prose-report li {
+    padding-inline-start: 0.2em;
+  }
+
+  .prose-report li::marker {
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
   .prose-report li + li {
-    margin-top: 0.3rem;
+    margin-top: 0.4em;
+  }
+
+  .prose-report li > ul,
+  .prose-report li > ol {
+    margin: 0.35em 0;
+  }
+
+  .prose-report li > p {
+    margin: 0.45em 0;
+  }
+
+  .prose-report .contains-task-list {
+    list-style: none;
+    padding-inline-start: 0.2em;
+  }
+
+  .prose-report .task-list-item > input {
+    margin-inline-end: 0.55em;
   }
 
   .prose-report code {
@@ -1702,10 +1783,13 @@
     color: var(--cyan-primary);
     font-family: var(--font-mono);
     font-size: 0.85em;
+    overflow-wrap: anywhere;
   }
 
   .prose-report figure.mermaid-block {
     margin: 1.1rem 0;
+    min-width: 0;
+    max-width: 100%;
     padding: 1rem;
     border: 1px solid rgb(var(--gold-rgb) / 0.14);
     border-radius: 0.9rem;
@@ -1721,20 +1805,31 @@
   }
 
   .prose-report pre {
+    min-width: 0;
+    max-width: 100%;
+    margin: 1.1rem 0;
     overflow-x: auto;
     padding: 1rem;
     border-radius: 1rem;
     background: rgba(9, 18, 27, 0.94);
     border: 1px solid rgb(var(--raise-rgb) / 0.05);
+    line-height: 1.65;
+    white-space: pre;
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   .prose-report pre code {
     padding: 0;
     background: transparent;
     color: var(--color-dark-200);
+    white-space: inherit;
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   .prose-report blockquote {
+    margin: 1.1rem 0;
     padding: 0.9rem 1rem;
     border-left: 3px solid rgb(var(--gold-rgb) / 0.45);
     background: rgba(9, 18, 27, 0.6);
@@ -1751,6 +1846,30 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 0.84rem;
+    line-height: 1.65;
+  }
+
+  .prose-report .report-table-scroll {
+    min-width: 0;
+    max-width: 100%;
+    margin: 1.1rem 0;
+    overflow-x: auto;
+  }
+
+  .prose-report .report-table-scroll > table {
+    display: table;
+    overflow: visible;
+    max-width: none;
+    margin: 0;
+  }
+
+  .prose-report .report-table-scroll :is(th, td) {
+    min-width: 8rem;
+    max-width: none;
+  }
+
+  .prose-report .report-table-scroll :not(pre) > code {
+    white-space: nowrap;
   }
 
   .prose-report th,
@@ -1758,10 +1877,26 @@
     padding: 0.7rem 0.8rem;
     border: 1px solid rgb(var(--raise-rgb) / 0.06);
     text-align: left;
+    vertical-align: top;
+  }
+
+  .prose-report th {
+    color: var(--text-heading);
+    font-weight: 600;
   }
 
   .prose-report thead {
     background: rgb(var(--raise-rgb) / 0.05);
+  }
+
+  .prose-report hr {
+    margin: 1.8rem 0;
+    border-color: rgb(var(--raise-rgb) / 0.12);
+  }
+
+  .prose-report :is(a, pre, .report-table-scroll):focus-visible {
+    outline: 2px solid var(--cyan-primary);
+    outline-offset: 3px;
   }
 
   /* ==========================================================================

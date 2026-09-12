@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowUpRight, Download, FileText, History, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { Select } from "@/components/Select";
@@ -218,8 +218,8 @@ export default function ProjectReportReader({
                   <SnapshotSummary report={currentReport} copy={copy} locale={locale} onMode={setMode} />
                 </Tabs.Content>
                 <Tabs.Content className={styles.tabContent} value="full">
-                  {currentReport.content ? <div className={`prose-report ${styles.markdown}`}>
-                    <ReportMarkdown report={currentReport} />
+                  {currentReport.content ? <div className={`prose-report report-document ${styles.markdown}`}>
+                    <ReportMarkdown report={currentReport} locale={locale} />
                   </div> : <p className={styles.empty}>{copy.noContent}</p>}
                 </Tabs.Content>
                 <Tabs.Content className={styles.tabContent} value="sources"><SourceTasks report={currentReport} copy={copy} /></Tabs.Content>
@@ -232,9 +232,21 @@ export default function ProjectReportReader({
   );
 }
 
-function ReportMarkdown({ report }: { report: ProjectReportVersion }) {
-  const sourceNames = new Set(report.source_runs.map((source) => text(source.run)).filter(Boolean));
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+function ReportMarkdown({ report, locale }: { report: ProjectReportVersion; locale: keyof typeof TEXT }) {
+  const sourceNames = React.useMemo(
+    () => new Set(report.source_runs.map((source) => text(source.run)).filter(Boolean)),
+    [report.source_runs],
+  );
+  const components = React.useMemo<Components>(() => ({
+    table: ({ children }) => (
+      <div className="report-table-scroll" role="region" tabIndex={0}
+        aria-label={locale === "en" ? "Report table, scroll horizontally when needed" : "報告表格，可左右捲動"}>
+        <table>{children}</table>
+      </div>
+    ),
+    pre: ({ children }) => (
+      <pre tabIndex={0} aria-label={locale === "en" ? "Code block" : "程式碼區塊"}>{children}</pre>
+    ),
     // Existing stored Markdown remains byte-for-byte unchanged. Only exact
     // snapshot source identifiers become navigation links in the reader.
     code({ children, className }) {
@@ -249,7 +261,8 @@ function ReportMarkdown({ report }: { report: ProjectReportVersion }) {
         ? names.map((name, index) => <React.Fragment key={name}>{index > 0 ? ", " : ""}<Link href={sourceHref(name)}>{name}</Link></React.Fragment>)
         : children}</td>;
     },
-  }}>{report.content ?? ""}</ReactMarkdown>;
+  }), [locale, sourceNames]);
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{report.content ?? ""}</ReactMarkdown>;
 }
 
 function SnapshotSummary({ report, copy, locale, onMode }: {

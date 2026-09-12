@@ -14,6 +14,7 @@ from pathlib import Path
 
 from strixops import skills as skill_registry
 from strixops.engine.scanconfig import ScanSpec, authorized_target_line, multi_target_instruction
+from strixops.report.formatting import REPORT_FORMAT_SKILL, report_format_guidance
 
 PROMPT_PARTS_DIR = Path(__file__).parent / "prompt_parts"
 
@@ -216,6 +217,8 @@ def _with_skills(prompt: str, skill_names: list[str]) -> str:
             )
         parts.append(f"===== SKILL: {canonical_id} =====\n{content}")
         seen.add(canonical_id)
+    if REPORT_FORMAT_SKILL not in seen and (format_guidance := report_format_guidance()):
+        parts.append(f"===== SKILL: {REPORT_FORMAT_SKILL} =====\n{format_guidance}")
     if not parts:
         return prompt
     return prompt + "\n\n" + "\n\n".join(parts)

@@ -4,7 +4,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.2.2** · [Release notes](docs/v1.2.2.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Version **1.2.3** · [Release notes](docs/v1.2.3.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -100,7 +100,7 @@ remain available as advanced overrides.
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[1.2.2 release notes](docs/v1.2.2.md) for upgrade commands.
+[1.2.3 release notes](docs/v1.2.3.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -173,7 +173,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.2.2 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.2.3 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -202,9 +202,9 @@ Use an **absolute runs path**, as shown above. The Console starts engine process
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.2.2` **release tag**, leaving a detached HEAD
+The clone command selects the `v1.2.3` **release tag**, leaving a detached HEAD
 at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.2.2`.
+In an existing checkout, the exact reference is `refs/tags/v1.2.3`.
 
 After installation, subsequent starts only require:
 
@@ -226,12 +226,12 @@ The health endpoint does not validate Docker, a model key, or target reachabilit
 
 A wheel contains the built Console and runtime prompt/skill library. It does
 not contain the Docker sandbox image. Use this route when you already have a
-trusted `strixops-1.2.2-py3-none-any.whl`; it does not assume a PyPI publication or
+trusted `strixops-1.2.3-py3-none-any.whl`; it does not assume a PyPI publication or
 an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.2.2-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.2.3-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -511,7 +511,7 @@ tool inventory and architecture-specific best-effort installs.
 
 Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
 remote `DOCKER_HOST` alone does not make local workspace directories available on
-that remote host. The product version `1.2.2` and sandbox tag `1.3.0` are separate
+that remote host. The product version `1.2.3` and sandbox tag `1.3.0` are separate
 version numbers.
 
 ## Configuration reference
@@ -603,6 +603,13 @@ An operator-supplied workspace replaces the default workspace location. See the
 - Final synthesis uses the configured model, recorded findings, assessment state,
   and closing narrative. Deterministic report composition is the fallback if
   synthesis fails or is disabled.
+- Reports render headings, paragraphs, numbered and nested lists with explicit
+  spacing; wide tables, code blocks and supported task flowcharts scroll within
+  their own regions. Existing stored Markdown and downloads are not rewritten.
+- The shared `reporting/report_format` skill supplies formatting guidance to root
+  and child Agents and final synthesis. New reports can split long plain prose
+  at sentence boundaries while preserving required content and literal syntax.
+  Formatting adds no model calls and does not change task success/failure rules.
 - Agents and sandbox writers stop before evidence is captured. Files are copied
   with streamed SHA256 and no fixed 50 MiB cutoff; both workspace originals and
   archive copies can occupy disk space.

@@ -28,6 +28,7 @@ from strixops.platform.events import EventWriter
 from strixops.report.assessment import AssessmentState
 from strixops.report.assessment import summary as assessment_summary
 from strixops.report.evidence import collect_files, finding_references
+from strixops.report.formatting import format_report_markdown
 from strixops.report.notes import NotesStore
 
 RUNNING = "running"
@@ -624,7 +625,9 @@ class RunState:
         if recommendations:
             lines += [f"## {labels['recommendations']}", "", recommendations, ""]
 
-        artifacts.write_executive_report(self.run_dir, "\n".join(lines).rstrip() + "\n")
+        artifacts.write_executive_report(
+            self.run_dir, format_report_markdown("\n".join(lines).rstrip() + "\n")
+        )
 
     def _derived_severity(self) -> str:
         """Highest finding severity when finish_scan did not state one."""

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.3 — 2026-09-12
+
+- Restore report bullets, numbering and nested indentation, with clearer heading
+  and paragraph spacing in task and project report readers.
+- Keep wide tables, code blocks and existing supported task flowcharts inside
+  their own scroll regions; wrap long inline values without changing their text.
+- Share the automatically included `reporting/report_format` skill across root
+  and child Agents and final synthesis while preserving required report content.
+- Conservatively split long plain prose at sentence boundaries in synthesis and
+  fallback reports, preserving literal syntax and existing stored reports.
+  Formatting adds no model calls or new task-failure conditions.
+
+Upgrade and behavior: [v1.2.3 release notes](docs/v1.2.3.md).
+
 ## 1.2.2 — 2026-09-12
 
 - List only saved, available evidence attachments, with matching file counts,

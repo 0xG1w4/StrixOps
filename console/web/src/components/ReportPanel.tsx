@@ -8,7 +8,7 @@
    ========================================================================= */
 
 import * as React from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Download, FileText, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/ui";
@@ -37,7 +37,7 @@ function mermaidSource(children: React.ReactNode): string | null {
 }
 
 export default function ReportPanel({ name, run }: { name: string; run: RunDetail | null }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [phase, setPhase] = React.useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = React.useState("");
   const [markdown, setMarkdown] = React.useState("");
@@ -45,6 +45,22 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
   const reporting = (run?.status || "").toLowerCase() === "reporting";
   const pending = live || reporting;
   const requestIdRef = React.useRef(0);
+  // Task polling rerenders this panel. Stable renderer identities preserve the
+  // table/code DOM, keyboard focus and horizontal reading position.
+  const markdownComponents = React.useMemo<Components>(() => ({
+    pre: ({ children }) => {
+      const chart = mermaidSource(children);
+      return chart ? <MermaidDiagram chart={chart} /> : (
+        <pre tabIndex={0} aria-label={locale === "en" ? "Code block" : "程式碼區塊"}>{children}</pre>
+      );
+    },
+    table: ({ children }) => (
+      <div className="report-table-scroll" role="region" tabIndex={0}
+        aria-label={locale === "en" ? "Report table, scroll horizontally when needed" : "報告表格，可左右捲動"}>
+        <table>{children}</table>
+      </div>
+    ),
+  }), [locale]);
 
   const load = React.useCallback(async (): Promise<LoadOutcome> => {
     const requestId = ++requestIdRef.current;
@@ -188,15 +204,10 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
           {t("report.download")}
         </a>
       </div>
-      <div className="prose-report">
+      <div className="prose-report report-document">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          components={{
-            pre: ({ children }) => {
-              const chart = mermaidSource(children);
-              return chart ? <MermaidDiagram chart={chart} /> : <pre>{children}</pre>;
-            },
-          }}
+          components={markdownComponents}
         >
           {markdown}
         </ReactMarkdown>

@@ -31,6 +31,7 @@ from agents import ModelSettings, ModelTracing
 from strixops.engine.resilience import MODEL_RETRY
 from strixops.engine.targets import normalize_targets
 from strixops.report.dedupe import _extract_text
+from strixops.report.formatting import format_report_markdown, report_format_guidance
 from strixops.report.state import RunState
 
 if TYPE_CHECKING:
@@ -245,7 +246,26 @@ def normalize_report_header(
     return "\n".join(rebuilt) + "\n"
 
 
-def synthesis_system_prompt(*, language: str) -> str:
+_LEGACY_TYPOGRAPHY = """TYPOGRAPHY — the viewer renders full markdown (headings, lists, GFM tables,
+fenced code blocks and mermaid diagrams), so use it:
+- Keep paragraphs short: at most 5 lines each. Anything a section enumerates
+  becomes bullets or a table, not run-on prose.
+- Break major sections into ### subsections with meaningful titles, one per
+  theme, stage or host (e.g. a numbered stage inside the attack-path section,
+  one ### per host in the architecture section).
+- Use GFM tables with a header row for anything tabular: host/service
+  inventories, credentials, affected parameters, per-finding summaries.
+- Bold the facts a reader must not miss: severity, endpoints, finding ids.
+- PoC steps, commands and response excerpts go in fenced code blocks with
+  their language tag.
+- When a flow shows more than prose — an attack chain (entry → pivot →
+  objective), an access path, or the environment layout — add ONE fenced
+  mermaid flowchart (```mermaid, flowchart TD, ASCII node ids, labels in the
+  report language, roughly 12 nodes at most). Diagrams support the written
+  evidence; they never replace it, and a section gets at most one."""
+
+
+def synthesis_system_prompt(*, language: str, format_guidance: str | None = None) -> str:
     """Editorial contract for the report composer (ported from the platform worker)."""
     zh = (language or "zh-CN").startswith("zh")
     if zh:
@@ -257,6 +277,11 @@ def synthesis_system_prompt(*, language: str) -> str:
     else:
         deliverable = "English."
         sections = "\n".join(f"  {item}" for item in _EN_SECTIONS)
+    if format_guidance is None:
+        format_guidance = report_format_guidance()
+    # Old run snapshots have no shared formatting skill. Keep the original
+    # typography instructions instead of importing newer live skill text.
+    format_guidance = format_guidance or _LEGACY_TYPOGRAPHY
     return f"""You are composing the final client-facing penetration-test report for one
 completed run. You are a report editor, not a scanner: everything you write is
 grounded in the REPORT SOURCE provided in the user message. Return ONLY the
@@ -322,23 +347,7 @@ EDITORIAL RULES:
 - Do NOT include remediation advice anywhere.
 - Do NOT cite source file names unless necessary to explain the operation.
 
-TYPOGRAPHY — the viewer renders full markdown (headings, lists, GFM tables,
-fenced code blocks and mermaid diagrams), so use it:
-- Keep paragraphs short: at most 5 lines each. Anything a section enumerates
-  becomes bullets or a table, not run-on prose.
-- Break major sections into ### subsections with meaningful titles, one per
-  theme, stage or host (e.g. a numbered stage inside the attack-path section,
-  one ### per host in the architecture section).
-- Use GFM tables with a header row for anything tabular: host/service
-  inventories, credentials, affected parameters, per-finding summaries.
-- Bold the facts a reader must not miss: severity, endpoints, finding ids.
-- PoC steps, commands and response excerpts go in fenced code blocks with
-  their language tag.
-- When a flow shows more than prose — an attack chain (entry → pivot →
-  objective), an access path, or the environment layout — add ONE fenced
-  mermaid flowchart (```mermaid, flowchart TD, ASCII node ids, labels in the
-  report language, roughly 12 nodes at most). Diagrams support the written
-  evidence; they never replace it, and a section gets at most one.
+{format_guidance}
 {_SEVERITY_RULES_ZH}
 
 The report language is {deliverable}"""
@@ -462,7 +471,9 @@ async def synthesize_executive_report(
     """
     language = run_state.report_language()
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    system = synthesis_system_prompt(language=language)
+    system = synthesis_system_prompt(
+        language=language, format_guidance=report_format_guidance(run_state.run_dir)
+    )
     model = resolve_model()
     timeout = _attempt_timeout()
 
@@ -511,7 +522,9 @@ async def synthesize_executive_report(
                 normalize_targets(scan_config.get("target", ""), scan_config["targets"])
                 if "targets" in scan_config else None
             )
-            report = normalize_report_header(content, targets=targets, language=language)
+            report = format_report_markdown(
+                normalize_report_header(content, targets=targets, language=language)
+            )
             logger.info("report synthesized on attempt %d (%d chars)", attempt, len(report))
             return report
         logger.warning(
