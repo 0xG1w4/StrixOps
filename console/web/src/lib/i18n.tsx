@@ -15,7 +15,6 @@ const STORAGE_KEY = "strixops_locale";
 
 const Dictionaries: Record<Locale, Record<string, string>> = {
   "zh-CN": {
-    "auth.login": "Login",
     "auth.connectionError": "暂时无法连接，请重试。",
     "auth.httpNotice": "当前 HTTP 连接未加密，密码会通过此连接传输。远程访问请使用 HTTPS。",
     "auth.consoleAccess": "工作台访问",
@@ -81,7 +80,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "nav.settings.note": "模型配置档案",
     "nav.engine": "引擎",
     "nav.liveRuns": "{n} 个运行中",
-    "nav.version": "StrixOps v1.3.1",
+    "nav.version": "StrixOps v1.3.2",
     "nav.group.operations": "作战",
     "nav.group.manage": "管理",
     "nav.group.intelligence": "情报",
@@ -739,7 +738,6 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
   },
 
   en: {
-    "auth.login": "Login",
     "auth.connectionError": "Unable to connect. Please retry.",
     "auth.httpNotice": "This HTTP connection is not encrypted. Passwords are sent over this connection. Use HTTPS for remote access.",
     "auth.consoleAccess": "Console access",
@@ -805,7 +803,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "nav.settings.note": "Model profiles",
     "nav.engine": "Engine",
     "nav.liveRuns": "{n} live",
-    "nav.version": "StrixOps v1.3.1",
+    "nav.version": "StrixOps v1.3.2",
     "nav.group.operations": "Operations",
     "nav.group.manage": "Manage",
     "nav.group.intelligence": "Intelligence",

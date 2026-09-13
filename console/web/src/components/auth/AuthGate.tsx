@@ -40,8 +40,8 @@ function LoginForm() {
       <PasswordField label={t("auth.password")} value={password} onChange={setPassword} autoComplete="current-password" disabled={busy} />
       {error && <p className={styles.error} role="alert">{t(error)}</p>}
       <button className={scene.submit} type="submit" disabled={busy || !username || !password}>
-        {busy ? <LoaderCircle size={16} className={styles.spin} /> : <ArrowRight size={16} />}
-        {t(busy ? "auth.signingIn" : "auth.login")}
+        <span>{t(busy ? "auth.signingIn" : "auth.signIn")}</span>
+        {busy ? <LoaderCircle size={17} className={styles.spin} aria-hidden="true" /> : <ArrowRight size={17} aria-hidden="true" />}
       </button>
     </form>
   );
@@ -64,31 +64,38 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   if (!forced) {
     return (
       <main className={scene.scene}>
-        <div className={scene.artwork} aria-hidden="true" />
-        <section className={scene.panel} aria-labelledby="auth-title">
-          <header className={scene.header}>
-            <StrixAvatar />
-            <h1 id="auth-title">Login</h1>
-          </header>
-          {auth.status === "anonymous" && <LoginForm />}
-          {auth.status === "loading" && (
-            <div className={scene.loading} role="status" aria-label={t("auth.checking")}>
-              <LoaderCircle size={22} className={styles.spin} aria-hidden="true" />
+        <section className={scene.card} aria-labelledby="auth-title">
+          <div className={scene.artwork} aria-hidden="true" />
+          <div className={scene.panel}>
+            <div className={scene.content}>
+              <header className={scene.header}>
+                <div className={scene.identity}>
+                  <span className={scene.mark}><StrixAvatar /></span>
+                  <span className={scene.wordmark}>StrixOps</span>
+                </div>
+                <h1 id="auth-title">{t("auth.signIn")}</h1>
+              </header>
+              {auth.status === "anonymous" && <LoginForm />}
+              {auth.status === "loading" && (
+                <div className={scene.loading} role="status" aria-label={t("auth.checking")}>
+                  <LoaderCircle size={22} className={styles.spin} aria-hidden="true" />
+                </div>
+              )}
+              {auth.status === "unavailable" && (
+                <div className={scene.unavailable}>
+                  <p className={styles.error} role="alert">{t("auth.connectionError")}</p>
+                  <button className={scene.submit} type="button" disabled={retrying} onClick={async () => {
+                    setRetrying(true);
+                    await refreshAuthSession();
+                    setRetrying(false);
+                  }}>
+                    <RefreshCw size={16} className={retrying ? styles.spin : undefined} />
+                    {t("auth.retry")}
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-          {auth.status === "unavailable" && (
-            <div className={scene.unavailable}>
-              <p className={styles.error} role="alert">{t("auth.connectionError")}</p>
-              <button className={scene.submit} type="button" disabled={retrying} onClick={async () => {
-                setRetrying(true);
-                await refreshAuthSession();
-                setRetrying(false);
-              }}>
-                <RefreshCw size={16} className={retrying ? styles.spin : undefined} />
-                {t("auth.retry")}
-              </button>
-            </div>
-          )}
+          </div>
         </section>
       </main>
     );

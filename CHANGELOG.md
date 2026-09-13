@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.2 — 2026-09-13
+
+- Center the login page around a two-column card, with starfield artwork confined
+  to the left panel and the StrixOps brand, Sign in heading and form on the right.
+- Give mobile screens a separate, shallow artwork panel above the form.
+- Continue using the existing account and session flow.
+
+Upgrade: [v1.3.2 notes](docs/v1.3.2.md).
+
 ## 1.3.1 — 2026-09-13
 
 - Leave the login username empty and editable, submit the entered credentials,
