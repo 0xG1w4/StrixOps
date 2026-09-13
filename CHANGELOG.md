@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.3 — 2026-09-13
+
+- Present the login starfield in a landscape 16:9 frame, keeping the artwork on
+  the left and the form on the right on desktop.
+- Refine brand typography, spacing and button contrast around the compact form.
+- Stack the artwork and form on narrow screens while preserving the landscape
+  image proportions and existing account/session flow.
+
+Upgrade: [v1.3.3 notes](docs/v1.3.3.md).
+
 ## 1.3.2 — 2026-09-13
 
 - Center the login page around a two-column card, with starfield artwork confined
