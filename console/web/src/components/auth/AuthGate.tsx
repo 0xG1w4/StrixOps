@@ -29,15 +29,17 @@ function LoginForm() {
   }
   return (
     <form className={`${styles.form} ${scene.form}`} onSubmit={submit}>
-      <div className={styles.field}>
-        <label htmlFor="strix-username">{t("auth.username")}</label>
-        <input
-          id="strix-username" type="text" name="username" value={username}
-          onChange={event => setUsername(event.target.value)} autoComplete="username"
-          autoCapitalize="none" spellCheck={false} required disabled={busy}
-        />
+      <div className={scene.credentials}>
+        <div className={styles.field}>
+          <label htmlFor="strix-username">{t("auth.username")}</label>
+          <input
+            id="strix-username" type="text" name="username" value={username}
+            onChange={event => setUsername(event.target.value)} autoComplete="username"
+            autoCapitalize="none" spellCheck={false} required disabled={busy}
+          />
+        </div>
+        <PasswordField label={t("auth.password")} value={password} onChange={setPassword} autoComplete="current-password" disabled={busy} />
       </div>
-      <PasswordField label={t("auth.password")} value={password} onChange={setPassword} autoComplete="current-password" disabled={busy} />
       {error && <p className={styles.error} role="alert">{t(error)}</p>}
       <button className={scene.submit} type="submit" disabled={busy || !username || !password}>
         <span>{t(busy ? "auth.signingIn" : "auth.signIn")}</span>
@@ -65,35 +67,37 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     return (
       <main className={scene.scene}>
         <section className={scene.card} aria-labelledby="auth-title">
-          <div className={scene.artwork} aria-hidden="true" />
-          <div className={scene.panel}>
-            <div className={scene.content}>
-              <header className={scene.header}>
-                <div className={scene.identity}>
-                  <span className={scene.mark}><StrixAvatar /></span>
-                  <span className={scene.wordmark}>StrixOps</span>
-                </div>
-                <h1 id="auth-title">{t("auth.signIn")}</h1>
-              </header>
-              {auth.status === "anonymous" && <LoginForm />}
-              {auth.status === "loading" && (
-                <div className={scene.loading} role="status" aria-label={t("auth.checking")}>
-                  <LoaderCircle size={22} className={styles.spin} aria-hidden="true" />
-                </div>
-              )}
-              {auth.status === "unavailable" && (
-                <div className={scene.unavailable}>
-                  <p className={styles.error} role="alert">{t("auth.connectionError")}</p>
-                  <button className={scene.submit} type="button" disabled={retrying} onClick={async () => {
-                    setRetrying(true);
-                    await refreshAuthSession();
-                    setRetrying(false);
-                  }}>
-                    <RefreshCw size={16} className={retrying ? styles.spin : undefined} />
-                    {t("auth.retry")}
-                  </button>
-                </div>
-              )}
+          <div className={scene.identity}>
+            <span className={scene.mark}><StrixAvatar /></span>
+            <span className={scene.wordmark}>STRIXOPS</span>
+          </div>
+          <div className={scene.body}>
+            <div className={scene.artwork} aria-hidden="true" />
+            <div className={scene.panel}>
+              <div className={scene.content}>
+                <header className={scene.header}>
+                  <h1 id="auth-title">{t("auth.signIn")}</h1>
+                </header>
+                {auth.status === "anonymous" && <LoginForm />}
+                {auth.status === "loading" && (
+                  <div className={scene.loading} role="status" aria-label={t("auth.checking")}>
+                    <LoaderCircle size={22} className={styles.spin} aria-hidden="true" />
+                  </div>
+                )}
+                {auth.status === "unavailable" && (
+                  <div className={scene.unavailable}>
+                    <p className={styles.error} role="alert">{t("auth.connectionError")}</p>
+                    <button className={scene.submit} type="button" disabled={retrying} onClick={async () => {
+                      setRetrying(true);
+                      await refreshAuthSession();
+                      setRetrying(false);
+                    }}>
+                      <RefreshCw size={16} className={retrying ? styles.spin : undefined} />
+                      {t("auth.retry")}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </section>

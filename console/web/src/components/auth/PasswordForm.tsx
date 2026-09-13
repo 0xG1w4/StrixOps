@@ -22,7 +22,8 @@ export default function PasswordForm({ forced = false }: { forced?: boolean }) {
     event.preventDefault();
     if (busy) return;
     setSaved(false);
-    if (Array.from(next).length < 15 || Array.from(next).length > 128) { setError("auth.passwordLength"); return; }
+    const passwordLength = Array.from(next.normalize("NFKC")).length;
+    if (passwordLength < 8 || passwordLength > 32) { setError("auth.passwordLength"); return; }
     if (next !== confirmation) { setError("auth.passwordMismatch"); return; }
     setBusy(true); setError("");
     try {

@@ -1,5 +1,8 @@
 # Login starfield artwork
 
+This is the original v1.3.1 artwork. The current login page uses the
+[observatory artwork introduced in v1.3.4](login-observatory.md).
+
 The original starfield was generated for the StrixOps login page with the built-in
 imagegen tool on 2026-09-13. It uses no reference artwork, stock photography or
 third-party image service at runtime.

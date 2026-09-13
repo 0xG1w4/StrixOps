@@ -13,9 +13,10 @@ Console 只有一个账号 `strix`，没有注册、用户列表或角色系统�
 
 ## 密码与会话
 
-- 新密码经 Unicode NFKC 规范化后需为 15–128 个字符、UTF-8 不超过 512 字节。
+- 新密码经 Unicode NFKC 规范化后需为 8–32 个字符。
   允许空格、密码管理器与粘贴；拒绝内置常见密码、账号衍生、重复和顺序模式。
   内置列表不是完整的已泄漏密码数据库。
+  已设置的旧密码仍可登录并作为当前密码验证，不会因新长度上限而失效。
 - 密码使用独立随机盐与 scrypt（N=131072、r=8、p=1）保存；不会储存明文密码。
 - 随机会话令牌只放在 HttpOnly、SameSite=Strict、无 Domain 的 Cookie 中；数据库只存令牌摘要。
   HTTPS 使用 Secure 及 `__Host-` Cookie。浏览器不把 Console 密码、会话令牌或 CSRF 令牌写入 localStorage。

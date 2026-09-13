@@ -73,7 +73,7 @@ _MESSAGES = {
     "current_password_invalid": "The current password is incorrect.",
     "password_reused": "Choose a password different from the current password.",
     "weak_password": (
-        "Use 15–128 characters and avoid common, repeated, sequential or account-derived passwords."
+        "Use 8–32 characters and avoid common, repeated, sequential or account-derived passwords."
     ),
     "invalid_session": "Your session has expired. Sign in again.",
     "rate_limited": "Too many authentication attempts. Try again later.",
@@ -128,6 +128,7 @@ def _ip(value: Any) -> str:
 
 
 def _password_bytes(value: Any) -> bytes | None:
+    # Keep the previous login range so existing passwords can still be changed.
     if not isinstance(value, str) or len(value) > 512:
         return None
     try:
@@ -143,7 +144,9 @@ def validate_new_password(value: Any) -> bytes:
     if encoded is None:
         raise AuthError("weak_password")
     normalized = encoded.decode("utf-8")
-    if len(normalized) < 15 or any(unicodedata.category(char).startswith("C") for char in normalized):
+    if not 8 <= len(normalized) <= 32 or any(
+        unicodedata.category(char).startswith("C") for char in normalized
+    ):
         raise AuthError("weak_password")
     compact = "".join(char for char in normalized.casefold() if char.isalnum())
     repeated = "".join(char for char in normalized.casefold() if not char.isspace())

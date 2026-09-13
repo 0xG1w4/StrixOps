@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.4 — 2026-09-13
+
+- Unify the login card with a shared brand row, new landscape observatory artwork,
+  warm primary action, refined spacing and responsive short-landscape layouts.
+- Accept new passwords of 8–32 Unicode characters after NFKC normalization,
+  with matching frontend validation and English/Chinese guidance.
+- Preserve existing password login/change compatibility, common-password checks,
+  session protection and account data.
+
+Upgrade: [v1.3.4 notes](docs/v1.3.4.md).
+
 ## 1.3.3 — 2026-09-13
 
 - Present the login starfield in a landscape 16:9 frame, keeping the artwork on
