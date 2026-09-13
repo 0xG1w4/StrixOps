@@ -8,9 +8,11 @@ import StrixAvatar from "./StrixAvatar";
 import PasswordField from "./PasswordField";
 import PasswordForm from "./PasswordForm";
 import styles from "./auth.module.css";
+import scene from "./LoginScene.module.css";
 
 function LoginForm() {
   const { t } = useI18n();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -18,24 +20,28 @@ function LoginForm() {
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || !username || !password) return;
     setBusy(true); setError("");
-    try { await login("strix", password); }
+    try { await login(username, password); }
     catch (problem) {
       if (mounted.current) setError(problem instanceof AuthError && problem.code === "rate_limited" ? "auth.rateLimited" : "auth.loginError");
     } finally { if (mounted.current) setBusy(false); }
   }
   return (
-    <form className={styles.form} onSubmit={submit}>
+    <form className={`${styles.form} ${scene.form}`} onSubmit={submit}>
       <div className={styles.field}>
         <label htmlFor="strix-username">{t("auth.username")}</label>
-        <input id="strix-username" type="text" name="username" value="strix" autoComplete="username" readOnly />
+        <input
+          id="strix-username" type="text" name="username" value={username}
+          onChange={event => setUsername(event.target.value)} autoComplete="username"
+          autoCapitalize="none" spellCheck={false} required disabled={busy}
+        />
       </div>
       <PasswordField label={t("auth.password")} value={password} onChange={setPassword} autoComplete="current-password" disabled={busy} />
       {error && <p className={styles.error} role="alert">{t(error)}</p>}
-      <button className="button-primary" type="submit" disabled={busy || !password}>
+      <button className={scene.submit} type="submit" disabled={busy || !username || !password}>
         {busy ? <LoaderCircle size={16} className={styles.spin} /> : <ArrowRight size={16} />}
-        {t(busy ? "auth.signingIn" : "auth.signIn")}
+        {t(busy ? "auth.signingIn" : "auth.login")}
       </button>
     </form>
   );
@@ -46,9 +52,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const { t, locale, setLocale } = useI18n();
   const [retrying, setRetrying] = useState(false);
   const [logoutError, setLogoutError] = useState(false);
-  const [insecureRemote, setInsecureRemote] = useState(false);
   useEffect(() => {
-    setInsecureRemote(window.location.protocol === "http:" && !["localhost", "127.0.0.1", "::1", "[::1]"].includes(window.location.hostname));
     void refreshAuthSession();
     const check = () => { if (document.visibilityState === "visible") void refreshAuthSession(); };
     const timer = window.setInterval(check, 60_000);
@@ -57,6 +61,38 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
   if (auth.status === "authenticated" && !auth.session.must_change_password) return children;
   const forced = auth.status === "authenticated" && auth.session.must_change_password;
+  if (!forced) {
+    return (
+      <main className={scene.scene}>
+        <div className={scene.artwork} aria-hidden="true" />
+        <section className={scene.panel} aria-labelledby="auth-title">
+          <header className={scene.header}>
+            <StrixAvatar />
+            <h1 id="auth-title">Login</h1>
+          </header>
+          {auth.status === "anonymous" && <LoginForm />}
+          {auth.status === "loading" && (
+            <div className={scene.loading} role="status" aria-label={t("auth.checking")}>
+              <LoaderCircle size={22} className={styles.spin} aria-hidden="true" />
+            </div>
+          )}
+          {auth.status === "unavailable" && (
+            <div className={scene.unavailable}>
+              <p className={styles.error} role="alert">{t("auth.connectionError")}</p>
+              <button className={scene.submit} type="button" disabled={retrying} onClick={async () => {
+                setRetrying(true);
+                await refreshAuthSession();
+                setRetrying(false);
+              }}>
+                <RefreshCw size={16} className={retrying ? styles.spin : undefined} />
+                {t("auth.retry")}
+              </button>
+            </div>
+          )}
+        </section>
+      </main>
+    );
+  }
   return (
     <main className={styles.gate}>
       <div className={styles.gateTools} role="group" aria-label={t("shell.language")}>
@@ -67,22 +103,14 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         <div className={styles.brand}><StrixAvatar large /><span>STRIXOPS<span>CONSOLE</span></span></div>
         <div className={styles.intro}>
           <span className={styles.eyebrow}><ShieldCheck size={14} />{t("auth.consoleAccess")}</span>
-          <h1 id="auth-title">{t(auth.status === "loading" ? "auth.checking" : auth.status === "unavailable" ? "auth.unavailable" : forced ? "auth.firstChange" : "auth.welcome")}</h1>
-          <p>{t(auth.status === "loading" ? "auth.checkingHint" : auth.status === "unavailable" ? "auth.unavailableHint" : forced ? "auth.firstChangeHint" : "auth.welcomeHint")}</p>
+          <h1 id="auth-title">{t("auth.firstChange")}</h1>
+          <p>{t("auth.firstChangeHint")}</p>
         </div>
-        {insecureRemote && <p className={styles.transportNotice}>{t("auth.httpNotice")}</p>}
-        {auth.status === "loading" && <div className={styles.loading} role="status"><LoaderCircle size={20} className={styles.spin} /><span>{t("auth.checking")}</span></div>}
-        {auth.status === "unavailable" && (
-          <button className="button-secondary" type="button" disabled={retrying} onClick={async () => { setRetrying(true); await refreshAuthSession(); setRetrying(false); }}>
-            <RefreshCw size={16} className={retrying ? styles.spin : undefined} />{t("auth.retry")}
-          </button>
-        )}
-        {auth.status === "anonymous" && <LoginForm />}
-        {forced && <>
+        <>
           <PasswordForm forced />
           <button type="button" className={styles.textButton} onClick={async () => { try { await logout(); } catch { setLogoutError(true); } }}><LogOut size={15} />{t("auth.signOut")}</button>
           {logoutError && <p role="alert" className={styles.error}>{t("auth.logoutError")}</p>}
-        </>}
+        </>
       </section>
     </main>
   );

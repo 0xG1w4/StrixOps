@@ -1,0 +1,123 @@
+.scene {
+  --bg-void: #080e1a;
+  --bg-panel: #0d1628;
+  --text-heading: #eef4ff;
+  --text-primary: #d1dced;
+  --text-secondary: #a8b8d0;
+  --text-muted: #93a5c1;
+  --border-primary: rgb(160 185 223 / .22);
+  --cyan-primary: #a9bff0;
+  --danger-rgb: 242 150 155;
+  color-scheme: dark;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+  align-items: center;
+  min-height: 100svh;
+  min-height: 100dvh;
+  padding: 64px clamp(36px, 7.2vw, 132px);
+  overflow: hidden;
+  background: #050913;
+  color: var(--text-primary);
+}
+
+.artwork {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(90deg, rgb(5 9 19 / .02) 20%, rgb(5 9 19 / .04) 48%, rgb(5 9 19 / .25) 100%),
+    url("/images/login-starfield.webp");
+  background-size: cover;
+  background-position: center;
+}
+
+.panel {
+  grid-column: 2;
+  width: 100%;
+  min-width: 0;
+  padding: 40px;
+  border: 1px solid rgb(176 200 238 / .18);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgb(18 30 50 / .64), rgb(7 15 29 / .73));
+  backdrop-filter: blur(18px);
+  box-shadow: 0 24px 88px rgb(0 0 0 / .3), inset 0 1px 0 rgb(222 237 255 / .06);
+}
+
+.header { margin-bottom: 34px; }
+.header > svg { width: 34px; height: 34px; margin-bottom: 20px; color: #a9bff0; }
+.header h1 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(38px, 3.5vw, 48px);
+  font-weight: 400;
+  line-height: 1.12;
+  letter-spacing: -.035em;
+  color: #eef4ff;
+}
+
+.scene .form { gap: 22px; }
+.scene .form label { font-size: 12px; font-weight: 500; letter-spacing: .01em; color: #c3d1e5; }
+.scene .form input {
+  height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgb(148 177 217 / .26);
+  border-radius: 7px;
+  background: rgb(4 11 23 / .58);
+  color: #eef4ff;
+  font-size: 15px;
+  caret-color: #c0d2fb;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.scene .form input[name="username"] { font-family: var(--font-mono); }
+.scene .form input[autocomplete="current-password"] { padding-right: 48px; }
+.scene .form input + button { width: 44px; height: 44px; color: #a8b8d0; }
+.scene .form input:hover:not(:disabled) { border-color: rgb(169 194 232 / .47); }
+.scene .form input:focus { border-color: #a9bff0; background: rgb(7 15 29 / .84); }
+.scene .form input:disabled { opacity: .64; }
+.scene .form > .submit { margin-top: 8px; }
+
+.submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  border: 1px solid rgb(202 221 255 / .3);
+  border-radius: 7px;
+  background: #a9bff0;
+  color: #091327;
+  font: 600 14px/1.4 var(--font-sans);
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+.submit:hover:not(:disabled) { background: #c0d2fb; border-color: #d9e6ff; }
+.submit:disabled { cursor: default; background: #53678e; border-color: #657ba4; color: #e3eafb; opacity: .76; }
+.scene button:focus-visible, .scene input:focus-visible { outline: 2px solid #c0d2fb; outline-offset: 4px; }
+.loading { display: grid; place-items: center; min-height: 180px; color: #a9bff0; }
+.unavailable { display: grid; gap: 22px; }
+
+@media (min-width: 1800px) { .scene { grid-template-columns: minmax(0, 1fr) minmax(0, 440px); padding-right: 12vw; } }
+@media (max-width: 760px) {
+  .scene { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: 64px 24px; }
+  .panel { grid-column: 1; max-width: 400px; padding: 36px; background: linear-gradient(145deg, rgb(13 24 43 / .74), rgb(5 13 27 / .84)); }
+  .artwork { background-position: 38% center; }
+}
+@media (max-width: 380px) {
+  .scene { padding: 40px 16px; }
+  .panel { padding: 30px 24px; border-radius: 14px; }
+  .header { margin-bottom: 28px; }
+  .header > svg { margin-bottom: 17px; }
+  .scene .form { gap: 20px; }
+}
+@media (max-height: 620px) and (min-width: 761px) {
+  .scene { padding-block: 28px; }
+  .panel { padding-block: 28px; }
+  .header { margin-bottom: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { .scene input, .submit { transition: none; } }

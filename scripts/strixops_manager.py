@@ -97,7 +97,10 @@ def frontend_fingerprint(root: Path) -> str:
             "tsconfig.json",
         )
     ]
-    paths += sorted(path for path in (web / "src").rglob("*") if path.is_file())
+    # Public images/fonts are build inputs too. Keep traversal restricted to
+    # source/static directories, excluding dependencies, exports and local data.
+    for directory in (web / "src", web / "public"):
+        paths += sorted(path for path in directory.rglob("*") if path.is_file())
     digest = hashlib.sha256()
     for path in paths:
         if path.is_file():

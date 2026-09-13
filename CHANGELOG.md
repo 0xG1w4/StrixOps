@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.1 — 2026-09-13
+
+- Leave the login username empty and editable, submit the entered credentials,
+  and use a generic account/password failure message.
+- Replace introductory login copy with a minimal Login form over original
+  starfield artwork, with responsive layouts and keyboard focus states.
+- Include public frontend assets in the manager's build fingerprint so artwork
+  changes cannot silently reuse an outdated installation.
+
+Upgrade: [v1.3.1 notes](docs/v1.3.1.md).
+
 ## 1.3.0 — 2026-09-13
 
 - Add the single `strix` account, mandatory first-login password change, private

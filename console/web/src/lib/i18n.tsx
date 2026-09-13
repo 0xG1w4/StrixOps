@@ -15,6 +15,8 @@ const STORAGE_KEY = "strixops_locale";
 
 const Dictionaries: Record<Locale, Record<string, string>> = {
   "zh-CN": {
+    "auth.login": "Login",
+    "auth.connectionError": "暂时无法连接，请重试。",
     "auth.httpNotice": "当前 HTTP 连接未加密，密码会通过此连接传输。远程访问请使用 HTTPS。",
     "auth.consoleAccess": "工作台访问",
     "auth.welcome": "登录工作台",
@@ -23,7 +25,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "auth.password": "密码",
     "auth.signIn": "登录",
     "auth.signingIn": "登录中…",
-    "auth.loginError": "无法登录，请检查密码或稍后重试。",
+    "auth.loginError": "无法登录，请检查帐号及密码，或稍后重试。",
     "auth.rateLimited": "尝试次数过多，请稍后重试。",
     "auth.showPassword": "显示密码",
     "auth.hidePassword": "隐藏密码",
@@ -79,7 +81,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "nav.settings.note": "模型配置档案",
     "nav.engine": "引擎",
     "nav.liveRuns": "{n} 个运行中",
-    "nav.version": "StrixOps v1.3.0",
+    "nav.version": "StrixOps v1.3.1",
     "nav.group.operations": "作战",
     "nav.group.manage": "管理",
     "nav.group.intelligence": "情报",
@@ -737,6 +739,8 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
   },
 
   en: {
+    "auth.login": "Login",
+    "auth.connectionError": "Unable to connect. Please retry.",
     "auth.httpNotice": "This HTTP connection is not encrypted. Passwords are sent over this connection. Use HTTPS for remote access.",
     "auth.consoleAccess": "Console access",
     "auth.welcome": "Sign in to your workspace",
@@ -745,7 +749,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "auth.password": "Password",
     "auth.signIn": "Sign in",
     "auth.signingIn": "Signing in…",
-    "auth.loginError": "Unable to sign in. Check your password or try again later.",
+    "auth.loginError": "Unable to log in. Check your credentials or try again later.",
     "auth.rateLimited": "Too many attempts. Please try again later.",
     "auth.showPassword": "Show password",
     "auth.hidePassword": "Hide password",
@@ -801,7 +805,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "nav.settings.note": "Model profiles",
     "nav.engine": "Engine",
     "nav.liveRuns": "{n} live",
-    "nav.version": "StrixOps v1.3.0",
+    "nav.version": "StrixOps v1.3.1",
     "nav.group.operations": "Operations",
     "nav.group.manage": "Manage",
     "nav.group.intelligence": "Intelligence",
