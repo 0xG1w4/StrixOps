@@ -449,6 +449,10 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "report.empty.hint": "此运行没有 penetration_test_report.md。",
     "report.error": "报告无法载入 — {error}",
     "report.refreshError": "暂时无法刷新，正在显示上次载入的报告。",
+    "report.draft.title": "报告草稿",
+    "report.draft.pending": "模型最终报告尚未生成，当前显示已保存的草稿；生成成功后会自动更新。",
+    "report.draft.unfinished": "模型最终报告未生成。当前内容为已保存的草稿，不是最终报告。",
+    "report.modelFinal": "最终报告 · 模型生成",
     "report.download": "下载报告",
 
     "rerun.path": "ops://run/rerun",
@@ -1180,6 +1184,10 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
     "report.empty.hint": "This run has no penetration_test_report.md.",
     "report.error": "Report unavailable — {error}",
     "report.refreshError": "Unable to refresh right now. Showing the last loaded report.",
+    "report.draft.title": "Report draft",
+    "report.draft.pending": "The model-generated final report is pending. Showing the saved draft, which will update automatically when ready.",
+    "report.draft.unfinished": "The model-generated final report was not produced. This saved content is a draft, not the final report.",
+    "report.modelFinal": "Final report · Model generated",
     "report.download": "Download report",
 
     "rerun.path": "ops://run/rerun",

@@ -109,6 +109,7 @@ class RunState:
         self.run_record: dict[str, Any] = {
             "run_name": self.run_dir.name,
             "status": RUNNING,
+            "report_synthesized": False,
             "start_time": datetime.now(UTC).isoformat(),
         }
         self._start_monotonic = time.monotonic()
@@ -411,12 +412,11 @@ class RunState:
         return str(scan_config.get("report_language") or "zh-CN")
 
     def write_executive_report(self) -> None:
-        """Compose the client-facing report in the platform's deliverable format.
+        """Save a clearly labeled draft from the root's structured narrative.
 
-        Header block (target/type/time/overall severity/rationale), then the
-        themed sections the platform's reports mandate — filled from the
-        structured finish_scan fields, findings table, and internal findings.
-        Empty sections are omitted, mirroring "include when evidence exists".
+        Model synthesis replaces this draft with the final client report.
+        Preserve the draft if synthesis fails, including its status label in
+        downloaded Markdown so it cannot be mistaken for the final report.
         """
         fields = self._final_fields
         if not fields:
@@ -529,6 +529,11 @@ class RunState:
         lines: list[str] = [
             f"# {title}",
             "",
+            (
+                "> 报告状态：草稿。模型尚未生成正式报告。"
+                if zh else "> Report Status: Draft. The final model report has not been generated."
+            ),
+            "",
             *target_lines,
             "",
             f"{labels['type']}：{task_type_label}" if zh else f"{labels['type']}: {task_type_label}",
@@ -628,6 +633,7 @@ class RunState:
         artifacts.write_executive_report(
             self.run_dir, format_report_markdown("\n".join(lines).rstrip() + "\n")
         )
+        self.run_record["report_synthesized"] = False
 
     def _derived_severity(self) -> str:
         """Highest finding severity when finish_scan did not state one."""

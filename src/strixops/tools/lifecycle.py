@@ -27,11 +27,11 @@ def finish_scan(
     business_impact: str = "",
     limitations: str = "",
 ) -> str:
-    """End the penetration test and publish the executive report.
+    """End testing and save the narrative for the final report model.
 
     Call this exactly once, when testing is complete and every finding has
     been filed. This is the ONLY way the scan terminates successfully. The
-    report is the client-facing deliverable: write every field richly and
+    fields are source material for the client-facing report: write them richly and
     concretely in the scan's report language (default 简体中文), clustering
     related findings into themes rather than listing them one by one. Do NOT
     include remediation advice in the narrative fields (recommendations is
@@ -117,8 +117,8 @@ def finish_scan(
             business_impact=business_impact.strip(),
             limitations=limitations.strip(),
         )
-        # Preserve the root's complete narrative before any SDK shutdown or
-        # optional model synthesis can wait. Finalization enriches it later.
+        # Preserve a labeled draft before any SDK shutdown can wait. The
+        # finalization model produces the formal report from all saved findings.
         run_state.write_executive_report()
     except BaseException:
         if coordinator is not None:
@@ -126,7 +126,7 @@ def finish_scan(
         raise
     payload = {
         "success": True,
-        "message": "Testing complete. Report saved; finalizing evidence and executive report.",
+        "message": "Testing complete. Draft saved; finalizing evidence and generating the final report.",
         "scan_completed": True,
     }
     ctx.context.lifecycle_completion = LifecycleCompletion("finish_scan", payload)

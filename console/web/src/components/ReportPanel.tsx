@@ -50,6 +50,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
   const [phase, setPhase] = React.useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = React.useState("");
   const [markdown, setMarkdown] = React.useState("");
+  const [reportSynthesized, setReportSynthesized] = React.useState<boolean | undefined>(undefined);
   const live = Boolean(run?.live);
   const reporting = (run?.status || "").toLowerCase() === "reporting";
   const finalizing = run?.cleanup?.status === "in_progress";
@@ -80,6 +81,9 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
       if (requestId !== requestIdRef.current) return "stale";
       hasReportRef.current = true;
       setMarkdown(page.markdown ?? "");
+      setReportSynthesized(
+        typeof page.report_synthesized === "boolean" ? page.report_synthesized : undefined,
+      );
       setError("");
       setPhase("ready");
       return "ready";
@@ -101,6 +105,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
     // refresh failures must keep the current run's saved report readable.
     hasReportRef.current = false;
     setMarkdown("");
+    setReportSynthesized(undefined);
     setError("");
     setPhase("loading");
   }, [name]);
@@ -139,7 +144,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
       requestIdRef.current += 1;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [load, live, pending]);
+  }, [load, live, pending, run?.report_synthesized]);
 
   const finalizationNotice = finalizing ? (
     <p className="text-sm text-fg-muted" role="status">
@@ -216,6 +221,15 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
   return (
     <div className="space-y-3 p-4">
       {finalizationNotice}
+      {reportSynthesized === false && (
+        <div className="space-y-1 text-sm text-fg-muted" role="status">
+          <p className="font-semibold">{t("report.draft.title")}</p>
+          <p>{t(pending ? "report.draft.pending" : "report.draft.unfinished")}</p>
+        </div>
+      )}
+      {reportSynthesized === true && (
+        <p className="text-sm text-fg-muted">{t("report.modelFinal")}</p>
+      )}
       {error && <p className="text-sm text-fg-muted" role="status">{t("report.refreshError")}</p>}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="micro-label">

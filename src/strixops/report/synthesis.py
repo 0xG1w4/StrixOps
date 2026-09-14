@@ -6,9 +6,9 @@ ledger, coverage records) plus the root agent's finish_scan draft narrative
 are sent to a fresh model call under the platform's editorial rules, and the
 model composes the deliverable markdown in the platform report format.
 
-The deterministic composer in :mod:`strixops.report.state` stays as the
-fallback for dry runs, model failures and timeouts — a run never ends without
-a report file. The synthesis call mirrors ``report.dedupe``: one
+The deterministic composer in :mod:`strixops.report.state` preserves a labeled
+draft for dry runs, model failures and timeouts. Only successful model synthesis
+produces the final report. The synthesis call mirrors ``report.dedupe``: one
 ``model.get_response`` through the run's tracked model route, with a
 shared total timeout and a findings-only retry when the full corpus fails.
 """
@@ -55,7 +55,7 @@ _DEFAULT_TIMEOUT = 900.0
 
 def synthesis_enabled() -> bool:
     """Kill switch for the synthesis pass — ``STRIXOPS_REPORT_SYNTHESIS=0``
-    forces the deterministic composer (fixture lifecycles, incidents)."""
+    keeps only the saved draft (fixture lifecycles, incidents)."""
     return (os.environ.get("STRIXOPS_REPORT_SYNTHESIS") or "1").strip().lower() not in {
         "0",
         "false",
@@ -75,15 +75,15 @@ _SEVERITY_RULES_ZH = """- Use only canonical severity labels (Critical/High/Medi
   - Info: observational or preparatory findings only."""
 
 _ZH_SECTIONS = [
-    "1. 執行摘要",
-    "2. 本階段戰果整理",
-    "3. 攻擊路徑與關鍵進展",
-    "4. 內網架構、關鍵主機與服務",
-    "5. 重要發現與技術細節",
-    "6. 憑證、雜湊與存取能力",
-    "7. 後續可利用路徑",
-    "8. 敏感資料與業務衝擊",
-    "9. 本階段限制與未完成部分",
+    "1. 执行摘要",
+    "2. 本阶段战果整理",
+    "3. 攻击路径与关键进展",
+    "4. 内网架构、关键主机与服务",
+    "5. 重要发现与技术细节",
+    "6. 凭证、哈希与访问能力",
+    "7. 后续可利用路径",
+    "8. 敏感数据与业务影响",
+    "9. 本阶段限制与未完成部分",
 ]
 
 _EN_SECTIONS = [
@@ -232,7 +232,7 @@ def normalize_report_header(
                 continue
             target_list = False
             retained.append(item)
-        label = "目標" if language.startswith("zh") else "Targets"
+        label = "目标" if language.startswith("zh") else "Targets"
         scope = f"{label} ({len(targets)}):\n\n" + "\n".join(f"- {target}" for target in targets)
         retained.insert(1 if retained and retained[0].startswith("#") else 0, scope)
         header = retained
@@ -271,7 +271,7 @@ def synthesis_system_prompt(*, language: str, format_guidance: str | None = None
     zh = (language or "zh-CN").startswith("zh")
     if zh:
         deliverable = (
-            "Traditional Chinese (繁體中文). Tool identifiers, code, commands, "
+            "Simplified Chinese (简体中文). Tool identifiers, code, commands, "
             "protocol strings and finding ids stay as-is."
         )
         sections = "\n".join(f"  {item}" for item in _ZH_SECTIONS)
@@ -311,13 +311,13 @@ OUTPUT FORMAT — start the report with exactly this header block. Keep the
 blank line between every field: the report viewer renders markdown, and
 without a blank line the fields collapse into one run-on paragraph. Never use
 HTML tags such as <br> — the viewer does not render raw HTML.
-# 滲透測試報告 - <target>            (English runs: # Penetration Test Report - <target>)
+# 渗透测试报告 - <target>            (English runs: # Penetration Test Report - <target>)
 
-目標：<target>                       (English: Target: <target>)
+目标：<target>                       (English: Target: <target>)
 
-任務類型：<task type>                 (English: Engagement type: <task type>)
+任务类型：<task type>                 (English: Engagement type: <task type>)
 
-報告產生時間：<generated_at, copy verbatim>
+报告生成时间：<generated_at, copy verbatim>
 
 Overall Severity: <Critical|High|Medium|Low|Info>
 
@@ -466,8 +466,8 @@ async def synthesize_executive_report(
 ) -> str | None:
     """Compose the final report via one model call over the full corpus.
 
-    Returns the report markdown, or ``None`` when synthesis is unavailable —
-    the caller then falls back to the deterministic composer. Two attempts:
+    Returns the final report markdown, or ``None`` when synthesis is unavailable;
+    the caller retains the saved draft without claiming a final report. Two attempts:
     full source, then the trimmed findings-only source (the old worker's
     fallback ladder, compressed), sharing one total time budget.
     """

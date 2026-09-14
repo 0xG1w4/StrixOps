@@ -557,8 +557,8 @@ version numbers.
 | `STRIXOPS_IMAGE` | `strixops-sandbox:1.3.0` for both scan types |
 | `STRIX_HOST_WORKSPACE_DIR` | Optional operator-provided workspace bind mount; otherwise retained per-run workspace |
 | `STRIX_OPERATOR_HINTS_DIR` | Optional hint directory; Console launches provide a run-owned path |
-| `STRIXOPS_REPORT_LANG` | `zh-CN`; CLI `--report-language` takes precedence |
-| `STRIXOPS_REPORT_SYNTHESIS` | Enabled; `0` disables model-assisted final report synthesis |
+| `STRIXOPS_REPORT_LANG` | `zh-CN` (Simplified Chinese); CLI `--report-language` takes precedence |
+| `STRIXOPS_REPORT_SYNTHESIS` | Enabled; model output is the final report. `0` disables synthesis and retains only a labeled draft |
 | `STRIXOPS_REPORT_SYNTHESIS_TIMEOUT` | Total model-assisted report budget in seconds, shared across both attempts; default `900` |
 | `PERPLEXITY_API_KEY` | Optional web-search key; can be saved in Console Settings → Integrations |
 | `PERPLEXITY_ENABLED` | Optional search switch; defaults to true, but a key is still required |

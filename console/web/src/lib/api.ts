@@ -107,6 +107,8 @@ export interface RunSummary {
   status: string;
   /** Engine finalization state; present while collecting evidence and reporting. */
   cleanup?: { status: string; phase?: string };
+  /** True for saved model output; false for a draft. Omitted when unknown. */
+  report_synthesized?: boolean;
   live: boolean;
   stale: boolean;
   start_time: string;
@@ -253,6 +255,8 @@ export interface FindingsPage {
 /** GET /api/runs/{name}/report */
 export interface ReportPage {
   markdown: string;
+  /** Provenance of the loaded report, independent of task completion. */
+  report_synthesized?: boolean;
 }
 
 /** Agent-authored assessment records; resolved entries do not prove full coverage. */

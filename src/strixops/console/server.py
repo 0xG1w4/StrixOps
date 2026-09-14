@@ -267,6 +267,8 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
         summary["dry_run"] = bool(dry_run)
     if record.get("failure_reason"):
         summary["failure_reason"] = str(record["failure_reason"])
+    if isinstance(record.get("report_synthesized"), bool):
+        summary["report_synthesized"] = record["report_synthesized"]
     llm_usage = record.get("llm_usage")
     if isinstance(llm_usage, dict):
         summary["llm_usage"] = llm_usage
@@ -599,10 +601,17 @@ def run_assessment(name: str) -> dict:
 
 @app.get("/api/runs/{name}/report")
 def run_report(name: str) -> dict:
-    path = state.run_dir(name) / REPORT_FILENAME
+    run_dir = state.run_dir(name)
+    path = run_dir / REPORT_FILENAME
     if not path.exists():
         raise HTTPException(status_code=404, detail="no report yet")
-    return {"markdown": path.read_text(encoding="utf-8", errors="replace")}
+    # Read provenance before the file: the engine only marks synthesis complete
+    # after saving model output, so a concurrent update cannot label a draft final.
+    record = parser.json_load(run_dir / "run.json")
+    page: dict[str, Any] = {"markdown": path.read_text(encoding="utf-8", errors="replace")}
+    if isinstance(record.get("report_synthesized"), bool):
+        page["report_synthesized"] = record["report_synthesized"]
+    return page
 
 
 @app.get("/api/runs/{name}/log")
