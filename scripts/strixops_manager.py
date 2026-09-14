@@ -542,7 +542,7 @@ class Manager:
                 raise ManagerError(f"数据目录与执行环境重叠，保留：{path}")
         return path
 
-    def install(self, build_images: bool = False, *, recover_stale_captures: bool = False) -> None:
+    def install(self, build_images: bool = False, *, recover_stale_captures: bool = True) -> None:
         for command in ("uv", "node", "npm"):
             if shutil.which(command) is None:
                 raise ManagerError(f"缺少 {command}，请安装后重试。脚本不会修改系统套件。")
@@ -580,7 +580,7 @@ class Manager:
             config = record["config"]
         else:
             self.ensure_port_free(config)
-        if recover_stale_captures:
+        if recover_stale_captures and not running:
             self.ensure_idle(config, recover_stale_captures=True)
         else:
             self.ensure_idle(config)
@@ -686,9 +686,10 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest="command")
     install = commands.add_parser("install", help="安装/更新前端与 Python 环境；原服务若在执行，完成后恢复")
     install.add_argument("--build-images", action="store_true", help="同时建置 Docker 沙箱映像")
+    # Keep the previous recovery command working, but ordinary install must
+    # perform the same stopped-Console/Docker verification without extra flags.
     install.add_argument(
-        "--recover-stale-captures", action="store_true",
-        help="Console 已停止时核验遗留 MCP 捕获；须使用原 Console 的 Docker 连接环境",
+        "--recover-stale-captures", action="store_true", default=True, help=argparse.SUPPRESS,
     )
     commands.add_parser("uninstall", help="删除脚本管理的环境，保留源码、设置、憑证与任务数据")
     for name in ("start", "restart"):

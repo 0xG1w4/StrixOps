@@ -63,12 +63,13 @@ Python／SQLite。项目环境尚未安装或无法运行时，才依次查找 P
 Console 结束旧捕获」的循环，可在 Console 已停止且 Docker 可用时执行：
 
 ```bash
-./strixops.sh install --recover-stale-captures
+./strixops.sh install
 ./strixops.sh start
 ```
 
-该选项使用现有项目 `.venv` 中的 Docker SDK 核对保存的容器身份，并检查同一
+普通 `install` 会自动使用现有项目 `.venv` 中的 Docker SDK 核对保存的容器身份，并检查同一
 任务的其他容器。确认容器不存在，或已退出且不会自动重启后，才允许此次安装。
+旧版 `--recover-stale-captures` 选项继续兼容，但无需额外指定。
 检查不会修改数据库、删除证据或操作容器；启动后仍可在 Console 停止／结束旧任务。
 Docker 无法连接、容器身份缺失或不符、容器仍在运行或可能自动重启时仍会阻挡，
 执行中的 MCP 请求测试及尚未完成的启动／停止／删除操作也仍需处理。
@@ -76,7 +77,7 @@ Docker 无法连接、容器身份缺失或不符、容器仍在运行或可能�
 执行时须使用原 Console 的 Docker 连接设置，包括原本使用的 `DOCKER_HOST`／TLS
 等环境变量；旧记录没有保存 Docker daemon 身份，无法自动确认是否换了连接目标。
 CLI 的 `docker ps` 可能使用不同的 context，不能单凭空列表跳过检查。
-普通 `install`、`stop`、`uninstall` 保留原来的严格检查。
+Console 仍在运行时不会套用此复原判断；`stop`、`uninstall` 保留原来的严格检查。
 
 若看到 `MCP tasks: activity is unknown; stored state is unreadable or invalid.`，
 表示检查无法读取或辨识 MCP 保存的状态，不能仅凭此讯息断定任务仍在运行或资料损坏。
