@@ -8,6 +8,9 @@
 
 管理脚本需要可用的 Python 3.9+。StrixOps 运行环境需要 Python 3.12+；
 安装时由 uv 根据项目要求选择解释器。另需 uv、Node.js 20.9+ 与 npm。
+管理脚本优先使用本项目 `.venv/bin/python`，让维护检查与 Console 使用同一套
+Python／SQLite。项目环境尚未安装或无法运行时，才依次查找 PATH 中的 Python
+与 uv 已安装的解释器。
 脚本不修改系统套件。真实扫描需要可用 Docker 与对应沙箱镜像。
 
 ```bash
@@ -54,6 +57,14 @@
 停止或更新前，会以只读方式检查任务、队列、MCP 测试／捕获和 FOFA 搜索。
 执行中、等待中、受阻或无法确认状态的工作需要先在 Console 处理。
 这些检查是维护前的状态快照；执行维护时请勿同时提交新任务。
+
+若看到 `MCP tasks: activity is unknown; stored state is unreadable or invalid.`，
+表示检查无法读取或辨识 MCP 保存的状态，不能仅凭此讯息断定任务仍在运行或资料损坏。
+旧版脚本优先使用全局 Python；其 SQLite 库可能无法只读打开 WAL 模式数据库，
+即使项目 `.venv` 可以正常读取。更新 `strixops.sh` 后会优先使用项目环境；
+尚未更新脚本时，可在源码目录执行 `.venv/bin/python scripts/strixops_manager.py stop`，
+仍会完成相同的任务检查再停止服务。若项目解释器也报告相同错误，应继续检查保存路径、
+文件权限、数据库与任务状态。
 
 停止只向登记且出生时间与命令均匹配的 Console PID 发送 SIGTERM，
 不会按名称／端口批量终止，也不会终止独立扫描进程或清理 Docker。

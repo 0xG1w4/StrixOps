@@ -8,16 +8,20 @@ strixops_python_usable() {
 }
 
 STRIXOPS_MANAGER_PYTHON=
-for STRIXOPS_PYTHON_NAME in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9; do
-    STRIXOPS_PYTHON_CANDIDATE=$(command -v "$STRIXOPS_PYTHON_NAME" 2>/dev/null) || continue
-    if strixops_python_usable "$STRIXOPS_PYTHON_CANDIDATE"; then
-        STRIXOPS_MANAGER_PYTHON=$STRIXOPS_PYTHON_CANDIDATE
-        break
-    fi
-done
-
-if [ -z "$STRIXOPS_MANAGER_PYTHON" ] && strixops_python_usable "$STRIXOPS_SCRIPT_ROOT/.venv/bin/python"; then
+# Match the Console's Python/SQLite for maintenance checks. A PATH interpreter
+# can fail to read its WAL databases even when the project's runtime can.
+if strixops_python_usable "$STRIXOPS_SCRIPT_ROOT/.venv/bin/python"; then
     STRIXOPS_MANAGER_PYTHON=$STRIXOPS_SCRIPT_ROOT/.venv/bin/python
+fi
+
+if [ -z "$STRIXOPS_MANAGER_PYTHON" ]; then
+    for STRIXOPS_PYTHON_NAME in python3 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9; do
+        STRIXOPS_PYTHON_CANDIDATE=$(command -v "$STRIXOPS_PYTHON_NAME" 2>/dev/null) || continue
+        if strixops_python_usable "$STRIXOPS_PYTHON_CANDIDATE"; then
+            STRIXOPS_MANAGER_PYTHON=$STRIXOPS_PYTHON_CANDIDATE
+            break
+        fi
+    done
 fi
 
 if [ -z "$STRIXOPS_MANAGER_PYTHON" ] && command -v uv >/dev/null 2>&1; then
