@@ -24,20 +24,24 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from agents import ModelSettings, ModelTracing
+from openai import APIError
 
 from strixops.config.context import ContextSettings
+from strixops.config.model_errors import model_error_details
 from strixops.engine.context_budget import context_window, count_tokens, output_limit
 from strixops.engine.resilience import MODEL_RETRY
 from strixops.engine.targets import normalize_targets
 from strixops.platform import artifacts
 from strixops.report.dedupe import _extract_text
+from strixops.report.diagnostics import set_report_synthesis_status, synthesis_error_code
 from strixops.report.formatting import format_report_markdown, report_format_guidance
 from strixops.report.prompt import synthesis_system_prompt as synthesis_system_prompt
+from strixops.report.source import ReportSourceTooLarge
 from strixops.report.source import build_report_source as build_report_source
 from strixops.report.state import RunState
 
 if TYPE_CHECKING:
-    from agents import Model
+    from agents import Model, ModelResponse
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +128,41 @@ def _synthesis_timeout() -> float:
     return value if math.isfinite(value) and value > 0 else _DEFAULT_TIMEOUT
 
 
+def _report_text(response: ModelResponse) -> str:
+    text = _extract_text(response).lstrip("\ufeff").strip()
+    lines = text.splitlines()
+    if len(lines) >= 3:
+        fence = re.fullmatch(r"(`{3,})(?:markdown|md)?\s*", lines[0], re.I)
+        if fence and lines[-1].strip() == fence.group(1):
+            inner = "\n".join(lines[1:-1]).strip()
+            if inner.startswith("#"):
+                return inner
+    return text
+
+
 async def synthesize_executive_report(
+    run_state: RunState, resolve_model: Callable[[], Model],
+) -> str | None:
+    set_report_synthesis_status(run_state, "running")
+    try:
+        result = await _synthesize_report(run_state, resolve_model)
+    except asyncio.CancelledError:
+        set_report_synthesis_status(run_state, "failed", "cancelled")
+        raise
+    except ReportSourceTooLarge:
+        set_report_synthesis_status(run_state, "failed", "input_budget")
+        logger.warning("Report synthesis failed: input_budget")
+        return None
+    except Exception as exc:
+        set_report_synthesis_status(run_state, "failed", "source_error")
+        logger.warning("Report synthesis failed preparing output (%s)", type(exc).__name__)
+        return None
+    if result is None and run_state.run_record["report_synthesis"]["status"] == "running":
+        set_report_synthesis_status(run_state, "failed", "model_error")
+    return result
+
+
+async def _synthesize_report(
     run_state: RunState,
     resolve_model: Callable[[], Model],
 ) -> str | None:
@@ -143,7 +181,12 @@ async def synthesize_executive_report(
     system = synthesis_system_prompt(
         language=language, format_guidance=report_format_guidance(run_state.run_dir)
     )
-    model = resolve_model()
+    try:
+        model = resolve_model()
+    except Exception as exc:
+        set_report_synthesis_status(run_state, "failed", "model_unavailable")
+        logger.warning("Report synthesis model unavailable (%s)", type(exc).__name__)
+        return None
     config = run_state.run_record.get("scan_config") or {}
     model_name = str(config.get("model") or getattr(model, "model", "") or "")
     count = (
@@ -154,6 +197,7 @@ async def synthesize_executive_report(
     output_reserve = output_limit(model_name) if model_name else 8192
     source_budget = capacity - output_reserve - count(system + _USER_PREFIX) - 1024
     if source_budget <= 0:
+        set_report_synthesis_status(run_state, "failed", "input_budget")
         logger.warning("No report source budget remains after instructions and output reserve")
         return None
 
@@ -162,6 +206,7 @@ async def synthesize_executive_report(
     )
     for attempt, trimmed in enumerate((False, True), start=1):
         if loop.time() >= deadline:
+            set_report_synthesis_status(run_state, "failed", "timeout", attempt=attempt - 1)
             logger.warning("report synthesis exhausted its %.0fs total budget", timeout)
             break
         if trimmed:
@@ -187,12 +232,14 @@ async def synthesize_executive_report(
             logger.warning("Could not save report source snapshot for attempt %d", attempt)
         remaining = deadline - loop.time()
         if remaining <= 0:
+            set_report_synthesis_status(run_state, "failed", "timeout", attempt=attempt - 1)
             logger.warning("report synthesis exhausted its %.0fs total budget", timeout)
             break
         logger.info(
             "report synthesis attempt %d starting with %.1fs remaining in total budget",
             attempt, remaining,
         )
+        set_report_synthesis_status(run_state, "running", attempt=attempt)
         try:
             response = await asyncio.wait_for(
                 model.get_response(
@@ -214,24 +261,52 @@ async def synthesize_executive_report(
                 timeout=remaining,
             )
         except TimeoutError:
+            set_report_synthesis_status(run_state, "failed", "timeout", attempt=attempt)
             logger.warning("report synthesis attempt %d timed out", attempt)
             continue
-        except Exception:
-            logger.exception("report synthesis attempt %d failed", attempt)
+        except Exception as exc:
+            code = synthesis_error_code(exc)
+            set_report_synthesis_status(run_state, "failed", code, attempt=attempt)
+            logger.warning(
+                "report synthesis attempt %d failed: %s (%s)%s", attempt, code, type(exc).__name__,
+                f"; {model_error_details(exc)}" if isinstance(exc, APIError) else "",
+            )
+            if code in {"upstream_policy", "authentication", "model_refusal"}:
+                return None
             continue
 
-        content = _extract_text(response).strip()
+        messages = getattr(response, "output", [])
+        if any(getattr(item, "status", None) == "incomplete" for item in messages):
+            set_report_synthesis_status(run_state, "failed", "incomplete_output", attempt=attempt)
+            logger.warning("report synthesis attempt %d returned incomplete output", attempt)
+            continue
+        if any(
+            getattr(chunk, "type", None) == "refusal"
+            for item in messages for chunk in (getattr(item, "content", None) or [])
+        ):
+            set_report_synthesis_status(run_state, "failed", "model_refusal", attempt=attempt)
+            return None
+        content = _report_text(response)
         if content.startswith("#") and len(content) > 500:
             scan_config = run_state.run_record.get("scan_config") or {}
             targets = (
                 normalize_targets(scan_config.get("target", ""), scan_config["targets"])
                 if "targets" in scan_config else None
             )
-            report = format_report_markdown(
-                normalize_report_header(content, targets=targets, language=language)
-            )
+            try:
+                report = format_report_markdown(
+                    normalize_report_header(content, targets=targets, language=language)
+                )
+            except Exception as exc:
+                set_report_synthesis_status(run_state, "failed", "invalid_output", attempt=attempt)
+                logger.warning("Report synthesis formatting failed (%s)", type(exc).__name__)
+                return None
             logger.info("report synthesized on attempt %d (%d chars)", attempt, len(report))
+            set_report_synthesis_status(run_state, "completed", attempt=attempt)
             return report
+        set_report_synthesis_status(
+            run_state, "failed", "invalid_output" if content else "empty_output", attempt=attempt,
+        )
         logger.warning(
             "report synthesis attempt %d produced unusable output (%d chars)", attempt, len(content)
         )

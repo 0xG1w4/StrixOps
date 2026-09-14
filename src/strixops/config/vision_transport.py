@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agents.exceptions import ModelBehaviorError
 from agents.items import TResponseInputItem
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
@@ -85,4 +86,22 @@ class PlatformChatCompletionsModel(RouteReasoningMixin, OpenAIChatCompletionsMod
         # Both SDK get_response and stream_response pass through this method.
         # Keep provider parameters, response conversion and retry semantics in
         # the pinned SDK instead of maintaining a fork of its HTTP client.
-        return await super()._fetch_response(system_instructions, project_tool_images(input), *args, **kwargs)
+        response = await super()._fetch_response(
+            system_instructions, project_tool_images(input), *args, **kwargs
+        )
+        if not kwargs.get("stream", False):
+            # The SDK converts every non-streaming assistant message to
+            # status="completed" and drops finish_reason. Reject incomplete
+            # responses before that conversion can make a truncated report
+            # look final. Streamed agent runs retain their existing SDK path.
+            choices = getattr(response, "choices", None)
+            reason = getattr(choices[0], "finish_reason", None) if choices else None
+            if reason == "length":
+                raise ModelBehaviorError(
+                    "Chat Completions response exceeded max_output_tokens (finish_reason=length)."
+                )
+            if reason == "content_filter":
+                raise ModelBehaviorError(
+                    "Chat Completions response was refused (finish_reason=content_filter)."
+                )
+        return response

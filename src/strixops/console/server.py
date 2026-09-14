@@ -60,6 +60,7 @@ from strixops.console import (
     projects_store,
     prompt_probe,
     proxy_status,
+    report_generation,
     settings_store,
     web_search_settings,
 )
@@ -612,6 +613,51 @@ def run_report(name: str) -> dict:
     if isinstance(record.get("report_synthesized"), bool):
         page["report_synthesized"] = record["report_synthesized"]
     return page
+
+
+def _report_generation_dir(name: str) -> Path:
+    run_dir = state.run_dir(name)
+    if run_dir.is_symlink() or run_dir.resolve().parent != state.runs_root.resolve():
+        raise HTTPException(status_code=400, detail="invalid run directory")
+    return run_dir
+
+
+def _owned_engine_running(name: str) -> bool:
+    # Popen owns a child identity. A saved numeric PID can belong to an unrelated
+    # process after reboot and must not block report retries for terminal runs.
+    return any(
+        info.get("run_name") == name
+        and info.get("popen") is not None
+        and info["popen"].poll() is None
+        for info in state.scans.values()
+    )
+
+
+@app.get("/api/runs/{name}/report/generate")
+def run_report_generation(name: str) -> dict:
+    return {"generation": report_generation.status(_report_generation_dir(name))}
+
+
+@app.post("/api/runs/{name}/report/generate", status_code=202)
+async def generate_run_report(name: str, request: Request) -> dict:
+    _console_origin(request)
+    run_dir = _report_generation_dir(name)
+    summary = _run_summary(run_dir, cache=False)
+    cleanup = summary.get("cleanup") or {}
+    if (
+        summary["status"] not in {"completed", "failed", "interrupted", "cancelled", "aborted", "stopped"}
+        or summary["live"]
+        or cleanup.get("status") == "in_progress"
+        or _owned_engine_running(name)
+    ):
+        raise HTTPException(status_code=409, detail={
+            "code": "scan_active",
+            "message": (
+                "The scan or its finalization is still running. "
+                "Stop it or wait for completion before generating a report."
+            ),
+        })
+    return {"generation": report_generation.start(run_dir)}
 
 
 @app.get("/api/runs/{name}/log")
@@ -2287,6 +2333,7 @@ def _install_discovery_and_queue() -> None:
                 # stop dispatch here; the next Console resumes queue management.
                 stop.set()
                 await asyncio.shield(worker)
+                await report_generation.shutdown()
 
     app.router.lifespan_context = lifespan
 

@@ -508,6 +508,8 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 run_state.write_executive_report()
                 run_state.save()
                 synthesized = None
+                from strixops.report.diagnostics import set_report_synthesis_status
+
                 if not settings.dry_run and model_for is not None:
                     from strixops.report.synthesis import synthesis_enabled, synthesize_executive_report
 
@@ -518,9 +520,17 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                                 lambda: model_for("report-synthesis"),
                             )
                         except Exception as exc:
+                            set_report_synthesis_status(run_state, "failed", "model_error")
                             logger.warning(
                                 "Report synthesis failed (%s); retaining the saved draft", type(exc).__name__
                             )
+                    else:
+                        set_report_synthesis_status(run_state, "skipped", "disabled")
+                else:
+                    set_report_synthesis_status(
+                        run_state, "skipped" if settings.dry_run else "failed",
+                        "dry_run" if settings.dry_run else "model_unavailable",
+                    )
                 if synthesized is not None:
                     artifacts.write_executive_report(run_state.run_dir, synthesized)
                     run_state.run_record["report_synthesized"] = True

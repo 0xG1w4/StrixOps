@@ -259,6 +259,30 @@ export interface ReportPage {
   report_synthesized?: boolean;
 }
 
+export interface ReportGeneration {
+  status: "idle" | "running" | "completed" | "failed";
+  job_id?: string;
+  started_at?: string;
+  completed_at?: string;
+  updated_at?: string;
+  /** Safe user-facing failure details; excludes raw model/provider errors. */
+  error?: string;
+  code?: string;
+  model?: string;
+}
+
+export interface ReportGenerationPage {
+  generation: ReportGeneration;
+}
+
+export function getReportGeneration(name: string): Promise<ReportGenerationPage> {
+  return getJSON(`/api/runs/${encodeURIComponent(name)}/report/generate`);
+}
+
+export function generateReport(name: string): Promise<ReportGenerationPage> {
+  return postJSON(`/api/runs/${encodeURIComponent(name)}/report/generate`, {});
+}
+
 /** Agent-authored assessment records; resolved entries do not prove full coverage. */
 export interface CoverageEntry {
   id?: string;

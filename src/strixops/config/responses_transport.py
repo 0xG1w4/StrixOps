@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from agents.exceptions import ModelBehaviorError
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.retry import ModelRetryAdvice, ModelRetryAdviceRequest
 from openai import APIError
@@ -89,7 +90,21 @@ class PlatformResponsesModel(RouteReasoningMixin, OpenAIResponsesModel):
 
     async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:
         response = await super()._fetch_response(*args, **kwargs)
-        return _RequestIdStream(response) if hasattr(response, "__aiter__") else response
+        if hasattr(response, "__aiter__"):
+            return _RequestIdStream(response)
+        # SDK non-streaming conversion retains output items but drops the
+        # response's own terminal status. An individually completed message
+        # can still belong to an incomplete response, so check the envelope.
+        status = getattr(response, "status", None)
+        if status in {"incomplete", "failed", "cancelled", "in_progress", "queued"}:
+            details = getattr(response, "incomplete_details", None)
+            reason = getattr(details, "reason", None)
+            if reason == "max_output_tokens":
+                raise ModelBehaviorError("Responses output exceeded max_output_tokens.")
+            if reason == "content_filter":
+                raise ModelBehaviorError("Responses output was refused (content_filter).")
+            raise ModelBehaviorError(f"Responses returned incomplete_output (status={status}).")
+        return response
 
     def get_retry_advice(self, request: ModelRetryAdviceRequest) -> ModelRetryAdvice | None:
         # This is the SDK's physical model-request attempt, distinct from the
