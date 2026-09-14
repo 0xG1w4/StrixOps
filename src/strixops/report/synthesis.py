@@ -188,7 +188,11 @@ async def _synthesize_report(
         logger.warning("Report synthesis model unavailable (%s)", type(exc).__name__)
         return None
     config = run_state.run_record.get("scan_config") or {}
-    model_name = str(config.get("model") or getattr(model, "model", "") or "")
+    # A report can use a different assignment from the original scan. Budget
+    # against the actual model, preserving historical scan configuration.
+    model_name = str(
+        getattr(model, "model", "") or config.get("report_model") or config.get("model") or ""
+    )
     count = (
         (lambda text: count_tokens(model_name, text))
         if model_name else (lambda text: len(text.encode("utf-8")))

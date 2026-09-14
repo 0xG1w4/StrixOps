@@ -277,9 +277,9 @@ def model_settings(run_dir: Path, source: SavedReportState) -> EngineSettings:
         profiles = {p.get("id"): p for p in data["profiles"]}
         profile = profiles.get(profile_id) or profiles.get(data["active_profile_id"])
         if profile is None:
-            settings = EngineSettings.from_env()
+            settings = EngineSettings.from_env().for_report()
         else:
-            resolved = settings_store.effective_llm(
+            resolved = settings_store.effective_report_llm(
                 profile, source.run_record["scan_config"].get("scan_type", "web"),
             )
             settings = EngineSettings(
@@ -296,7 +296,7 @@ def model_settings(run_dir: Path, source: SavedReportState) -> EngineSettings:
 async def _synthesize(source: SavedReportState, settings: EngineSettings) -> str | None:
     # Override only the in-memory snapshot: token budgeting must use the model
     # actually selected now, while the original scan configuration stays intact.
-    source.run_record["scan_config"]["model"] = settings.strix_llm
+    source.run_record["scan_config"]["report_model"] = settings.strix_llm
     async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as client:
         model = make_platform_model(settings, http_client=client)
         try:
@@ -320,6 +320,7 @@ def _publish(run_dir: Path, report: str, source: SavedReportState, generation: d
     record["report_synthesized"] = True
     record["report_generated_at"] = _now()
     record["report_generation_id"] = generation["job_id"]
+    record["report_generated_model"] = generation["model"]
     if isinstance(source.run_record.get("report_synthesis"), dict):
         record["report_synthesis"] = source.run_record["report_synthesis"]
     artifacts.write_executive_report(run_dir, report)

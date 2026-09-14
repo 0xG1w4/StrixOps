@@ -10,7 +10,7 @@ relied on deployment-time bridging.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from strixops.config.model_options import validate_model_options
@@ -31,6 +31,9 @@ class EngineSettings:
     dry_run: bool
     llm_api_mode: str = "chat_completions"
     llm_reasoning_effort: str = "default"
+    report_llm: str = ""
+    report_api_mode: str = "auto"
+    report_reasoning_effort: str = "default"
 
     @classmethod
     def from_env(cls) -> EngineSettings:
@@ -44,6 +47,21 @@ class EngineSettings:
             dry_run=_env("STRIXOPS_DRY_RUN").lower() in {"1", "true", "yes", "on"},
             llm_api_mode=_env("LLM_API_MODE").lower() or "chat_completions",
             llm_reasoning_effort=_env("LLM_REASONING_EFFORT").lower() or "default",
+            report_llm=_env("STRIX_REPORT_LLM"),
+            report_api_mode=_env("REPORT_LLM_API_MODE").lower() or "auto",
+            report_reasoning_effort=_env("REPORT_LLM_REASONING_EFFORT").lower() or "default",
+        )
+
+    def for_report(self) -> EngineSettings:
+        """Select the report assignment, or inherit the entire scan route."""
+        if not self.report_llm:
+            return self
+        return replace(
+            self,
+            strix_llm=self.report_llm,
+            llm_api_mode=self.report_api_mode,
+            llm_reasoning_effort=self.report_reasoning_effort,
+            report_llm="",
         )
 
     def validate(self) -> list[str]:
@@ -59,6 +77,12 @@ class EngineSettings:
             problems.extend(
                 validate_model_options(self.strix_llm, self.llm_api_mode, self.llm_reasoning_effort)
             )
+            if self.report_llm:
+                problems.extend(
+                    f"Report model: {error}" for error in validate_model_options(
+                        self.report_llm, self.report_api_mode, self.report_reasoning_effort,
+                    )
+                )
         return problems
 
     @property

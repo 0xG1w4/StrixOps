@@ -230,12 +230,25 @@ class ConsoleBatchController:
         )
         _publish_resources(run_dir, snapshot["resources"], spec)
         source = snapshot.get("sources", {}).get(item["target"])
+        report_model = llm.get("report_llm") or llm.get("strix_llm") or ""
+        report_api = (
+            llm.get("report_api_mode") or "auto"
+            if llm.get("report_llm") else llm.get("llm_api_mode") or ""
+        )
+        report_effort = (
+            llm.get("report_reasoning_effort") or "default"
+            if llm.get("report_llm") else llm.get("llm_reasoning_effort") or ""
+        )
         metadata = {
             "target": item["target"], "scan_type": item["scan_type"], "engine": "ops",
             "dry_run": bool(scan.get("dry_run")), "model": llm.get("strix_llm", ""),
             "llm_api_mode": resolved_api_mode(llm["strix_llm"], llm["llm_api_mode"]) if llm else "",
             "llm_api_mode_requested": llm.get("llm_api_mode", ""),
             "llm_reasoning_effort": llm.get("llm_reasoning_effort", ""),
+            "report_model": report_model,
+            "report_api_mode": resolved_api_mode(report_model, report_api) if report_model else "",
+            "report_api_mode_requested": report_api,
+            "report_reasoning_effort": report_effort,
             "profile_id": scan.get("profile_id") or "", "project_id": scan.get("project_id") or "",
             "project_scope_revision": int(project.get("scope_revision") or 1) if project else None,
             "project_scope_snapshot": projects_store.scope_for_project(project) if project else None,
@@ -262,10 +275,16 @@ class ConsoleBatchController:
             "STRIX_HOST_WORKSPACE_DIR": str(run_dir / "workspace"),
         })
         env.pop("STRIXOPS_DRY_RUN", None)
+        for destination in ("STRIX_REPORT_LLM", "REPORT_LLM_API_MODE", "REPORT_LLM_REASONING_EFFORT"):
+            # Old queue snapshots lack these options. Their report route must
+            # remain the frozen task route rather than ambient Console values.
+            env.pop(destination, None)
         for source_key, destination in (
             ("llm_api_base", "LLM_API_BASE"), ("llm_api_key", "LLM_API_KEY"),
             ("strix_llm", "STRIX_LLM"), ("llm_api_mode", "LLM_API_MODE"),
             ("llm_reasoning_effort", "LLM_REASONING_EFFORT"),
+            ("report_llm", "STRIX_REPORT_LLM"), ("report_api_mode", "REPORT_LLM_API_MODE"),
+            ("report_reasoning_effort", "REPORT_LLM_REASONING_EFFORT"),
         ):
             if source_key in llm:
                 env[destination] = llm[source_key]

@@ -3,7 +3,7 @@
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Menu from "@radix-ui/react-dropdown-menu";
-import { ArrowDownToLine, Check, ChevronDown, Cpu, Eye, EyeOff, FlaskConical, Globe, KeyRound, Loader2, Search, Server, X } from "lucide-react";
+import { ArrowDownToLine, Check, ChevronDown, Cpu, Eye, EyeOff, FileText, FlaskConical, Globe, KeyRound, Loader2, Search, Server, X } from "lucide-react";
 import { fetchModelCatalog, ModelCatalogError, ModelTestError, testModelRoute, type CatalogModel, type ModelApiMode, type ModelConnection, type ModelReasoningEffort } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { API_MODES, REASONING_EFFORTS, allowedModelEfforts, isAstraModel, modelApiWarning, modelOptionError, normalizeModelEndpoint, resolveModelApiMode } from "@/lib/model-options";
@@ -22,22 +22,26 @@ export interface ModelRouteDraft {
   saved_key_available: boolean;
   model_web: string;
   model_internal: string;
+  model_report: string;
   api_mode_web: ModelApiMode;
   api_mode_internal: ModelApiMode;
+  api_mode_report: ModelApiMode;
   reasoning_effort_web: ModelReasoningEffort;
   reasoning_effort_internal: ModelReasoningEffort;
+  reasoning_effort_report: ModelReasoningEffort;
 }
 
 const COPY = {
   "zh-CN": {
-    subtitle: "连接模型服务，为 Web 与内网扫描分配模型。",
+    subtitle: "连接模型服务，为 Web、内网扫描与最终报告分配模型。",
     connection: "连接服务",
     assignment: "选择模型", assignmentHint: "从服务商清单选择，也可以直接输入模型 ID。",
     openrouter: "一个接口，连接多个模型服务商", custom: "OpenAI 兼容网关或本地服务",
     fetch: "拉取模型清单", fetching: "正在拉取…", refresh: "重新拉取",
     fetchHint: "填写 API 地址和密钥后，即可读取可用模型。",
     ready: (count: number) => `已获取 ${count} 个模型`,
-    web: "Web 扫描", internal: "内网扫描", optional: "至少填写一项",
+    web: "Web 扫描", internal: "内网扫描", report: "报告模型（可选）", optional: "Web / 内网至少填写一项",
+    reportHint: "未指定则沿用任务模型及其设置。指定报告模型时，共用此路由的 API 地址和密钥。",
     choose: "选择模型", search: "搜索模型名称或 ID…", noMatches: "没有匹配的模型，试试其他关键词。",
     pickerHint: "先拉取模型清单，也可直接输入模型 ID。",
     modelPlaceholder: "输入模型 ID，或从右侧选择",
@@ -53,7 +57,7 @@ const COPY = {
     reasoningResponses: "OpenAI 原生服务对此模型的工具调用与推理组合要求 Responses。网关是否支持 Chat Completions 请通过模型测试确认；此提示不影响保存。",
     unsupportedEffort: (efforts: string) => `此模型不支持当前推理强度。请选择服务商默认，或 ${efforts}。`,
     test: "测试模型", testing: "测试中…", testSuccess: "工具调用与结果回传通过",
-    testHint: "验证工具调用与结果回传，会产生少量模型用量。",
+    testHint: "Web / 内网模型测试验证工具调用与结果回传，会产生少量模型用量。",
     testErrors: {
       upstream_http: "服务未能完成模型测试，请检查服务状态后重试。",
       upstream_stream_error: "模型服务在串流中回报错误，请根据以下诊断信息查看服务端日志。",
@@ -90,14 +94,15 @@ const COPY = {
     } as Record<string, string>,
   },
   en: {
-    subtitle: "Connect a provider and assign models to Web and internal scans.",
+    subtitle: "Connect a provider and assign models to Web scans, internal scans, and final reports.",
     connection: "Connection",
     assignment: "Choose models", assignmentHint: "Choose from the provider catalog or enter a model ID directly.",
     openrouter: "One API for multiple model providers", custom: "OpenAI-compatible gateways or local services",
     fetch: "Fetch models", fetching: "Fetching…", refresh: "Refresh models",
     fetchHint: "Enter an API base and key to load available models.",
     ready: (count: number) => `${count} models available`,
-    web: "Web scanning", internal: "Internal scanning", optional: "At least one required",
+    web: "Web scanning", internal: "Internal scanning", report: "Report model (optional)", optional: "Web or internal required",
+    reportHint: "When omitted, reports use the task model and its settings. A specified report model shares this route's API base and key.",
     choose: "Choose model", search: "Search model name or ID…", noMatches: "No matching models. Try another search.",
     pickerHint: "Fetch models first, or enter a model ID directly.",
     modelPlaceholder: "Enter or choose a model ID",
@@ -113,7 +118,7 @@ const COPY = {
     reasoningResponses: "OpenAI's native service requires Responses for this model's tools with reasoning. Use Test model to check your gateway's Chat Completions support; this notice does not prevent saving.",
     unsupportedEffort: (efforts: string) => `This model does not support the selected effort. Choose Provider default or ${efforts}.`,
     test: "Test model", testing: "Testing…", testSuccess: "Tool call and returned result verified",
-    testHint: "Verifies a tool call and its returned result. Uses a small amount of model tokens.",
+    testHint: "Web and internal model tests verify a tool call and its returned result. Uses a small amount of model tokens.",
     testErrors: {
       upstream_http: "The provider could not complete the model test. Check its status and try again.",
       upstream_stream_error: "The provider reported a stream error. Check its logs using the diagnostics below.",
@@ -153,12 +158,14 @@ const COPY = {
 
 type Copy = (typeof COPY)["en"];
 
-function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, apiMode, effort, onApiChange, onEffortChange, connection, canTest }: {
+function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, apiMode, effort, onApiChange, onEffortChange, connection, canTest, inheritedHint, purpose = "scan" }: {
   id: string; label: string; Icon: typeof Globe; value: string;
   onChange: (value: string) => void; models: CatalogModel[]; disabled: boolean; copy: Copy;
   apiMode: ModelApiMode; effort: ModelReasoningEffort;
   onApiChange: (value: ModelApiMode) => void; onEffortChange: (value: ModelReasoningEffort) => void;
   connection: ModelConnection; canTest: boolean;
+  inheritedHint?: string;
+  purpose?: "scan" | "report";
 }) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
@@ -167,8 +174,8 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
   const pendingTest = React.useRef<AbortController | null>(null);
   const [testState, setTestState] = React.useState<"idle" | "running" | "success" | "error">("idle");
   const [testMessage, setTestMessage] = React.useState("");
-  const optionError = modelOptionError(value, apiMode, effort);
-  const apiWarning = modelApiWarning(value, apiMode, effort);
+  const optionError = value.trim() ? modelOptionError(value, apiMode, effort) : null;
+  const apiWarning = purpose === "scan" ? modelApiWarning(value, apiMode, effort) : null;
   const hasModel = !!value.trim();
   const apiLabel = (mode: ModelApiMode) => mode === "auto" ? copy.auto : mode === "responses" ? "Responses" : "Chat Completions";
   const effortLabel = (value: ModelReasoningEffort) => value === "default" ? copy.defaultEffort : value === "none" ? copy.noneEffort : value;
@@ -290,20 +297,21 @@ function ModelField({ id, label, Icon, value, onChange, models, disabled, copy, 
         </div>
       </div>
       <p id={`${id}-api-hint`} className={styles.hint}>
-        {!hasModel ? copy.inheritedHint : isAstraModel(value) ? copy.astraHint : copy.apiHint(apiLabel(resolveModelApiMode(value, "auto")))}
+        {!hasModel ? inheritedHint || copy.inheritedHint : isAstraModel(value) ? copy.astraHint : copy.apiHint(apiLabel(resolveModelApiMode(value, "auto")))}
       </p>
+      {hasModel && inheritedHint && <p className={styles.hint}>{inheritedHint}</p>}
       {hasModel && <p id={`${id}-effort-hint`} className={styles.hint}>{copy.effortHint}</p>}
       {hasModel && apiWarning && <p id={`${id}-api-warning`} className={styles.optionWarning} role="status">{copy[apiWarning]}</p>}
       {optionError && <p className={styles.optionError} role="alert">
         {optionError === "unsupportedEffort" ? copy.unsupportedEffort(allowedModelEfforts(value)?.join(" / ") || "") : copy[optionError]}
       </p>}
-      <div className={styles.testRow}>
+      {purpose === "scan" && <div className={styles.testRow}>
         <button type="button" className={styles.testButton} onClick={() => void runTest()}
           aria-label={`${copy.test} · ${label}`} disabled={disabled || !canTest || !hasModel || !!optionError || testState === "running"}>
           {testState === "running" ? <Loader2 size={14} className={styles.spin} /> : <FlaskConical size={14} />}
           {testState === "running" ? copy.testing : copy.test}
         </button>
-      </div>
+      </div>}
       {testMessage && <p className={testState === "error" ? styles.optionError : styles.testSuccess}
         role={testState === "error" ? "alert" : "status"}>{testMessage}</p>}
     </div>
@@ -452,6 +460,14 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
                     apiMode={draft.api_mode_internal} effort={draft.reasoning_effort_internal}
                     onApiChange={(value) => onChange({ ...draft, api_mode_internal: value })}
                     onEffortChange={(value) => onChange({ ...draft, reasoning_effort_internal: value })} connection={connection} canTest={canFetch} />
+                  <div className={styles.reportModel}>
+                    <ModelField id="profile-report-model" label={copy.report} Icon={FileText} value={draft.model_report}
+                      onChange={(value) => onChange({ ...draft, model_report: value })} models={models} disabled={saving || fetching} copy={copy}
+                      apiMode={draft.api_mode_report} effort={draft.reasoning_effort_report}
+                      onApiChange={(value) => onChange({ ...draft, api_mode_report: value })}
+                      onEffortChange={(value) => onChange({ ...draft, reasoning_effort_report: value })}
+                      connection={connection} canTest={canFetch} inheritedHint={copy.reportHint} purpose="report" />
+                  </div>
                 </div>
                 <p className={styles.hint}>{copy.testHint}</p>
               </section>
@@ -463,7 +479,8 @@ export function ModelRouteDialog({ draft, onChange, onClose, onSave, errors, sav
                 <button type="button" className="button-secondary" disabled={saving} onClick={onClose}>{t("common.cancel")}</button>
                 <button type="submit" className="button-primary" disabled={saving || endpointChanged
                   || !!modelOptionError(draft.model_web, draft.api_mode_web, draft.reasoning_effort_web)
-                  || !!modelOptionError(draft.model_internal, draft.api_mode_internal, draft.reasoning_effort_internal)}>
+                  || !!modelOptionError(draft.model_internal, draft.api_mode_internal, draft.reasoning_effort_internal)
+                  || (!!draft.model_report.trim() && !!modelOptionError(draft.model_report, draft.api_mode_report, draft.reasoning_effort_report))}>
                   {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
                   {t(draft.id ? "settings.saveChanges" : "settings.createProfile")}
                 </button>

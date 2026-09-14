@@ -197,15 +197,21 @@ def sanitize_profile(
     model_internal = strip_provider_prefix(
         str(payload.get("model_internal", baseline.get("model_internal")) or "")
     )
+    model_report = strip_provider_prefix(str(payload.get("model_report", baseline.get("model_report")) or ""))
     if not model_web and not model_internal:
         errors.append("at least one model (web or internal) is required")
 
     options = {}
-    for slot, model in (("web", model_web), ("internal", model_internal)):
+    for slot, model in (("web", model_web), ("internal", model_internal), ("report", model_report)):
         api_field = f"api_mode_{slot}"
         effort_field = f"reasoning_effort_{slot}"
-        api_mode = str(payload.get(api_field, baseline.get(api_field, "chat_completions")) or "").strip()
+        default_api = "auto" if slot == "report" else "chat_completions"
+        api_mode = str(payload.get(api_field, baseline.get(api_field, default_api)) or "").strip()
         effort = str(payload.get(effort_field, baseline.get(effort_field, "default")) or "").strip()
+        if slot == "report" and not model:
+            # No report override means the whole task route is inherited.
+            # Disabled report controls must not reject or alter that route.
+            api_mode, effort = "auto", "default"
         options[api_field] = api_mode
         options[effort_field] = effort
         errors.extend(f"{slot}: {error}" for error in validate_model_options(model, api_mode, effort))
@@ -218,6 +224,7 @@ def sanitize_profile(
         "llm_api_key": key,
         "model_web": model_web,
         "model_internal": model_internal,
+        "model_report": model_report,
         **options,
         "created_at": str(existing.get("created_at") or now),
         "updated_at": now,
@@ -228,9 +235,12 @@ def sanitize_profile(
 def public_profile(profile: dict[str, Any]) -> dict[str, Any]:
     """API-safe view: masked key, everything else verbatim."""
     out = dict(profile)
-    for slot in ("web", "internal"):
-        out.setdefault(f"api_mode_{slot}", "chat_completions")
+    out.setdefault("model_report", "")
+    for slot in ("web", "internal", "report"):
+        out.setdefault(f"api_mode_{slot}", "auto" if slot == "report" else "chat_completions")
         out.setdefault(f"reasoning_effort_{slot}", "default")
+    if not str(profile.get("model_report") or "").strip():
+        out.update(model_report="", api_mode_report="auto", reasoning_effort_report="default")
     out["llm_api_key"] = mask_key(str(profile.get("llm_api_key") or ""))
     out["llm_api_key_set"] = bool(profile.get("llm_api_key"))
     return out
@@ -247,4 +257,30 @@ def effective_llm(profile: dict[str, Any], scan_type: str) -> dict[str, str]:
         "strix_llm": str(profile.get(f"model_{slot}") or ""),
         "llm_api_mode": str(profile.get(f"api_mode_{slot}") or "chat_completions"),
         "llm_reasoning_effort": str(profile.get(f"reasoning_effort_{slot}") or "default"),
+    }
+
+
+def report_llm_overrides(profile: dict[str, Any]) -> dict[str, str]:
+    """Optional report-only model and options; an empty model inherits the task route."""
+    model = str(profile.get("model_report") or "").strip()
+    return {
+        "report_llm": model,
+        "report_api_mode": str(profile.get("api_mode_report") or "auto") if model else "auto",
+        "report_reasoning_effort": (
+            str(profile.get("reasoning_effort_report") or "default") if model else "default"
+        ),
+    }
+
+
+def effective_report_llm(profile: dict[str, Any], scan_type: str) -> dict[str, str]:
+    """Resolve report model options together using the profile's shared endpoint/key."""
+    task = effective_llm(profile, scan_type)
+    report = report_llm_overrides(profile)
+    if not report["report_llm"]:
+        return task
+    return {
+        **task,
+        "strix_llm": report["report_llm"],
+        "llm_api_mode": report["report_api_mode"],
+        "llm_reasoning_effort": report["report_reasoning_effort"],
     }

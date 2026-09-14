@@ -105,10 +105,13 @@ const EMPTY_DRAFT: Draft = {
   saved_key_available: false,
   model_web: "",
   model_internal: "",
+  model_report: "",
   api_mode_web: "auto",
   api_mode_internal: "auto",
+  api_mode_report: "auto",
   reasoning_effort_web: "default",
   reasoning_effort_internal: "default",
+  reasoning_effort_report: "default",
 };
 
 function profileDraft(profile: ModelProfile): Partial<Draft> {
@@ -117,10 +120,13 @@ function profileDraft(profile: ModelProfile): Partial<Draft> {
     llm_api_base: profile.llm_api_base, llm_api_key: profile.llm_api_key,
     keyVisible: false, saved_key_available: profile.llm_api_key_set,
     model_web: profile.model_web, model_internal: profile.model_internal,
+    model_report: profile.model_report ?? "",
     api_mode_web: profile.api_mode_web ?? "chat_completions",
     api_mode_internal: profile.api_mode_internal ?? "chat_completions",
+    api_mode_report: profile.api_mode_report ?? "auto",
     reasoning_effort_web: profile.reasoning_effort_web ?? "default",
     reasoning_effort_internal: profile.reasoning_effort_internal ?? "default",
+    reasoning_effort_report: profile.reasoning_effort_report ?? "default",
   };
 }
 
@@ -219,9 +225,11 @@ export default function SettingsPage() {
       else if (!/^https?:\/\//.test(d.llm_api_base.trim())) errors.push(t("settings.validation.scheme"));
     }
     if (!d.model_web.trim() && !d.model_internal.trim()) errors.push(t("settings.validation.model"));
-    for (const slot of ["web", "internal"] as const) {
+    for (const slot of ["web", "internal", "report"] as const) {
+      if (!d[`model_${slot}`].trim()) continue;
       const error = modelOptionError(d[`model_${slot}`], d[`api_mode_${slot}`], d[`reasoning_effort_${slot}`]);
-      if (error) errors.push(`${t(slot === "web" ? "settings.webModel" : "settings.internalModel")}: ${t(`settings.validation.${error}`, { efforts: allowedModelEfforts(d[`model_${slot}`])?.join(" / ") || "" })}`);
+      const label = slot === "web" ? "settings.webModel" : slot === "internal" ? "settings.internalModel" : "settings.reportModel";
+      if (error) errors.push(`${t(label)}: ${t(`settings.validation.${error}`, { efforts: allowedModelEfforts(d[`model_${slot}`])?.join(" / ") || "" })}`);
     }
     return errors;
   };
@@ -239,10 +247,13 @@ export default function SettingsPage() {
       llm_api_key: draft.llm_api_key.trim(),
       model_web: draft.model_web.trim().replace(/^openrouter\//, ""),
       model_internal: draft.model_internal.trim().replace(/^openrouter\//, ""),
+      model_report: draft.model_report.trim().replace(/^openrouter\//, ""),
       api_mode_web: draft.api_mode_web,
       api_mode_internal: draft.api_mode_internal,
+      api_mode_report: draft.model_report.trim() ? draft.api_mode_report : "auto",
       reasoning_effort_web: draft.reasoning_effort_web,
       reasoning_effort_internal: draft.reasoning_effort_internal,
+      reasoning_effort_report: draft.model_report.trim() ? draft.reasoning_effort_report : "default",
     };
     try {
       if (draft.id) {
@@ -378,11 +389,14 @@ export default function SettingsPage() {
                       {p.llm_api_key || t("settings.notSet")}
                     </span>
                   </div>
-                  <div className="mt-2.5 grid gap-2 text-xs md:grid-cols-3">
+                  <div className="mt-2.5 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
                     <ModelCell label={t("settings.webModel")} value={p.model_web}
                       apiMode={p.api_mode_web ?? "chat_completions"} effort={p.reasoning_effort_web ?? "default"} />
                     <ModelCell label={t("settings.internalModel")} value={p.model_internal}
                       apiMode={p.api_mode_internal ?? "chat_completions"} effort={p.reasoning_effort_internal ?? "default"} />
+                    <ModelCell label={t("settings.reportModel")} value={p.model_report ?? ""}
+                      apiMode={p.api_mode_report ?? "auto"} effort={p.reasoning_effort_report ?? "default"}
+                      emptyHint={t("settings.reportModelInherited")} />
                     <ModelCell label={t("settings.apiBaseShort")} value={p.llm_api_base} />
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -451,16 +465,16 @@ function InfoTile({ label, value, mono }: { label: string; value: string; mono?:
   );
 }
 
-function ModelCell({ label, value, apiMode, effort }: {
-  label: string; value: string; apiMode?: ModelApiMode; effort?: ModelReasoningEffort;
+function ModelCell({ label, value, apiMode, effort, emptyHint }: {
+  label: string; value: string; apiMode?: ModelApiMode; effort?: ModelReasoningEffort; emptyHint?: string;
 }) {
   const { t } = useI18n();
   const api = apiMode ? resolveModelApiMode(value, apiMode) === "responses" ? "Responses" : "Chat Completions" : "";
   return (
     <div className="min-w-0">
       <div className="micro-label">{label}</div>
-      <div className="mono mt-0.5 truncate text-fg" title={value || "—"}>
-        {value || "—"}
+      <div className={`${value ? "mono " : ""}mt-0.5 truncate text-fg`} title={value || emptyHint || "—"}>
+        {value || emptyHint || "—"}
       </div>
       {value && apiMode && <div className="mt-1 text-[11px] leading-relaxed text-fg-muted">
         {apiMode === "auto" ? t("settings.autoApi", { api }) : api}

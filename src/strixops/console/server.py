@@ -1094,10 +1094,13 @@ class ProfileBody(BaseModel):
     llm_api_key: str = ""
     model_web: str = ""
     model_internal: str = ""
+    model_report: str = ""
     api_mode_web: str = "chat_completions"
     api_mode_internal: str = "chat_completions"
+    api_mode_report: str = "auto"
     reasoning_effort_web: str = "default"
     reasoning_effort_internal: str = "default"
+    reasoning_effort_report: str = "default"
     copy_from_profile_id: str | None = None
 
 
@@ -1361,7 +1364,10 @@ def _resolve_llm_env(body: ScanBody) -> dict[str, str]:
         active_id = data["active_profile_id"]
         profile = _find_profile(data, active_id) if active_id else None
     if profile is not None:
-        return settings_store.effective_llm(profile, body.scan_type)
+        return {
+            **settings_store.effective_llm(profile, body.scan_type),
+            **settings_store.report_llm_overrides(profile),
+        }
     if body.llm_api_base and body.llm_api_key and body.strix_llm:
         return {
             "llm_api_base": body.llm_api_base,
@@ -1374,6 +1380,17 @@ def _resolve_llm_env(body: ScanBody) -> dict[str, str]:
         status_code=400,
         detail="no model profile — create one in Settings (or pass llm fields inline)",
     )
+
+
+def _validate_llm_env(llm: dict[str, str]) -> None:
+    errors = validate_model_options(llm["strix_llm"], llm["llm_api_mode"], llm["llm_reasoning_effort"])
+    if llm.get("report_llm"):
+        errors.extend(f"report: {error}" for error in validate_model_options(
+            llm["report_llm"], llm.get("report_api_mode") or "auto",
+            llm.get("report_reasoning_effort") or "default",
+        ))
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
 
 
 def _requested_targets(body: ScanBody) -> list[str]:
@@ -1462,11 +1479,16 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
     llm_env: dict[str, str] = {}
     if not body.dry_run:
         llm_env = _resolve_llm_env(body)
-        errors = validate_model_options(
-            llm_env["strix_llm"], llm_env["llm_api_mode"], llm_env["llm_reasoning_effort"]
-        )
-        if errors:
-            raise HTTPException(status_code=400, detail="; ".join(errors))
+        _validate_llm_env(llm_env)
+    report_model = llm_env.get("report_llm") or llm_env.get("strix_llm") or ""
+    report_api = (
+        llm_env.get("report_api_mode") or "auto"
+        if llm_env.get("report_llm") else llm_env.get("llm_api_mode") or ""
+    )
+    report_effort = (
+        llm_env.get("report_reasoning_effort") or "default"
+        if llm_env.get("report_llm") else llm_env.get("llm_reasoning_effort") or ""
+    )
     sources = _fofa_sources(body.source_draft_id, targets)
     run_name = generate_run_name(primary_target, body.scan_type)
     if (state.runs_root / run_name).exists():  # ensure unique
@@ -1500,6 +1522,10 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
                 else "",
                 "llm_api_mode_requested": llm_env.get("llm_api_mode") or "",
                 "llm_reasoning_effort": llm_env.get("llm_reasoning_effort") or "",
+                "report_model": report_model,
+                "report_api_mode": resolved_api_mode(report_model, report_api) if report_model else "",
+                "report_api_mode_requested": report_api,
+                "report_reasoning_effort": report_effort,
                 "profile_id": body.profile_id or "",
                 "project_id": body.project_id or "",
                 "project_scope_revision": int(project.get("scope_revision") or 1)
@@ -1544,6 +1570,15 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
 
     env.update(web_search_settings.launch_environment())
     env.pop("STRIXOPS_DRY_RUN", None)
+    for source_key, destination in (
+        ("report_llm", "STRIX_REPORT_LLM"), ("report_api_mode", "REPORT_LLM_API_MODE"),
+        ("report_reasoning_effort", "REPORT_LLM_REASONING_EFFORT"),
+    ):
+        # Inline launches and legacy profiles must inherit their selected task
+        # model, never a report model left in the Console process environment.
+        env.pop(destination, None)
+        if source_key in llm_env:
+            env[destination] = llm_env[source_key]
     if llm_env:
         env["LLM_API_BASE"] = llm_env["llm_api_base"]
         env["LLM_API_KEY"] = llm_env["llm_api_key"]
@@ -1658,9 +1693,7 @@ def _create_scan_batch(body: ScanBody) -> dict:
     _validated_launch_project(body)
     llm = {} if body.dry_run else _resolve_llm_env(body)
     if llm:
-        errors = validate_model_options(llm["strix_llm"], llm["llm_api_mode"], llm["llm_reasoning_effort"])
-        if errors:
-            raise HTTPException(status_code=400, detail="; ".join(errors))
+        _validate_llm_env(llm)
     sources = _fofa_sources(body.source_draft_id, targets)
     try:
         batch = _queue_controller().create(

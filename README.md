@@ -305,6 +305,14 @@ New Console profiles default to Auto. CLI requests without `LLM_API_MODE` retain
 Chat Completions for backward compatibility. CLI environment configuration and
 saved Console profiles are separate: configure a saved profile for Console launches.
 
+Each profile also has an optional **Report model**, with its own API type and
+reasoning effort, sharing that profile's API base and key. Leaving it empty
+inherits the task's model, API type, and effort. Automatic reports use the
+configuration captured when the task or batch was submitted. Manual report
+generation uses the original profile's current report assignment, falling back
+to the active profile when the original is unavailable. Report input budgets
+use the actual report model; the original scan model remains in the run history.
+
 ## Run your first assessment
 
 | Step | What to provide or inspect |
@@ -550,6 +558,9 @@ version numbers.
 | `STRIX_LLM` | Required for CLI assessments; route's model ID |
 | `LLM_API_MODE` | `chat_completions`; also accepts `auto` and `responses` |
 | `LLM_REASONING_EFFORT` | `default`; selectable values include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, subject to model support |
+| `STRIX_REPORT_LLM` | Optional report model ID; empty inherits the entire scan model route |
+| `REPORT_LLM_API_MODE` | `auto`; applies only when `STRIX_REPORT_LLM` is set |
+| `REPORT_LLM_REASONING_EFFORT` | `default`; applies only when `STRIX_REPORT_LLM` is set |
 | `STRIX_RUNS` | `<current working directory>/strix_runs`; prefer an absolute path; Console `--runs-root` takes precedence |
 | `STRIXOPS_CONSOLE_CONFIG` | `~/.strixops/console.json` |
 | `STRIXOPS_PROJECTS_FILE` | `~/.strixops/projects.json` |

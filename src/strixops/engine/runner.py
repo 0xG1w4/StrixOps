@@ -88,10 +88,18 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     if not settings.dry_run:
         from strixops.config.model_options import API_MODES, resolved_api_mode
 
+        report_settings = settings.for_report()
         scan_config["llm_api_mode_requested"] = settings.llm_api_mode
         scan_config["llm_reasoning_effort"] = settings.llm_reasoning_effort
         if settings.llm_api_mode in API_MODES:
             scan_config["llm_api_mode"] = resolved_api_mode(settings.strix_llm, settings.llm_api_mode)
+        scan_config["report_model"] = report_settings.strix_llm
+        scan_config["report_api_mode_requested"] = report_settings.llm_api_mode
+        scan_config["report_reasoning_effort"] = report_settings.llm_reasoning_effort
+        if report_settings.llm_api_mode in API_MODES:
+            scan_config["report_api_mode"] = resolved_api_mode(
+                report_settings.strix_llm, report_settings.llm_api_mode,
+            )
     events.run_configured(scan_config)
     _stdout_log(f"StrixOps run {run_name} starting (scan_type={spec.scan_type}, target={spec.target})")
 
@@ -100,6 +108,8 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     run_state.set_scan_config(scan_config)
 
     gateway = None
+    report_model = None
+    report_http_client = None
     sandbox = None
     hints_task: asyncio.Task | None = None
     hints_poller = None
@@ -276,6 +286,16 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             platform_model = _tracked(make_platform_model(settings))
 
             def model_for(agent_name: str):
+                nonlocal report_model, report_http_client
+                if agent_name == "report-synthesis" and settings.report_llm:
+                    if report_model is None:
+                        from openai import DefaultAsyncHttpxClient
+
+                        report_http_client = DefaultAsyncHttpxClient()
+                        report_model = _tracked(make_platform_model(
+                            settings.for_report(), http_client=report_http_client,
+                        ))
+                    return report_model
                 return platform_model
 
             _stdout_log("Bringing up sandbox container…")
@@ -534,6 +554,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 if synthesized is not None:
                     artifacts.write_executive_report(run_state.run_dir, synthesized)
                     run_state.run_record["report_synthesized"] = True
+                    run_state.run_record["report_generated_model"] = scan_config.get("report_model")
                     run_state.events.emit(
                         event_type="report.synthesized",
                         payload={"mode": "llm", "chars": len(synthesized)},
@@ -543,6 +564,21 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                     events.emit(event_type="report.draft_saved", payload={"mode": "draft"})
             except Exception as exc:
                 cleanup_failed("report", exc)
+            finally:
+                if report_model is not None:
+                    try:
+                        await report_model.close()
+                    except Exception:
+                        # Closing a dedicated report client cannot invalidate
+                        # an already saved deliverable or the scan's outcome.
+                        logger.warning("Could not close report model client")
+                if report_http_client is not None:
+                    try:
+                        # HTTP SDK models inherit a no-op Model.close(). Own
+                        # their transport explicitly, including factory errors.
+                        await report_http_client.aclose()
+                    except Exception:
+                        logger.warning("Could not close report HTTP client")
             try:
                 run_state.save()
             except Exception as exc:

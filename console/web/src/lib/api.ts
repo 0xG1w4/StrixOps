@@ -474,10 +474,13 @@ export interface ModelProfile {
   llm_api_key_set: boolean;
   model_web: string;
   model_internal: string;
+  model_report?: string;
   api_mode_web?: ModelApiMode;
   api_mode_internal?: ModelApiMode;
+  api_mode_report?: ModelApiMode;
   reasoning_effort_web?: ModelReasoningEffort;
   reasoning_effort_internal?: ModelReasoningEffort;
+  reasoning_effort_report?: ModelReasoningEffort;
   created_at: string;
   updated_at: string;
 }
@@ -496,10 +499,13 @@ export interface ProfileWrite {
   llm_api_key?: string;
   model_web?: string;
   model_internal?: string;
+  model_report?: string;
   api_mode_web?: ModelApiMode;
   api_mode_internal?: ModelApiMode;
+  api_mode_report?: ModelApiMode;
   reasoning_effort_web?: ModelReasoningEffort;
   reasoning_effort_internal?: ModelReasoningEffort;
+  reasoning_effort_report?: ModelReasoningEffort;
 }
 
 /** Creating a copy resolves its saved key on the server for the same provider and endpoint. */
