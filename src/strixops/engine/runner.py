@@ -30,12 +30,14 @@ from strixops.engine.loop import DEFAULT_MAX_TURNS, run_agent_loop
 from strixops.engine.scanconfig import EngineContext, EngineServices, ScanSpec, build_root_task
 from strixops.engine.sessions import open_agent_session
 from strixops.engine.spawn import make_spawn_child
+from strixops.platform import artifacts
 from strixops.platform.events import EventWriter
 from strixops.platform.runname import create_run_dir, generate_run_name, resolve_runs_root
 from strixops.report.state import RunState
 from strixops.tools.output_store import WORKSPACE_SPILL_DIR, configure_spill_writer
 
 MAX_TURNS = DEFAULT_MAX_TURNS
+FINALIZATION_HEARTBEAT_SECONDS = 30.0
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -401,8 +403,35 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             with contextlib.suppress(Exception):
                 run_state.mark_failed(str(reason))
 
+        run_state.run_record["cleanup"] = {"status": "in_progress", "errors": cleanup_errors}
+
+        def finalization_phase(phase: str) -> None:
+            run_state.run_record["cleanup"]["phase"] = phase
+            try:
+                artifacts.write_run_record(run_dir, run_state.run_record)
+            except Exception as exc:
+                cleanup_failed("state", exc)
+            events.emit(event_type="run.finalizing", payload={"phase": phase})
+            with contextlib.suppress(OSError):
+                _stdout_log(f"Finalizing scan: {phase}")
+
+        async def finalization_heartbeat() -> None:
+            while True:
+                await asyncio.sleep(FINALIZATION_HEARTBEAT_SECONDS)
+                events.emit(
+                    event_type="run.finalizing",
+                    payload={"phase": run_state.run_record["cleanup"].get("phase"), "heartbeat": True},
+                )
+
         async def finalize() -> None:
-            run_state.run_record["cleanup"] = {"status": "in_progress", "errors": cleanup_errors}
+            finalization_phase("agents")
+            # Also cover alternate loop implementations that return final fields
+            # directly. Keep a readable report even if the first cleanup stalls.
+            try:
+                run_state.write_executive_report()
+                run_state.run_record["report_synthesized"] = False
+            except Exception as exc:
+                cleanup_failed("report", exc)
             if hints_poller is not None:
                 try:
                     hints_poller.stop()
@@ -425,6 +454,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
 
             writers_stopped = sandbox is None
             if sandbox is not None:
+                finalization_phase("sandbox_quiesce")
                 try:
                     # Legacy test doubles may lack quiesce; every real bundle
                     # implements the verified Docker stop boundary.
@@ -442,6 +472,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                         run_state.run_record["cleanup"]["quiescence"] = dict(sandbox.quiescence)
 
             if agents_settled and writers_stopped:
+                finalization_phase("evidence")
                 try:
                     await collect_run_evidence()
                     if run_state.run_record.get("evidence", {}).get("status") == "incomplete":
@@ -471,24 +502,28 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                     ],
                 }
             try:
-                # A failed/interrupted scan may still have a useful final draft.
-                # Live runs compose the deliverable from the full findings
-                # corpus via a dedicated synthesis call (the platform's report
-                # worker, ported); anything else — dry run, model failure,
-                # timeout — falls back to the deterministic composer so the
-                # run never ends without a report file.
+                finalization_phase("report")
+                # Refresh the saved report with the evidence manifest BEFORE
+                # asking a model to enrich it. Optional synthesis must not gate
+                # access to the root's report or discard it on failure.
+                run_state.write_executive_report()
+                run_state.run_record["report_synthesized"] = False
+                run_state.save()
                 synthesized = None
                 if not settings.dry_run and model_for is not None:
                     from strixops.report.synthesis import synthesis_enabled, synthesize_executive_report
 
                     if synthesis_enabled():
-                        synthesized = await synthesize_executive_report(
-                            run_state,
-                            lambda: model_for("report-synthesis"),
-                        )
+                        try:
+                            synthesized = await synthesize_executive_report(
+                                run_state,
+                                lambda: model_for("report-synthesis"),
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Report synthesis failed (%s); retaining the saved report", type(exc).__name__
+                            )
                 if synthesized is not None:
-                    from strixops.platform import artifacts
-
                     artifacts.write_executive_report(run_state.run_dir, synthesized)
                     run_state.run_record["report_synthesized"] = True
                     run_state.events.emit(
@@ -496,9 +531,8 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                         payload={"mode": "llm", "chars": len(synthesized)},
                         agent_name="report synthesis",
                     )
-                else:
-                    run_state.write_executive_report()
-                    run_state.run_record["report_synthesized"] = False
+                elif (run_dir / "penetration_test_report.md").is_file():
+                    events.emit(event_type="report.synthesized", payload={"mode": "saved"})
             except Exception as exc:
                 cleanup_failed("report", exc)
             try:
@@ -513,6 +547,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                         cleanup_failed("session", exc)
             configure_spill_writer(None)
             if sandbox is not None:
+                finalization_phase("sandbox_delete")
                 try:
                     if run_state.run_record.get("status") == "failed":
                         await sandbox.teardown(diagnostics_dir=run_dir / "diagnostics")
@@ -524,6 +559,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                     if isinstance(getattr(sandbox, "cleanup", None), dict):
                         run_state.run_record["cleanup"]["sandbox"] = dict(sandbox.cleanup)
             if gateway is not None:
+                finalization_phase("gateway")
                 try:
                     await asyncio.to_thread(gateway.stop)
                 except Exception as exc:
@@ -537,6 +573,8 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 )
             except BaseException as exc:
                 cleanup_failed("agent_status", exc)
+            run_state.run_record["cleanup"]["status"] = "failed" if cleanup_errors else "complete"
+            finalization_phase("complete")
             run_state.run_record["cleanup"]["status"] = "failed" if cleanup_errors else "complete"
             try:
                 run_state.save()
@@ -568,7 +606,18 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 except Exception as exc:
                     cleanup_failed("queue", exc)
 
-        cleanup_task = asyncio.create_task(finalize(), name="strixops-run-finalize")
+        async def finalize_with_heartbeat() -> None:
+            heartbeat_task = asyncio.create_task(
+                finalization_heartbeat(), name="strixops-finalization-heartbeat"
+            )
+            try:
+                await finalize()
+            finally:
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
+
+        cleanup_task = asyncio.create_task(finalize_with_heartbeat(), name="strixops-run-finalize")
         while True:
             try:
                 await asyncio.shield(cleanup_task)

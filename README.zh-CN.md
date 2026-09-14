@@ -456,6 +456,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 | `STRIX_OPERATOR_HINTS_DIR` | 可选的提示目录；控制台启动时会提供本次运行专属的路径 |
 | `STRIXOPS_REPORT_LANG` | `zh-CN`；CLI `--report-language` 优先 |
 | `STRIXOPS_REPORT_SYNTHESIS` | 默认启用；设为 `0` 可禁用模型辅助的最终报告合成 |
+| `STRIXOPS_REPORT_SYNTHESIS_TIMEOUT` | 模型辅助报告的总等待秒数，两次尝试共用；默认 `900` |
 | `PERPLEXITY_API_KEY` | 可选的网络搜索密钥；可在控制台“设置 → 集成”中保存 |
 | `PERPLEXITY_ENABLED` | 搜索开关；默认 true，仍需密钥才能使用 |
 | `PERPLEXITY_MODEL` | `sonar`（默认）或 `sonar-reasoning-pro` |

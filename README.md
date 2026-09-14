@@ -559,6 +559,7 @@ version numbers.
 | `STRIX_OPERATOR_HINTS_DIR` | Optional hint directory; Console launches provide a run-owned path |
 | `STRIXOPS_REPORT_LANG` | `zh-CN`; CLI `--report-language` takes precedence |
 | `STRIXOPS_REPORT_SYNTHESIS` | Enabled; `0` disables model-assisted final report synthesis |
+| `STRIXOPS_REPORT_SYNTHESIS_TIMEOUT` | Total model-assisted report budget in seconds, shared across both attempts; default `900` |
 | `PERPLEXITY_API_KEY` | Optional web-search key; can be saved in Console Settings → Integrations |
 | `PERPLEXITY_ENABLED` | Optional search switch; defaults to true, but a key is still required |
 | `PERPLEXITY_MODEL` | `sonar` (default) or `sonar-reasoning-pro` |

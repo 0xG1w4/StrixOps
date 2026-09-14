@@ -10,7 +10,7 @@ The deterministic composer in :mod:`strixops.report.state` stays as the
 fallback for dry runs, model failures and timeouts — a run never ends without
 a report file. The synthesis call mirrors ``report.dedupe``: one
 ``model.get_response`` through the run's tracked model route, with a
-per-attempt timeout and a findings-only retry when the full corpus fails.
+shared total timeout and a findings-only retry when the full corpus fails.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Callable
@@ -449,13 +450,14 @@ def build_report_source(
     return source
 
 
-def _attempt_timeout() -> float:
+def _synthesis_timeout() -> float:
+    """Total model-call budget, including a possible findings-only retry."""
     raw = os.environ.get("STRIXOPS_REPORT_SYNTHESIS_TIMEOUT") or ""
     try:
         value = float(raw)
     except ValueError:
         return _DEFAULT_TIMEOUT
-    return value if value > 0 else _DEFAULT_TIMEOUT
+    return value if math.isfinite(value) and value > 0 else _DEFAULT_TIMEOUT
 
 
 async def synthesize_executive_report(
@@ -467,18 +469,23 @@ async def synthesize_executive_report(
     Returns the report markdown, or ``None`` when synthesis is unavailable —
     the caller then falls back to the deterministic composer. Two attempts:
     full source, then the trimmed findings-only source (the old worker's
-    fallback ladder, compressed).
+    fallback ladder, compressed), sharing one total time budget.
     """
+    loop = asyncio.get_running_loop()
+    timeout = _synthesis_timeout()
+    deadline = loop.time() + timeout
     language = run_state.report_language()
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     system = synthesis_system_prompt(
         language=language, format_guidance=report_format_guidance(run_state.run_dir)
     )
     model = resolve_model()
-    timeout = _attempt_timeout()
 
     full_source = build_report_source(run_state, generated_at=generated_at)
     for attempt, trimmed in enumerate((False, True), start=1):
+        if loop.time() >= deadline:
+            logger.warning("report synthesis exhausted its %.0fs total budget", timeout)
+            break
         if trimmed:
             source = build_report_source(run_state, generated_at=generated_at, trimmed=True)
             if len(source) >= len(full_source):
@@ -487,6 +494,14 @@ async def synthesize_executive_report(
                 break
         else:
             source = full_source
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            logger.warning("report synthesis exhausted its %.0fs total budget", timeout)
+            break
+        logger.info(
+            "report synthesis attempt %d starting with %.1fs remaining in total budget",
+            attempt, remaining,
+        )
         try:
             response = await asyncio.wait_for(
                 model.get_response(
@@ -496,7 +511,7 @@ async def synthesize_executive_report(
                     model_settings=ModelSettings(
                         retry=MODEL_RETRY,
                         include_usage=True,
-                        extra_args={"timeout": timeout} if timeout > 0 else None,
+                        extra_args={"timeout": remaining},
                     ),
                     tools=[],
                     output_schema=None,
@@ -506,10 +521,10 @@ async def synthesize_executive_report(
                     conversation_id=None,
                     prompt=None,
                 ),
-                timeout=timeout + 60,
+                timeout=remaining,
             )
         except TimeoutError:
-            logger.warning("report synthesis attempt %d timed out after %.0fs", attempt, timeout)
+            logger.warning("report synthesis attempt %d timed out", attempt)
             continue
         except Exception:
             logger.exception("report synthesis attempt %d failed", attempt)

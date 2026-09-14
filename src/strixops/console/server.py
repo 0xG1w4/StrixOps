@@ -278,6 +278,16 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
     for key in ("evidence", "workspace", "sandbox_runtime"):
         if isinstance(record.get(key), dict):
             summary[key] = record[key]
+    cleanup = record.get("cleanup")
+    if (
+        isinstance(cleanup, dict) and isinstance(cleanup.get("status"), str)
+        and cleanup["status"] in {"in_progress", "complete", "failed"}
+    ):
+        summary["cleanup"] = {"status": cleanup["status"]}
+        if isinstance(cleanup.get("phase"), str) and cleanup["phase"] in {
+            "agents", "sandbox_quiesce", "evidence", "report", "sandbox_delete", "gateway", "complete",
+        }:
+            summary["cleanup"]["phase"] = cleanup["phase"]
     return summary
 
 

@@ -4,7 +4,8 @@
    ReportPanel — renders the run's penetration_test_report.md.
 
    Markdown via react-markdown + remark-gfm inside .prose-report. While the
-   run is live the panel polls for the report and stops once it exists.
+   run is live or finalizing the panel refreshes any saved report so the
+   synthesized report can replace the initial saved version.
    ========================================================================= */
 
 import * as React from "react";
@@ -18,6 +19,14 @@ import type { ReportPage, RunDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
 const REPORT_POLL_MS = 5000;
+const FINALIZATION_PHASE_KEYS: Record<string, string> = {
+  agents: "report.finalizing.agents",
+  sandbox_quiesce: "report.finalizing.sandboxQuiesce",
+  evidence: "report.finalizing.evidence",
+  report: "report.finalizing.report",
+  sandbox_delete: "report.finalizing.sandboxDelete",
+  gateway: "report.finalizing.gateway",
+};
 
 type LoadOutcome = "ready" | "missing" | "error" | "stale";
 
@@ -43,8 +52,10 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
   const [markdown, setMarkdown] = React.useState("");
   const live = Boolean(run?.live);
   const reporting = (run?.status || "").toLowerCase() === "reporting";
-  const pending = live || reporting;
+  const finalizing = run?.cleanup?.status === "in_progress";
+  const pending = live || reporting || finalizing;
   const requestIdRef = React.useRef(0);
+  const hasReportRef = React.useRef(false);
   // Task polling rerenders this panel. Stable renderer identities preserve the
   // table/code DOM, keyboard focus and horizontal reading position.
   const markdownComponents = React.useMemo<Components>(() => ({
@@ -67,6 +78,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
     try {
       const page = await getJSON<ReportPage>(`/api/runs/${encodeURIComponent(name)}/report`);
       if (requestId !== requestIdRef.current) return "stale";
+      hasReportRef.current = true;
       setMarkdown(page.markdown ?? "");
       setError("");
       setPhase("ready");
@@ -74,28 +86,32 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
     } catch (e) {
       if (requestId !== requestIdRef.current) return "stale";
       const message = e instanceof Error ? e.message : String(e);
+      setError(message);
       if (message.startsWith("404")) {
-        setPhase("missing");
+        if (!hasReportRef.current) setPhase("missing");
         return "missing";
       }
-      setError(message);
-      setPhase("error");
+      if (!hasReportRef.current) setPhase("error");
       return "error";
     }
   }, [name]);
 
   React.useEffect(() => {
-    /* While the run is live the report cannot exist yet (it is written at
-     * scan end) — skip fetching entirely so visiting the tab early does not
-     * hammer the API with guaranteed 404s. The effect re-runs the moment
-     * the cockpit poll flips `live` off. */
+    // Changing runs clears the document; lifecycle transitions and temporary
+    // refresh failures must keep the current run's saved report readable.
+    hasReportRef.current = false;
+    setMarkdown("");
+    setError("");
+    setPhase("loading");
+  }, [name]);
+
+  // Refresh immediately when the process exits, even if cleanup keeps the
+  // run pending, so the final file is not missed between polling intervals.
+  React.useEffect(() => {
     let disposed = false;
     let retryTimer: number | undefined;
 
     requestIdRef.current += 1;
-    setMarkdown("");
-    setError("");
-    setPhase(live ? "missing" : "loading");
 
     const scheduleRetry = () => {
       retryTimer = window.setTimeout(() => {
@@ -111,23 +127,30 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
     const attempt = async () => {
       const outcome = await load();
       if (disposed) return;
-      if (outcome === "error" || (outcome === "missing" && reporting)) {
+      if (pending || outcome === "error") {
         scheduleRetry();
       }
     };
 
-    if (!live) void attempt();
+    void attempt();
 
     return () => {
       disposed = true;
       requestIdRef.current += 1;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [load, live, name, reporting]);
+  }, [load, live, pending]);
+
+  const finalizationNotice = finalizing ? (
+    <p className="text-sm text-fg-muted" role="status">
+      {t(FINALIZATION_PHASE_KEYS[run?.cleanup?.phase ?? ""] ?? "report.finalizing")}
+    </p>
+  ) : null;
 
   if (phase === "loading") {
     return (
       <div className="space-y-3 p-4">
+        {finalizationNotice}
         <div className="skeleton-line w-2/5 h-5" />
         <div className="skeleton-line w-full" />
         <div className="skeleton-line w-5/6" />
@@ -141,7 +164,8 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
 
   if (phase === "missing") {
     return (
-      <div className="p-4">
+      <div className="space-y-3 p-4">
+        {finalizationNotice}
         <EmptyState
           title={t(pending ? "report.pending" : "report.empty")}
           hint={
@@ -168,6 +192,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
   if (phase === "error") {
     return (
       <div className="space-y-3 p-4">
+        {finalizationNotice}
         <div className="alert-error" role="alert">
           {t("report.error", { error })}
         </div>
@@ -190,6 +215,8 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
 
   return (
     <div className="space-y-3 p-4">
+      {finalizationNotice}
+      {error && <p className="text-sm text-fg-muted" role="status">{t("report.refreshError")}</p>}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="micro-label">
           <FileText className="h-3.5 w-3.5" />

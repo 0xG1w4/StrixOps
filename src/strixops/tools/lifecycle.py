@@ -117,13 +117,16 @@ def finish_scan(
             business_impact=business_impact.strip(),
             limitations=limitations.strip(),
         )
+        # Preserve the root's complete narrative before any SDK shutdown or
+        # optional model synthesis can wait. Finalization enriches it later.
+        run_state.write_executive_report()
     except BaseException:
         if coordinator is not None:
             coordinator.abort_finish(ctx.context.agent_id)
         raise
     payload = {
         "success": True,
-        "message": "Scan complete. Executive report published.",
+        "message": "Testing complete. Report saved; finalizing evidence and executive report.",
         "scan_completed": True,
     }
     ctx.context.lifecycle_completion = LifecycleCompletion("finish_scan", payload)

@@ -105,6 +105,8 @@ export interface RunSummary {
   /** Whether the target still matches the project's current launch scope. */
   scope_match?: boolean;
   status: string;
+  /** Engine finalization state; present while collecting evidence and reporting. */
+  cleanup?: { status: string; phase?: string };
   live: boolean;
   stale: boolean;
   start_time: string;
