@@ -1,38 +1,39 @@
 """LLM synthesis of the client-facing executive report.
 
 Ports the reference platform's dedicated report worker: when a run finishes,
-the full findings corpus (vulnerability reports, internal findings, campaign
-ledger, coverage records) plus the root agent's finish_scan draft narrative
-are sent to a fresh model call under the platform's editorial rules, and the
-model composes the deliverable markdown in the platform report format.
+complete finding fields, referenced evidence and supporting run context are
+selected within the model's input budget and sent to a fresh model call. The
+model composes the deliverable Markdown under the platform's editorial rules.
 
 The deterministic composer in :mod:`strixops.report.state` preserves a labeled
 draft for dry runs, model failures and timeouts. Only successful model synthesis
 produces the final report. The synthesis call mirrors ``report.dedupe``: one
 ``model.get_response`` through the run's tracked model route, with a
-shared total timeout and a findings-only retry when the full corpus fails.
+shared total timeout and a retry without supplemental context.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from typing import TYPE_CHECKING
 
 from agents import ModelSettings, ModelTracing
 
+from strixops.config.context import ContextSettings
+from strixops.engine.context_budget import context_window, count_tokens, output_limit
 from strixops.engine.resilience import MODEL_RETRY
 from strixops.engine.targets import normalize_targets
+from strixops.platform import artifacts
 from strixops.report.dedupe import _extract_text
 from strixops.report.formatting import format_report_markdown, report_format_guidance
+from strixops.report.prompt import synthesis_system_prompt as synthesis_system_prompt
+from strixops.report.source import build_report_source as build_report_source
 from strixops.report.state import RunState
 
 if TYPE_CHECKING:
@@ -40,17 +41,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Per-string cap for corpus fields — keeps one runaway evidence blob from
-# eating the whole context window. The old worker capped nothing because its
-# source files were pre-curated; here the reports are model-authored.
-_FIELD_CHAR_LIMIT = 6000
-# Total corpus budget for the full attempt (characters, roughly 50k tokens).
-_SOURCE_CHAR_BUDGET = 200_000
-# Attachment metadata must not crowd out the findings, including on retry.
-_EVIDENCE_FILE_LIMIT = 200
-_EVIDENCE_CHAR_BUDGET = _SOURCE_CHAR_BUDGET // 10
-
 _DEFAULT_TIMEOUT = 900.0
+_USER_PREFIX = "Compose the final penetration-test report from the following REPORT SOURCE.\n\n"
 
 
 def synthesis_enabled() -> bool:
@@ -61,131 +53,6 @@ def synthesis_enabled() -> bool:
         "false",
         "off",
         "no",
-    }
-
-_SEVERITY_RULES_ZH = """- Use only canonical severity labels (Critical/High/Medium/Low/Info). Never use
-  Elevated, Medium-High, moderate-high, 偏高, or any other non-canonical label.
-- Overall severity scoring rules:
-  - Critical: only if confirmed RCE exists.
-  - High: no confirmed RCE, but clear high-impact compromise, high-value data
-    access, privileged access, or broadly reusable secrets exist.
-  - Medium: meaningful exploitable weakness or exposure exists, but leverage/impact
-    is still limited.
-  - Low: minor weakness or low-impact exposure only.
-  - Info: observational or preparatory findings only."""
-
-_ZH_SECTIONS = [
-    "1. 执行摘要",
-    "2. 本阶段战果整理",
-    "3. 攻击路径与关键进展",
-    "4. 内网架构、关键主机与服务",
-    "5. 重要发现与技术细节",
-    "6. 凭证、哈希与访问能力",
-    "7. 后续可利用路径",
-    "8. 敏感数据与业务影响",
-    "9. 本阶段限制与未完成部分",
-]
-
-_EN_SECTIONS = [
-    "1. Executive Summary",
-    "2. Engagement Gains",
-    "3. Attack Path & Key Progress",
-    "4. Architecture, Key Hosts & Services",
-    "5. Findings & Technical Detail",
-    "6. Credentials, Hashes & Access Capabilities",
-    "7. Future Leverage Paths",
-    "8. Sensitive Data & Business Impact",
-    "9. Limitations & Unfinished Work",
-]
-
-
-def _cap(value: Any) -> Any:
-    if isinstance(value, str) and len(value) > _FIELD_CHAR_LIMIT:
-        return value[:_FIELD_CHAR_LIMIT] + "\n…[truncated]"
-    return value
-
-
-def _cap_mapping(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: _cap(value) for key, value in payload.items()}
-
-
-_REPORT_FIELDS = (
-    "id",
-    "title",
-    "severity",
-    "cvss",
-    "cvss_vector",
-    "description",
-    "impact",
-    "target",
-    "endpoint",
-    "method",
-    "cve",
-    "cwe",
-    "technical_analysis",
-    "poc_description",
-    "poc_script_code",
-    "evidence",
-    "counterevidence",
-    "confidence",
-    "confidence_rationale",
-    "severity_change_conditions",
-    "fix_effort",
-    "finding_class",
-)
-
-_FINDING_FIELDS = (
-    "id",
-    "finding_type",
-    "title",
-    "content",
-    "host",
-    "source",
-    "severity",
-    "metadata",
-    "agent_name",
-)
-
-
-def _selected(payload: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
-    return _cap_mapping(
-        {key: value for key, value in payload.items() if key in fields and value not in ("", None, [], {})}
-    )
-
-
-def _dump_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2, default=str)
-
-
-def _saved_evidence_inventory(run_state: RunState) -> dict[str, Any]:
-    """Expose delivered files only; finding references are not attachments."""
-    evidence = run_state.run_record.get("evidence") or {}
-    names = evidence.get("files", []) if isinstance(evidence, dict) else []
-    if not isinstance(names, list):
-        names = []
-    files: list[dict[str, str]] = []
-    seen: set[str] = set()
-    remaining = _EVIDENCE_CHAR_BUDGET
-    for name in names:
-        if not isinstance(name, str) or not name:
-            continue
-        path = PurePosixPath(name)
-        if path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
-            continue
-        filename = path.as_posix()
-        if filename in seen:
-            continue
-        seen.add(filename)
-        entry = {"filename": filename, "link": "evidence/" + quote(filename, safe="/")}
-        # Omit whole entries instead of truncating filenames or breaking links.
-        size = len(_dump_json(entry)) + 8
-        if len(files) < _EVIDENCE_FILE_LIMIT and size <= remaining:
-            files.append(entry)
-            remaining -= size
-    return {
-        "saved_file_count": len(seen),
-        "files": files,
-        "omitted_from_source_count": len(seen) - len(files),
     }
 
 
@@ -247,209 +114,6 @@ def normalize_report_header(
     return "\n".join(rebuilt) + "\n"
 
 
-_LEGACY_TYPOGRAPHY = """TYPOGRAPHY — the viewer renders full markdown (headings, lists, GFM tables,
-fenced code blocks and mermaid diagrams), so use it:
-- Keep paragraphs short: at most 5 lines each. Anything a section enumerates
-  becomes bullets or a table, not run-on prose.
-- Break major sections into ### subsections with meaningful titles, one per
-  theme, stage or host (e.g. a numbered stage inside the attack-path section,
-  one ### per host in the architecture section).
-- Use GFM tables with a header row for anything tabular: host/service
-  inventories, credentials, affected parameters, per-finding summaries.
-- Bold the facts a reader must not miss: severity, endpoints, finding ids.
-- PoC steps, commands and response excerpts go in fenced code blocks with
-  their language tag.
-- When a flow shows more than prose — an attack chain (entry → pivot →
-  objective), an access path, or the environment layout — add ONE fenced
-  mermaid flowchart (```mermaid, flowchart TD, ASCII node ids, labels in the
-  report language, roughly 12 nodes at most). Diagrams support the written
-  evidence; they never replace it, and a section gets at most one."""
-
-
-def synthesis_system_prompt(*, language: str, format_guidance: str | None = None) -> str:
-    """Editorial contract for the report composer (ported from the platform worker)."""
-    zh = (language or "zh-CN").startswith("zh")
-    if zh:
-        deliverable = (
-            "Simplified Chinese (简体中文). Tool identifiers, code, commands, "
-            "protocol strings and finding ids stay as-is."
-        )
-        sections = "\n".join(f"  {item}" for item in _ZH_SECTIONS)
-    else:
-        deliverable = "English."
-        sections = "\n".join(f"  {item}" for item in _EN_SECTIONS)
-    if format_guidance is None:
-        format_guidance = report_format_guidance()
-    # Old run snapshots have no shared formatting skill. Keep the original
-    # typography instructions instead of importing newer live skill text.
-    format_guidance = format_guidance or _LEGACY_TYPOGRAPHY
-    return f"""You are composing the final client-facing penetration-test report for one
-completed run. You are a report editor, not a scanner: everything you write is
-grounded in the REPORT SOURCE provided in the user message. Return ONLY the
-final markdown report — no commentary before or after.
-
-ABSOLUTE FIDELITY RULES:
-- Every technical claim must come from the vulnerability reports, findings,
-  campaign ledger, coverage records, or the root agent's draft narrative.
-- The root draft fields are the operator's lead material; when they disagree
-  with the filed reports, the filed reports win. Never invent endpoints,
-  payloads, credentials, responses or hosts that are not in the source.
-- Do not omit findings that are in the source. Cluster related findings into
-  themes and explain each theme in depth; cite finding ids (e.g. vuln-0001)
-  inline where the detail comes from.
-- Attachment lists and download links must use ONLY the Saved Evidence
-  Attachments inventory, which contains successfully saved files. Use its
-  links verbatim. Paths mentioned in finding text or the draft do not establish
-  that an attachment exists; keep the findings themselves as source material.
-  Omit absent attachments and missing-reference diagnostics from attachment
-  lists. Their absence alone does not mean the scan failed or ended early;
-  use run_status for execution status. If the inventory is truncated, do not
-  claim that no other files were saved. If no files were saved, omit the
-  attachment list.
-
-OUTPUT FORMAT — start the report with exactly this header block. Keep the
-blank line between every field: the report viewer renders markdown, and
-without a blank line the fields collapse into one run-on paragraph. Never use
-HTML tags such as <br> — the viewer does not render raw HTML.
-# 渗透测试报告 - <target>            (English runs: # Penetration Test Report - <target>)
-
-目标：<target>                       (English: Target: <target>)
-
-任务类型：<task type>                 (English: Engagement type: <task type>)
-
-报告生成时间：<generated_at, copy verbatim>
-
-Overall Severity: <Critical|High|Medium|Low|Info>
-
-Severity Rationale: <1-3 concise sentences>
-
----
-
-Then include these sections (in order, with ## headings, when evidence exists):
-{sections}
-
-EDITORIAL RULES:
-- Make the report detailed and concrete, not terse — and structured, never a
-  wall of text. Length should be proportional to the evidence, never padded.
-- In the findings section, for each theme: root cause, technical mechanism,
-  concrete evidence (response excerpts, values, error messages), PoC summary
-  (runnable code blocks allowed from poc_script_code), impact and severity
-  justification.
-- In the credentials section, list EVERY credential, hash, key and secret in
-  the source completely — one per line or in a table. Never summarize as
-  "N accounts found".
-- In the architecture section, organize by hosts, services and access paths,
-  and state what each system appears to do. For web engagements cover the
-  observed external infrastructure and application components the same way.
-- In the future-leverage section, explain what can be exploited next from the
-  access and secrets already obtained.
-- In the limitations section, state coverage gaps honestly; if the run status
-  says the execution ended early or failed, clearly state coverage is partial.
-- Do NOT include remediation advice anywhere.
-- Do NOT cite source file names unless necessary to explain the operation.
-
-{format_guidance}
-{_SEVERITY_RULES_ZH}
-
-The report language is {deliverable}"""
-
-
-def build_report_source(
-    run_state: RunState,
-    *,
-    generated_at: str,
-    trimmed: bool = False,
-) -> str:
-    """Assemble the synthesis corpus from durable run state.
-
-    ``trimmed`` mirrors the old worker's findings-only fallback: coverage,
-    the campaign ledger and finding bodies are dropped so a retry fits when
-    the full corpus failed (timeout, overflow).
-    """
-    scan_config = run_state.run_record.get("scan_config") or {}
-    status = str(run_state.run_record.get("status") or "unknown")
-    header = {
-        "target": scan_config.get("target") or run_state.run_dir.name,
-        "scan_type": scan_config.get("scan_type") or "web",
-        "crypto_mode": scan_config.get("crypto_mode", False),
-        "report_language": scan_config.get("report_language") or "zh-CN",
-        "run_status": status,
-        "duration_seconds": run_state.duration_seconds(),
-        "generated_at": generated_at,
-        "vulnerability_report_count": len(run_state.reports),
-        "internal_finding_count": len(run_state.internal_findings),
-    }
-    if "targets" in scan_config:
-        targets = normalize_targets(scan_config.get("target", ""), scan_config["targets"])
-        if len(targets) > 1:
-            header.update(targets=targets, target_count=len(targets))
-    if scan_config.get("socks5_proxy"):
-        header["declared_access"] = f"socks5: {scan_config['socks5_proxy']}"
-    elif scan_config.get("gsocket_key"):
-        header["declared_access"] = "gsocket: <key supplied>"
-
-    parts = ["# REPORT SOURCE", "", "## Run Overview", _dump_json(header), ""]
-    parts += [
-        "## Saved Evidence Attachments (authoritative delivery inventory)",
-        _dump_json(_saved_evidence_inventory(run_state)),
-        "",
-    ]
-
-    final_fields = run_state.final_fields
-    if final_fields:
-        parts += [
-            "## Root Agent Draft Narrative (finish_scan fields — leads, verify against the filed reports)",
-            _dump_json(_cap_mapping(final_fields)),
-            "",
-        ]
-
-    if run_state.reports:
-        parts += ["## Vulnerability Reports (full)", ""]
-        for report in run_state.reports:
-            rid = report.get("id") or "?"
-            title = report.get("title") or ""
-            severity = str(report.get("severity") or "").upper()
-            parts += [f"### {rid} — {title} [{severity}]", _dump_json(_selected(report, _REPORT_FIELDS)), ""]
-
-    if run_state.internal_findings:
-        parts += ["## Internal Findings (full)", ""]
-        for finding in run_state.internal_findings:
-            fid = finding.get("id") or "?"
-            title = finding.get("title") or ""
-            if trimmed:
-                parts.append(f"- {fid} — {title} (body omitted in retry source)")
-            else:
-                parts += [f"### {fid} — {title}", _dump_json(_selected(finding, _FINDING_FIELDS)), ""]
-
-    campaign = run_state.run_record.get("internal_campaign")
-    if campaign and not trimmed:
-        parts += [
-            "## Internal Campaign Ledger (engagement-created resources and observations)",
-            _dump_json(_cap_mapping(campaign)),
-            "",
-        ]
-
-    try:
-        coverage = run_state.assessment.snapshot(status)["coverage"]
-    except Exception:  # noqa: BLE001 — coverage is optional input, never fatal
-        coverage = None
-    if coverage and not trimmed:
-        parts += [
-            "## Coverage Records (agent-reported per-surface outcomes)",
-            _dump_json(_cap_mapping(coverage)),
-            "",
-        ]
-
-    source = "\n".join(parts).rstrip() + "\n"
-    if len(source) > _SOURCE_CHAR_BUDGET and not trimmed:
-        logger.warning(
-            "report source %d chars exceeds budget %d; retry source will be trimmed",
-            len(source),
-            _SOURCE_CHAR_BUDGET,
-        )
-    return source
-
-
 def _synthesis_timeout() -> float:
     """Total model-call budget, including a possible findings-only retry."""
     raw = os.environ.get("STRIXOPS_REPORT_SYNTHESIS_TIMEOUT") or ""
@@ -468,8 +132,8 @@ async def synthesize_executive_report(
 
     Returns the final report markdown, or ``None`` when synthesis is unavailable;
     the caller retains the saved draft without claiming a final report. Two attempts:
-    full source, then the trimmed findings-only source (the old worker's
-    fallback ladder, compressed), sharing one total time budget.
+    full source, then a retry without supplemental context. Both preserve
+    complete included finding values and share one total time budget.
     """
     loop = asyncio.get_running_loop()
     timeout = _synthesis_timeout()
@@ -480,20 +144,47 @@ async def synthesize_executive_report(
         language=language, format_guidance=report_format_guidance(run_state.run_dir)
     )
     model = resolve_model()
+    config = run_state.run_record.get("scan_config") or {}
+    model_name = str(config.get("model") or getattr(model, "model", "") or "")
+    count = (
+        (lambda text: count_tokens(model_name, text))
+        if model_name else (lambda text: len(text.encode("utf-8")))
+    )
+    capacity = context_window(model_name) if model_name else ContextSettings().fallback_context_tokens
+    output_reserve = output_limit(model_name) if model_name else 8192
+    source_budget = capacity - output_reserve - count(system + _USER_PREFIX) - 1024
+    if source_budget <= 0:
+        logger.warning("No report source budget remains after instructions and output reserve")
+        return None
 
-    full_source = build_report_source(run_state, generated_at=generated_at)
+    full_source = build_report_source(
+        run_state, generated_at=generated_at, token_budget=source_budget, token_count=count,
+    )
     for attempt, trimmed in enumerate((False, True), start=1):
         if loop.time() >= deadline:
             logger.warning("report synthesis exhausted its %.0fs total budget", timeout)
             break
         if trimmed:
-            source = build_report_source(run_state, generated_at=generated_at, trimmed=True)
-            if len(source) >= len(full_source):
-                # Nothing was actually trimmed; the retry cannot succeed where
-                # the full attempt failed. Skip the second timeout.
+            source = build_report_source(
+                run_state, generated_at=generated_at, trimmed=True,
+                token_budget=source_budget, token_count=count,
+            )
+            if source == full_source:
+                # Repacking can replace context with complete finding fields,
+                # so character length is not a reliable measure of the change.
                 break
         else:
             source = full_source
+        # Save the exact source prepared for this attempt for report review.
+        # A diagnostic write failure cannot discard otherwise usable findings.
+        try:
+            artifacts.atomic_write_text(
+                run_state.run_dir / ".state" / f"report-source-{attempt}.md", source
+            )
+            if attempt == 1:
+                artifacts.atomic_write_text(run_state.run_dir / ".state" / "report-system-prompt.md", system)
+        except OSError:
+            logger.warning("Could not save report source snapshot for attempt %d", attempt)
         remaining = deadline - loop.time()
         if remaining <= 0:
             logger.warning("report synthesis exhausted its %.0fs total budget", timeout)
@@ -506,8 +197,7 @@ async def synthesize_executive_report(
             response = await asyncio.wait_for(
                 model.get_response(
                     system_instructions=system,
-                    input="Compose the final penetration-test report from the following REPORT SOURCE.\n\n"
-                    + source,
+                    input=_USER_PREFIX + source,
                     model_settings=ModelSettings(
                         retry=MODEL_RETRY,
                         include_usage=True,

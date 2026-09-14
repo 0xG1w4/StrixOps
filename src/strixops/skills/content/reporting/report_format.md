@@ -17,13 +17,15 @@ a summary table or diagram; they supplement the original required content.
 TYPOGRAPHY — the viewer renders markdown headings, lists, GFM tables, fenced code
 blocks and basic mermaid flowcharts, so use them when they fit the content:
 
-- Keep paragraphs short: at most 5 lines each in the Markdown source, usually
-  2–4 complete sentences about one idea. Separate paragraphs with a blank line.
-  Anything a section enumerates becomes bullets or a table, not run-on prose.
+- Use connected paragraphs to explain technical mechanisms, decisions,
+  validation and impact. Give each paragraph a clear purpose and separate it
+  with a blank line. Let the evidence determine its length; do not split a
+  causal explanation into fragments to meet a line or sentence limit.
 - Keep the required `##` sections. Break them into `###` subsections with
   meaningful titles, one per theme, stage or host. A subsection may use `####`
   when another level is actually needed. Do not skip heading levels.
-- Use `-` bullets for parallel facts and numbered lists for ordered steps.
+- Use `-` bullets for parallel facts and numbered lists for reproducible steps
+  when a list makes them easier to follow. Keep narrative explanations in prose.
   Indent nested items consistently. Keep explanations with their own item;
   do not turn a multi-step procedure into one long bullet.
 - Use GFM tables with a header row for genuinely tabular information: host and
@@ -38,8 +40,8 @@ blocks and basic mermaid flowcharts, so use them when they fit the content:
   their language tag. Preserve their original bytes and line breaks. Use a
   fence longer than any fence contained in the data. Never insert ellipses,
   masking, line numbers or wrapping characters into literal data.
-- When a flow shows more than prose — an attack chain, an access path or an
-  environment layout — add ONE fenced mermaid flowchart per relevant section
+- When it helps explain an attack chain, an access path or an environment
+  layout, optionally add a fenced mermaid flowchart (at most one per section)
   (```mermaid, flowchart TD, ASCII node ids, plain labels in the report language,
   roughly 12 nodes at most). Use basic nodes and `-->` arrows; avoid subgraphs,
   styling directives, click actions and embedded HTML. Diagrams support the
