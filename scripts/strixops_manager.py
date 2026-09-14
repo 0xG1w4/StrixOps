@@ -273,8 +273,36 @@ class Manager:
             raise ManagerError("PID 对应的命令或用户已变化，拒绝操作该程序。")
         return True
 
-    def ensure_idle(self, config: dict) -> None:
-        blockers = activity_blockers(config["paths"], health=self.health(config))
+    def _mcp_captures_inactive(self, sessions: list[dict[str, str]]) -> bool:
+        # Match the Console's Docker SDK/environment rather than the Docker CLI's
+        # possibly different selected context. No runtime stores are imported.
+        try:
+            result = subprocess.run(
+                [
+                    str(self.root / ".venv/bin/python"), "-I",
+                    str(self.root / "scripts/strixops_mcp_activity.py"),
+                ],
+                input=json.dumps(sessions), capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode != 0 or len(result.stdout) > 1024:
+                return False
+            response = json.loads(result.stdout)
+            return isinstance(response, dict) and response.get("inactive") is True
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return False
+
+    def ensure_idle(self, config: dict, *, recover_stale_captures: bool = False) -> None:
+        health = self.health(config)
+        # Only attempt the Docker snapshot while the Console is stopped. Keep
+        # the usual blockers when its process or listener is alive, even if
+        # health is unavailable. This remains a snapshot, not an admission lock.
+        verifier = None
+        if (
+            recover_stale_captures and health is None
+            and self.port_available(config) and not self.owned_alive(self.record())
+        ):
+            verifier = self._mcp_captures_inactive
+        blockers = activity_blockers(config["paths"], health=health, verify_mcp_inactive=verifier)
         if blockers:
             raise ManagerError(
                 "仍有工作执行中或状态无法确认，请先在 Console 处理：\n- " + "\n- ".join(blockers)
@@ -514,7 +542,7 @@ class Manager:
                 raise ManagerError(f"数据目录与执行环境重叠，保留：{path}")
         return path
 
-    def install(self, build_images: bool = False) -> None:
+    def install(self, build_images: bool = False, *, recover_stale_captures: bool = False) -> None:
         for command in ("uv", "node", "npm"):
             if shutil.which(command) is None:
                 raise ManagerError(f"缺少 {command}，请安装后重试。脚本不会修改系统套件。")
@@ -552,7 +580,10 @@ class Manager:
             config = record["config"]
         else:
             self.ensure_port_free(config)
-        self.ensure_idle(config)
+        if recover_stale_captures:
+            self.ensure_idle(config, recover_stale_captures=True)
+        else:
+            self.ensure_idle(config)
         if running:
             self.stop()
         if repair_venv:
@@ -655,6 +686,10 @@ def parser() -> argparse.ArgumentParser:
     commands = cli.add_subparsers(dest="command")
     install = commands.add_parser("install", help="安装/更新前端与 Python 环境；原服务若在执行，完成后恢复")
     install.add_argument("--build-images", action="store_true", help="同时建置 Docker 沙箱映像")
+    install.add_argument(
+        "--recover-stale-captures", action="store_true",
+        help="Console 已停止时核验遗留 MCP 捕获；须使用原 Console 的 Docker 连接环境",
+    )
     commands.add_parser("uninstall", help="删除脚本管理的环境，保留源码、设置、憑证与任务数据")
     for name in ("start", "restart"):
         command = commands.add_parser(
@@ -693,7 +728,7 @@ def main(argv=None) -> int:
             if args.command == "status":
                 return manager.status(args.json)
             if args.command == "install":
-                manager.install(args.build_images)
+                manager.install(args.build_images, recover_stale_captures=args.recover_stale_captures)
             elif args.command == "uninstall":
                 manager.uninstall()
             elif args.command == "stop":

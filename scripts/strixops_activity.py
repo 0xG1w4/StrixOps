@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import stat
 import time
 from collections import Counter
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -86,14 +88,17 @@ def _counts(db: sqlite3.Connection, table: str, field: str, known: frozenset[str
     return counts
 
 
-def _json_counts(db: sqlite3.Connection, table: str, known: frozenset[str]) -> Counter[str]:
-    counts: Counter[str] = Counter()
+def _json_records(db: sqlite3.Connection, table: str, known: frozenset[str]) -> Iterator[dict[str, Any]]:
     for (raw,) in db.execute(f"SELECT data FROM {table}"):
-        status = _json_object(raw).get("status")
+        record = _json_object(raw)
+        status = record.get("status")
         if not isinstance(status, str) or status not in known:
             raise _UnknownActivity
-        counts[status] += 1
-    return counts
+        yield record
+
+
+def _json_counts(db: sqlite3.Connection, table: str, known: frozenset[str]) -> Counter[str]:
+    return Counter(record["status"] for record in _json_records(db, table, known))
 
 
 def _summarize(label: str, counts: Counter[str], active: frozenset[str]) -> list[str]:
@@ -118,7 +123,66 @@ def _queue(path: Path) -> list[str]:
         db.close()
 
 
-def _mcp(root: Path) -> list[str]:
+def _stale_capture_candidates(
+    tasks: list[dict[str, Any]], sessions: list[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """Only stable capture records can be cleared by a stopped-runtime proof.
+
+    Starting/stopping/deleting operations still require their owner to finish.
+    Missing identity is not evidence that a capture never started.
+    """
+    def valid_id(value: Any) -> bool:
+        return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,160}", value) is not None
+
+    by_task = {}
+    for task in tasks:
+        task_id = task.get("id")
+        if not valid_id(task_id) or task_id in by_task:
+            return []
+        if task["status"] in _MCP_TASK_ACTIVE - {"capturing"}:
+            return []
+        by_task[task_id] = task
+    candidates = []
+    session_ids: set[str] = set()
+    container_ids: set[str] = set()
+    for session in sessions:
+        session_id, task_id = session.get("id"), session.get("task_id")
+        if not valid_id(session_id) or session_id in session_ids or not valid_id(task_id):
+            return []
+        session_ids.add(session_id)
+        task = by_task.get(task_id)
+        if task is None:
+            return []
+        if session["status"] == "stopped":
+            continue
+        if session["status"] not in {"running", "error"} or task["status"] not in {"capturing", "error"}:
+            return []
+        container_id, owner = session.get("container_id"), session.get("owner_token")
+        if (
+            not isinstance(container_id, str)
+            or re.fullmatch(r"[a-f0-9]{64}", container_id) is None
+            or container_id in container_ids
+            or not isinstance(owner, str)
+            or not 1 <= len(owner) <= 256
+            or session.get("session_id", session_id) != session_id
+        ):
+            return []
+        container_ids.add(container_id)
+        candidates.append({
+            "id": session_id, "task_id": task_id, "session_id": session_id,
+            "container_id": container_id, "owner_token": owner,
+        })
+    covered = {session["task_id"] for session in candidates}
+    if any(task["status"] == "capturing" and task_id not in covered for task_id, task in by_task.items()):
+        return []
+    return candidates
+
+
+def _mcp(
+    root: Path,
+    *,
+    verify_inactive: Callable[[list[dict[str, str]]], bool] | None = None,
+) -> list[str]:
     if not _present(root, directory=True):
         return []
     path = root / "traffic.sqlite3"
@@ -127,8 +191,21 @@ def _mcp(root: Path) -> list[str]:
     db = _database(path)
     try:
         jobs = _json_counts(db, "jobs", _MCP_JOB_ACTIVE | _MCP_JOB_TERMINAL)
-        tasks = _json_counts(db, "tasks", _MCP_TASK_ACTIVE | _MCP_TASK_IDLE)
-        sessions = _json_counts(db, "sessions", _MCP_SESSION_STATES)
+        task_records = list(_json_records(db, "tasks", _MCP_TASK_ACTIVE | _MCP_TASK_IDLE))
+        session_records = list(_json_records(db, "sessions", _MCP_SESSION_STATES))
+        tasks = Counter(record["status"] for record in task_records)
+        sessions = Counter(record["status"] for record in session_records)
+        if verify_inactive is not None and not any(jobs[status] for status in _MCP_JOB_ACTIVE):
+            candidates = _stale_capture_candidates(task_records, session_records)
+            if candidates:
+                try:
+                    if verify_inactive(candidates) is True:
+                        # Only this maintenance snapshot changes. Evidence and saved
+                        # states remain for the Console to ingest and reconcile.
+                        return []
+                except Exception:
+                    # An unavailable daemon/probe must never turn unknown into idle.
+                    pass
         return (
             _summarize("MCP request tests", jobs, _MCP_JOB_ACTIVE)
             + _summarize("MCP tasks", tasks, _MCP_TASK_ACTIVE)
@@ -243,13 +320,19 @@ def _runs(root: Path) -> list[str]:
     return result
 
 
-def activity_blockers(paths: dict[str, str], *, health: dict | None = None) -> list[str]:
+def activity_blockers(
+    paths: dict[str, str],
+    *,
+    health: dict | None = None,
+    verify_mcp_inactive: Callable[[list[dict[str, str]]], bool] | None = None,
+) -> list[str]:
     """Return aggregate reasons to postpone maintenance, without mutating stores.
 
     ``paths`` requires runs_root, queue_db, mcp_root, and fofa_root. Missing stores
     mean unused features. Existing unreadable/unknown state fails conservatively.
-    ``health`` is an optional already-fetched /api/health response; this helper
-    performs no network requests and never signals a process.
+    ``health`` is an optional already-fetched /api/health response. A caller that
+    has verified the Console is stopped may supply ``verify_mcp_inactive`` to
+    inspect Docker without changing it. This helper never signals a process.
     """
     result: list[str] = []
     public_health = (
@@ -275,7 +358,10 @@ def activity_blockers(paths: dict[str, str], *, health: dict | None = None) -> l
             raw = paths.get(key)
             if not isinstance(raw, str) or not raw.strip():
                 raise _UnknownActivity
-            result.extend(check(Path(raw).expanduser()))
+            path = Path(raw).expanduser()
+            result.extend(
+                _mcp(path, verify_inactive=verify_mcp_inactive) if key == "mcp_root" else check(path)
+            )
         except (OSError, ValueError, TypeError, RecursionError, sqlite3.Error, _UnknownActivity):
             result.append(_unknown(label))
     return result
