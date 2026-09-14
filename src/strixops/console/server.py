@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import mimetypes
 import os
 import secrets
 import shutil
@@ -685,7 +684,7 @@ def run_artifact(name: str, path: str, request: Request) -> Response:
         fd = _open_run_file(run_dir, path)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="artifact not found") from exc
-    return _file_stream(fd, mimetypes.guess_type(path)[0] or "application/octet-stream", request)
+    return _file_stream(fd, Path(path).name, request)
 
 
 class _OwnedFileStream(StreamingResponse):
@@ -702,15 +701,30 @@ class _OwnedFileStream(StreamingResponse):
             self._close_file()
 
 
-def _file_stream(fd: int, media_type: str, request: Request | None = None) -> Response:
-    """Retain FileResponse's headers/ranges while reading only the owned descriptor."""
+def _file_stream(fd: int, filename: str, request: Request | None = None) -> Response:
+    """Download untrusted bytes without granting them the Console's browser origin."""
     source = os.fdopen(fd, "rb")
     try:
         info = os.fstat(source.fileno())
         # Reuse Starlette's current header/range semantics, but never call this
         # FileResponse: its path-opening and pathsend branches are not safe here.
-        metadata = FileResponse("", media_type=media_type, stat_result=info)
+        # Every artifact alias uses the same policy, regardless of extension.
+        # Fetch-based previews still read these bytes; direct navigation downloads
+        # them, and nosniff prevents a same-origin script tag from executing them.
+        metadata = FileResponse(
+            "", media_type="application/octet-stream", filename=Path(filename).name,
+            stat_result=info, content_disposition_type="attachment",
+            headers={
+                "Content-Security-Policy": (
+                    "sandbox; default-src 'none'; base-uri 'none'; "
+                    "form-action 'none'; frame-ancestors 'none';"
+                ),
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-store",
+            },
+        )
         headers = dict(metadata.headers)
+        headers.setdefault("content-disposition", "attachment")
         request_headers = request.headers if request is not None else {}
         if_none_match = request_headers.get("if-none-match")
         if if_none_match and any(
@@ -730,7 +744,8 @@ def _file_stream(fd: int, media_type: str, request: Request | None = None) -> Re
                 requested_ranges = metadata._parse_range_header(range_header, info.st_size)
             except MalformedRangeHeader as exc:
                 source.close()
-                return Response(exc.content, status_code=400, media_type="text/plain")
+                headers.pop("content-length", None)
+                return Response(exc.content, status_code=400, headers=headers)
             except RangeNotSatisfiable:
                 source.close()
                 headers.update({"content-range": f"bytes */{info.st_size}", "content-length": "0"})
@@ -2216,7 +2231,7 @@ def run_evidence_file(name: str, file_path: str, request: Request) -> Response:
         fd = _open_run_file(run_dir, f"evidence/{filename}")
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="evidence file not found") from exc
-    return _file_stream(fd, "application/octet-stream", request)
+    return _file_stream(fd, Path(filename).name, request)
 
 
 def _install_discovery_and_queue() -> None:
