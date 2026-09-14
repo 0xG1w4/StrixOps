@@ -183,7 +183,7 @@ curl --fail http://127.0.0.1:8300/api/health
 | `./strixops.sh install` | 构建前端并同步锁定的 Python 依赖；若原本由脚本启动，完成后恢复服务 |
 | `./strixops.sh install --build-images` | 同时构建 Docker 沙箱镜像 |
 | `./strixops.sh start` | 后台启动并验证实际运行版本 |
-| `./strixops.sh stop` | 平顺停止脚本登记的 Console |
+| `./strixops.sh stop` | 停止 Console、相关扫描引擎与容器；超时后强制终止 |
 | `./strixops.sh restart` | 沿用已保存的地址、端口与数据路径重新启动 |
 | `./strixops.sh status` | 显示运行／源码版本、PID、地址与日志路径 |
 | `./strixops.sh logs -f` | 持续查看日志；可用 `-n 200` 调整行数 |

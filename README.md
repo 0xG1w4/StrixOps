@@ -233,7 +233,7 @@ The health endpoint does not validate Docker, a model key, or target reachabilit
 | `./strixops.sh install` | Build the frontend and sync frozen Python dependencies; resume the managed Console if it was running |
 | `./strixops.sh install --build-images` | Also build the Docker sandbox image |
 | `./strixops.sh start` | Start in the background and verify the running version |
-| `./strixops.sh stop` | Gracefully stop this manager's Console |
+| `./strixops.sh stop` | Stop this Console and its scan engines/containers; force termination after timeout |
 | `./strixops.sh restart` | Restart using the saved address, port and data paths |
 | `./strixops.sh status` | Show running/source versions, PID, URL and log path |
 | `./strixops.sh logs -f` | Follow Console logs; use `-n 200` to change the tail length |

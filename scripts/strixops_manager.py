@@ -24,6 +24,7 @@ from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 
 from strixops_activity import activity_blockers
+from strixops_stop_processes import discover_processes, snapshot_descendants, stop_processes
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = (
@@ -470,7 +471,10 @@ class Manager:
             time.sleep(0.2)
         raise ManagerError("Console 尚未通过健康检查，程序记录已保留；请检查 status/logs，不会重复启动。")
 
-    def stop(self, timeout: float = 30) -> None:
+    def stop(self, timeout: float = 30, *, force: bool = False) -> None:
+        if force:
+            self.force_stop(timeout)
+            return
         record = self.record()
         if not self.owned_alive(record):
             self.ensure_port_free(self.config())
@@ -489,6 +493,86 @@ class Manager:
                 return
             time.sleep(0.2)
         raise ManagerError("Console 仍在结束请求，未强制终止。请检查 logs，稍后再执行 stop。")
+
+    def _stop_resources(
+        self, config: dict, stopped_runs: list[str], timeout: float, *, reconcile_runs: bool = True,
+    ) -> list[str]:
+        python = self.root / ".venv/bin/python"
+        try:
+            result = subprocess.run(
+                [str(python) if python.is_file() else sys.executable, "-I",
+                 str(self.root / "scripts/strixops_stop_resources.py")],
+                input=json.dumps({
+                    "paths": config["paths"], "stopped_runs": stopped_runs, "timeout": timeout,
+                    "reconcile_runs": reconcile_runs,
+                }),
+                capture_output=True, text=True, timeout=timeout + 10,
+            )
+            if result.returncode != 0 or len(result.stdout) > 1024 * 1024:
+                raise ValueError
+            response = json.loads(result.stdout)
+            issues = response.get("issues") if isinstance(response, dict) else None
+            if not isinstance(issues, list) or any(not isinstance(item, str) for item in issues):
+                raise ValueError
+            return issues
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return [
+                "容器与保存状态的收尾未完成；Console 停止操作已执行，"
+                "请查看 Docker 与数据目录状态后重试 stop。"
+            ]
+
+    def force_stop(self, timeout: float = 30) -> None:
+        """Stop this checkout's services even when saved activity is stale or invalid."""
+        record = self.record()
+        managed = self.owned_alive(record)
+        config = record["config"] if record else self.config()
+        issues: list[str] = []
+        descendants: list[dict] = []
+        if managed:
+            descendants, problems = snapshot_descendants(record["pid"], record["identity"], self.processes)
+            issues.extend(problems)
+            print("正在停止 Console 与相关工作…", flush=True)
+            if self.owned_alive(record):
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(record["pid"], signal.SIGTERM)
+            deadline = time.monotonic() + timeout
+            while self.owned_alive(record) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if self.owned_alive(record):
+                print("Console 未在等待时间内退出，正在强制终止…", flush=True)
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(record["pid"], signal.SIGKILL)
+                deadline = time.monotonic() + 5
+                while self.owned_alive(record) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+            if self.owned_alive(record):
+                issues.append("Console 强制终止后仍未确认退出。")
+        else:
+            # An unrelated listener is not ownership evidence. Never target it
+            # or rewrite stores that an unregistered Console may still use.
+            self.ensure_port_free(config)
+
+        console_stopped = not self.owned_alive(record)
+        if console_stopped:
+            self.record_path.unlink(missing_ok=True)
+            print("Console 已停止；正在停止扫描引擎与容器…", flush=True)
+        records, problems = discover_processes(self.root, config["paths"], self.processes)
+        issues.extend(problems)
+        # Prefer persisted run metadata over the generic descendant snapshot.
+        by_identity = {(row["pid"], row["identity"]): row for row in descendants}
+        by_identity.update({(row["pid"], row["identity"]): row for row in records})
+        stopped, problems = stop_processes(
+            list(by_identity.values()), processes=self.processes, timeout=timeout,
+        )
+        issues.extend(problems)
+        if console_stopped:
+            stopped_runs = sorted({str(row["run_dir"]) for row in stopped if row.get("run_dir")})
+            issues.extend(self._stop_resources(config, stopped_runs, timeout, reconcile_runs=not issues))
+        if issues:
+            raise ManagerError(
+                "已执行停止操作，以下项目仍需处理：\n- " + "\n- ".join(dict.fromkeys(issues))
+            )
+        print("StrixOps 相关服务已停止；设置、历史记录、报告与已保存证据保留。")
 
     def status(self, json_output: bool = False) -> int:
         record = self.record()
@@ -701,8 +785,16 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--runs-root", help="任务目录；首次默认项目内 strix_runs")
         if name == "restart":
             command.add_argument("--timeout", type=float, default=30, help="平顺停止等待秒数，默认 30")
-    stop = commands.add_parser("stop", help="平顺停止登记的 Console")
-    stop.add_argument("--timeout", type=float, default=30, help="停止等待秒数，默认 30；不强制终止")
+    stop = commands.add_parser("stop", help="停止 Console、相关扫描引擎与容器；超时后强制终止")
+    stop.add_argument(
+        "--timeout", type=float, default=30, help="每个停止阶段的等待秒数，默认 30，超时强制终止",
+    )
+    stop_mode = stop.add_mutually_exclusive_group()
+    stop_mode.add_argument(
+        "--graceful", dest="force", action="store_false", help="仅在无工作时平顺停止 Console",
+    )
+    stop_mode.add_argument("--force", dest="force", action="store_true", help="强制停止相关服务（默认行为）")
+    stop.set_defaults(force=True)
     commands.add_parser("status", help="查看运行/源码版本、PID、地址与目录").add_argument(
         "--json", action="store_true"
     )
@@ -733,7 +825,7 @@ def main(argv=None) -> int:
             elif args.command == "uninstall":
                 manager.uninstall()
             elif args.command == "stop":
-                manager.stop(args.timeout)
+                manager.stop(args.timeout, force=args.force)
             elif args.command == "start":
                 manager.start(manager.config(args))
             elif args.command == "restart":
