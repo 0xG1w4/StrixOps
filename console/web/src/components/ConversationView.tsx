@@ -596,9 +596,9 @@ const MessageCard = React.memo(function MessageCard({ message }: { message: Mess
       const tone = status === "failed" ? "danger" : status === "acked" ? "warning" : status === "delivered" ? "success" : "accent";
       const labels: Record<string, [string, string]> = {
         queued: ["等待交付", "Queued"], delivered: ["已交付", "Delivered"],
-        acked: ["已確認收到", "Receipt confirmed"], failed: ["交付失敗", "Delivery failed"],
+        acked: ["已确认收到", "Receipt confirmed"], failed: ["交付失败", "Delivery failed"],
       };
-      const label = labels[status]?.[locale === "en" ? 1 : 0] || (locale === "en" ? "Unknown status" : "狀態未知");
+      const label = labels[status]?.[locale === "en" ? 1 : 0] || (locale === "en" ? "Unknown status" : "状态未知");
       return (
         <MessageFrame variant="ml-auto max-w-[85%] border-accent/16 bg-accent/7">
           <div className="mb-1 flex items-center gap-2">
@@ -613,8 +613,8 @@ const MessageCard = React.memo(function MessageCard({ message }: { message: Mess
           <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
             {String(message.content ?? message.title ?? "")}
           </div>
-          {status === "acked" && <p className="mt-2 text-[10px] text-fg-muted">{locale === "en" ? "The agent echoed the receipt token. This does not mean the requested work is complete." : "代理已回覆確認 token；這不代表指令要求的工作已完成。"}</p>}
-          {status === "failed" && <p className={styles.failure}>{argStr(message, "failure_reason") || (locale === "en" ? "The hint could not be delivered." : "指令無法交付。")}</p>}
+          {status === "acked" && <p className="mt-2 text-[10px] text-fg-muted">{locale === "en" ? "The agent echoed the receipt token. This does not mean the requested work is complete." : "代理已回覆确认 token；这不代表指令要求的工作已完成。"}</p>}
+          {status === "failed" && <p className={styles.failure}>{argStr(message, "failure_reason") || (locale === "en" ? "The hint could not be delivered." : "指令无法交付。")}</p>}
         </MessageFrame>
       );
     }
@@ -996,7 +996,7 @@ export default function ConversationView({
   return (
     <section
       className={`${styles.conversation} panel panel-hairline flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/92`}
-      aria-label={c("任務對話", "Task conversation")}
+      aria-label={c("任务对话", "Task conversation")}
       onKeyDown={event => { if (event.key === "Escape" && agentsOpen) closeAgents(); }}
     >
       {/* header bar */}
@@ -1034,7 +1034,7 @@ export default function ConversationView({
               : ""}
           </span>
         </div>
-        <div className={styles.controls} role="group" aria-label={c("對話檢視設定", "Conversation view controls")}>
+        <div className={styles.controls} role="group" aria-label={c("对话查看设置", "Conversation view controls")}>
           <button
             ref={agentToggle}
             type="button"
@@ -1055,7 +1055,7 @@ export default function ConversationView({
               onChange={event => chooseAgent(event.target.value)}
             >
               <option value="">{t("conversation.allAgents")}</option>
-              {agentFilter && !run?.agents?.[agentFilter] && <option value={agentFilter}>{agentFilter} · {c("狀態未知", "Unknown")}</option>}
+              {agentFilter && !run?.agents?.[agentFilter] && <option value={agentFilter}>{agentFilter} · {c("状态未知", "Unknown")}</option>}
               {agents.map(([id, entry]) => <option key={id} value={id}>{entry.name || id} ({id})</option>)}
             </select>
             <ChevronDown size={14} className={styles.selectChevron} aria-hidden="true" />
@@ -1073,7 +1073,7 @@ export default function ConversationView({
 
       {hintError && (
         <div className={styles.ledgerError} role="status">
-          <span>{c("指令交付狀態暫時無法更新。", "Hint delivery status could not be refreshed.")}</span>
+          <span>{c("指令交付状态暂时无法更新。", "Hint delivery status could not be refreshed.")}</span>
           <button type="button" onClick={() => setHintRevision(value => value + 1)}>{t("common.retry")}</button>
         </div>
       )}
@@ -1081,7 +1081,7 @@ export default function ConversationView({
         {agentsOpen && <ConversationAgents name={name} run={run} selected={agentFilter} onSelect={chooseAgent} onClose={closeAgents} />}
         <div className={styles.main}>
       {/* scroll area */}
-      <div ref={scrollRef} aria-label={c("對話時間軸", "Conversation timeline")} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-deep/32 p-4">
+      <div ref={scrollRef} aria-label={c("对话时间轴", "Conversation timeline")} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-deep/32 p-4">
         {phase === "loading" && messages.length === 0 ? (
           <div className="space-y-3 p-2">
             <div className="skeleton-line w-5/6" />

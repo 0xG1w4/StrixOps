@@ -57,17 +57,17 @@ export interface WebSearchStats {
 
 export function webSearchStatus(code: string | null | undefined, en: boolean): string {
   const names: Record<string, [string, string]> = {
-    ok: ["成功", "Success"], disabled: ["未啟用", "Disabled"], not_configured: ["未設定 API Key", "API key not set"],
-    invalid_configuration: ["設定需要修正", "Check the settings"], invalid_query: ["查詢內容無效", "Invalid query"],
-    unauthorized: ["認證失敗", "Authentication failed"], quota_exceeded: ["額度不足", "Insufficient quota"],
-    forbidden: ["存取被拒絕", "Access denied"], rate_limited: ["請求頻率受限", "Rate limited"],
-    cooldown: ["暫停重試中", "Retry cooldown"], timeout: ["請求逾時", "Request timed out"],
-    network_error: ["網路連線失敗", "Connection failed"], http_error: ["搜尋服務異常", "Search service error"],
-    upstream_error: ["搜尋服務異常", "Search service error"], service_error: ["搜尋服務異常", "Search service error"],
-    invalid_response: ["搜尋服務回應無效", "Invalid service response"], empty_response: ["搜尋服務未回傳結果", "No search results returned"],
-    incomplete_response: ["搜尋回應不完整", "Search response incomplete"], cancelled: ["已取消", "Cancelled"],
+    ok: ["成功", "Success"], disabled: ["未启用", "Disabled"], not_configured: ["未设置 API Key", "API key not set"],
+    invalid_configuration: ["设置需要修正", "Check the settings"], invalid_query: ["查询内容无效", "Invalid query"],
+    unauthorized: ["认证失败", "Authentication failed"], quota_exceeded: ["额度不足", "Insufficient quota"],
+    forbidden: ["访问被拒绝", "Access denied"], rate_limited: ["请求频率受限", "Rate limited"],
+    cooldown: ["暂停重试中", "Retry cooldown"], timeout: ["请求超时", "Request timed out"],
+    network_error: ["网络连接失败", "Connection failed"], http_error: ["搜索服务异常", "Search service error"],
+    upstream_error: ["搜索服务异常", "Search service error"], service_error: ["搜索服务异常", "Search service error"],
+    invalid_response: ["搜索服务响应无效", "Invalid service response"], empty_response: ["搜索服务未返回结果", "No search results returned"],
+    incomplete_response: ["搜索响应不完整", "Search response incomplete"], cancelled: ["已取消", "Cancelled"],
   };
-  return names[code || ""]?.[en ? 1 : 0] || (en ? "Search service unavailable" : "搜尋服務暫時無法使用");
+  return names[code || ""]?.[en ? 1 : 0] || (en ? "Search service unavailable" : "搜索服务暂时无法使用");
 }
 
 export const knownNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;

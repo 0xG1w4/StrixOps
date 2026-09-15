@@ -21,7 +21,7 @@ function AssessmentMarkdown({ content, en }: { content: string; en: boolean }) {
       catch { return ""; }
     }}
     components={{
-      img: ({ alt }) => <span>{en ? "Image omitted" : "圖片未載入"}{alt ? `: ${alt}` : ""}</span>,
+      img: ({ alt }) => <span>{en ? "Image omitted" : "图片未加载"}{alt ? `: ${alt}` : ""}</span>,
       a: ({ href, children }) => href ? <a href={href} target={href.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
     }}
   >{content}</ReactMarkdown>;
@@ -170,7 +170,7 @@ export default function AssessmentPanel({ name, run, view = "all" }: {
     <div className="min-w-0 space-y-4 p-4 [overflow-wrap:anywhere]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium text-fg">{view === "coverage" ? (en ? "Test coverage" : "測試覆蓋") : view === "threat_models" ? (en ? "Threat models" : "威脅模型") : (en ? "Assessment records" : "評估紀錄")}</h2>
+          <h2 className="text-sm font-medium text-fg">{view === "coverage" ? (en ? "Test coverage" : "测试覆盖") : view === "threat_models" ? (en ? "Threat models" : "威胁模型") : (en ? "Assessment records" : "评估记录")}</h2>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-fg-muted">
             {en
               ? "These are agent-reported checks. A completed run or resolved recorded items do not establish full coverage or the absence of vulnerabilities."

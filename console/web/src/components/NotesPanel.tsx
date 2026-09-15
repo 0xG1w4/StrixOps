@@ -88,7 +88,7 @@ function authorName(author: NoteAuthor | null | undefined) {
 
 function noteTime(value: string | null | undefined, locale: string) {
   return value && Number.isFinite(Date.parse(value))
-    ? new Date(value).toLocaleString(locale === "en" ? "en-US" : "zh-TW") : "—";
+    ? new Date(value).toLocaleString(locale === "en" ? "en-US" : "zh-CN") : "—";
 }
 
 function revisionLabel(value: number) {
@@ -115,7 +115,7 @@ function NoteMarkdown({ content }: { content: string }) {
           a: ({ href, children }) => href
             ? <a href={href} target={href.startsWith("#") ? undefined : "_blank"} rel="noopener noreferrer">{children}</a>
             : <span>{children}</span>,
-          img: ({ alt }) => <span className={styles.imageOmitted}>{locale === "en" ? "Image omitted" : "圖片未載入"}{alt ? `: ${alt}` : ""}</span>,
+          img: ({ alt }) => <span className={styles.imageOmitted}>{locale === "en" ? "Image omitted" : "图片未加载"}{alt ? `: ${alt}` : ""}</span>,
           table: ({ children }) => <div className={styles.tableScroll}><table>{children}</table></div>,
         }}
       >
@@ -134,7 +134,7 @@ function HistoryEntry({ note }: { note: NoteRevision }) {
         <strong>{revisionLabel(note.revision)}</strong>
         <span>{authorName(note.updated_by)}</span>
         <time>{noteTime(note.updated_at, locale)}</time>
-        {note.deleted && <span className={styles.deleted}>{locale === "en" ? "Deleted" : "已刪除"}</span>}
+        {note.deleted && <span className={styles.deleted}>{locale === "en" ? "Deleted" : "已删除"}</span>}
         <ChevronDown size={13} />
       </summary>
       {open && (
@@ -173,29 +173,29 @@ function NoteReader({ runName, noteId, live, listRevision }: {
   const history = note?.history?.slice().sort((a, b) => b.revision - a.revision) ?? [];
 
   return (
-    <article className={styles.reader} aria-label={c("筆記內容", "Note content")} aria-busy={result.loading}>
+    <article className={styles.reader} aria-label={c("笔记内容", "Note content")} aria-busy={result.loading}>
       {result.error && (
         <div className={styles.error} role="status">
           <span>{result.error === "not_found"
-            ? c("找不到這則筆記。", "This note could not be found.")
-            : note ? c("更新失敗，目前顯示先前讀取的版本。", "Refresh failed. Showing the previously fetched revision.")
-              : c("無法讀取筆記，請重試。", "Unable to read this note. Please retry.")}</span>
-          <button type="button" onClick={result.refresh}>{c("重試", "Retry")}</button>
+            ? c("找不到这条笔记。", "This note could not be found.")
+            : note ? c("刷新失败，当前显示上次读取的版本。", "Refresh failed. Showing the previously fetched revision.")
+              : c("无法读取笔记，请重试。", "Unable to read this note. Please retry.")}</span>
+          <button type="button" onClick={result.refresh}>{c("重试", "Retry")}</button>
         </div>
       )}
       {!note ? (
-        <div className={styles.empty}>{result.loading && <><Spinner /> {c("讀取筆記…", "Loading note…")}</>}</div>
+        <div className={styles.empty}>{result.loading && <><Spinner /> {c("加载笔记…", "Loading note…")}</>}</div>
       ) : (
         <>
           <header className={styles.noteHeader}>
             <div className={styles.noteFlags}>
               <span>{note.category}</span><strong>{revisionLabel(note.revision)}</strong>
-              {note.deleted && <span className={styles.deleted}>{c("已刪除", "Deleted")}</span>}
+              {note.deleted && <span className={styles.deleted}>{c("已删除", "Deleted")}</span>}
               <button
                 type="button"
                 className={styles.iconButton}
                 onClick={result.refresh}
-                aria-label={c("更新選取的筆記", "Refresh selected note")}
+                aria-label={c("刷新选中的笔记", "Refresh selected note")}
               >
                 <RefreshCw size={14} />
               </button>
@@ -203,39 +203,39 @@ function NoteReader({ runName, noteId, live, listRevision }: {
             <h3>{note.title}</h3>
             {note.tags?.length > 0 && <div className={styles.tags}>{note.tags.map(tag => <span key={tag}>{tag}</span>)}</div>}
             <dl className={styles.metadata}>
-              <div><dt>{c("建立者", "Created by")}</dt><dd>{authorName(note.created_by)}</dd></div>
-              <div><dt>{c("建立時間", "Created")}</dt><dd>{noteTime(note.created_at, locale)}</dd></div>
+              <div><dt>{c("创建者", "Created by")}</dt><dd>{authorName(note.created_by)}</dd></div>
+              <div><dt>{c("创建时间", "Created")}</dt><dd>{noteTime(note.created_at, locale)}</dd></div>
               <div><dt>{c("更新者", "Updated by")}</dt><dd>{authorName(note.updated_by)}</dd></div>
-              <div><dt>{c("更新時間", "Updated")}</dt><dd>{noteTime(note.updated_at, locale)}</dd></div>
+              <div><dt>{c("更新时间", "Updated")}</dt><dd>{noteTime(note.updated_at, locale)}</dd></div>
             </dl>
           </header>
           {updated !== null && (
             <p className={styles.updateNotice} role="status">
-              {c("已載入更新版本", "Updated revision loaded")}: {revisionLabel(updated)}
+              {c("已加载更新版本", "Updated revision loaded")}: {revisionLabel(updated)}
             </p>
           )}
           {note.deleted && (
             <p className={styles.deletionNotice}>
-              {c("此筆記已刪除，內容保留供回溯。", "This note was deleted. Its content is retained for reference.")}
+              {c("此笔记已删除，内容保留以供追溯。", "This note was deleted. Its content is retained for reference.")}
               {" "}{authorName(note.deleted_by)} · {noteTime(note.deleted_at, locale)}
             </p>
           )}
           <NoteMarkdown content={note.content} />
           <details className={styles.history} open={historyOpen} onToggle={event => setHistoryOpen(event.currentTarget.open)}>
-            <summary><span>{c("修訂歷程", "Revision history")}</span><ChevronDown size={14} /></summary>
+            <summary><span>{c("修订历史", "Revision history")}</span><ChevronDown size={14} /></summary>
             {historyOpen && (
               <div className={styles.historyBody}>
                 {note.history_truncated && (
                   <p className={styles.deletionNotice}>
-                    {c("較早的部分修訂已不再保留；以下不是完整歷程。", "Some earlier revisions are no longer retained. This history is incomplete.")}
+                    {c("部分较早的修订已不再保留；以下历史记录不完整。", "Some earlier revisions are no longer retained. This history is incomplete.")}
                   </p>
                 )}
                 {result.loading && !note.history && (
-                  <p className={styles.loading}><Spinner /> {c("讀取歷程…", "Loading history…")}</p>
+                  <p className={styles.loading}><Spinner /> {c("加载历史记录…", "Loading history…")}</p>
                 )}
                 {history.map(entry => <HistoryEntry key={entry.revision} note={entry} />)}
                 {!result.loading && !result.error && history.length === 0 && (
-                  <p className={styles.hint}>{c("沒有較早的修訂。", "No earlier revisions.")}</p>
+                  <p className={styles.hint}>{c("没有较早的修订。", "No earlier revisions.")}</p>
                 )}
               </div>
             )}
@@ -269,22 +269,22 @@ function NotesResults({ runName, live, filters, offset, onOffset }: {
   return (
     <>
       <div className={styles.resultsBar}>
-        <span>{typeof total === "number" ? `${total.toLocaleString()} ${c("則筆記", "notes")}` : "—"}</span>
+        <span>{typeof total === "number" ? `${total.toLocaleString()} ${c("条笔记", "notes")}` : "—"}</span>
         <button type="button" className={styles.refreshButton} onClick={result.refresh}>
-          <RefreshCw size={13} />{c("更新列表", "Refresh notes")}
+          <RefreshCw size={13} />{c("刷新列表", "Refresh notes")}
         </button>
       </div>
       {result.error && (
         <div className={styles.error} role="status">
           <span>{result.data
-            ? c("更新失敗，目前顯示先前讀取的列表。", "Refresh failed. Showing the previously fetched list.")
-            : c("筆記資料無法讀取，請重試。", "Note records could not be read. Please retry.")}</span>
-          <button type="button" onClick={result.refresh}>{c("重試", "Retry")}</button>
+            ? c("刷新失败，当前显示上次读取的列表。", "Refresh failed. Showing the previously fetched list.")
+            : c("无法读取笔记数据，请重试。", "Note records could not be read. Please retry.")}</span>
+          <button type="button" onClick={result.refresh}>{c("重试", "Retry")}</button>
         </div>
       )}
       <div className={styles.workspace}>
         <div className={styles.index}>
-          <div className={styles.noteList} aria-label={c("筆記列表", "Notes list")} aria-busy={result.loading}>
+          <div className={styles.noteList} aria-label={c("笔记列表", "Notes list")} aria-busy={result.loading}>
             {notes.map(note => (
               <button
                 type="button"
@@ -295,31 +295,31 @@ function NotesResults({ runName, live, filters, offset, onOffset }: {
               >
                 <span className={styles.rowHeading}><strong>{note.title}</strong><span>{revisionLabel(note.revision)}</span></span>
                 <span className={styles.rowPreview}>{note.preview || "—"}</span>
-                <span className={styles.rowMeta}><span>{note.category}</span>{note.deleted && <span className={styles.deleted}>{c("已刪除", "Deleted")}</span>}</span>
+                <span className={styles.rowMeta}><span>{note.category}</span>{note.deleted && <span className={styles.deleted}>{c("已删除", "Deleted")}</span>}</span>
                 <span className={styles.rowMeta}><span>{authorName(note.updated_by)}</span><time>{noteTime(note.updated_at, locale)}</time></span>
                 {note.tags?.length > 0 && <span className={styles.tags}>{note.tags.map(tag => <span key={tag}>{tag}</span>)}</span>}
               </button>
             ))}
             {notes.length === 0 && !result.error && (
               <div className={styles.empty}>
-                {result.loading ? <><Spinner /> {c("讀取筆記…", "Loading notes…")}</> : (
+                {result.loading ? <><Spinner /> {c("加载笔记…", "Loading notes…")}</> : (
                   <>
                     <FileText size={22} />
-                    <strong>{offset > 0 ? c("此頁沒有筆記", "No notes on this page")
-                      : hasFilters ? c("沒有符合條件的筆記", "No matching notes")
-                        : c("尚無共享筆記", "No shared notes yet")}</strong>
-                    <p>{offset > 0 ? c("返回上一頁以查看其他筆記。", "Go back to the previous page to view other notes.")
-                      : hasFilters ? c("調整搜尋或篩選條件。", "Adjust your search or filters.")
-                        : c("Agent 在任務中保存的參考資料會顯示在這裡。", "Reference notes saved by agents during this task will appear here.")}</p>
+                    <strong>{offset > 0 ? c("此页没有笔记", "No notes on this page")
+                      : hasFilters ? c("没有符合条件的笔记", "No matching notes")
+                        : c("暂无共享笔记", "No shared notes yet")}</strong>
+                    <p>{offset > 0 ? c("返回上一页以查看其他笔记。", "Go back to the previous page to view other notes.")
+                      : hasFilters ? c("调整搜索或筛选条件。", "Adjust your search or filters.")
+                        : c("Agent 在任务中保存的参考资料会显示在这里。", "Reference notes saved by agents during this task will appear here.")}</p>
                   </>
                 )}
               </div>
             )}
           </div>
-          <nav className={styles.pagination} aria-label={c("筆記分頁", "Notes pagination")}>
-            <button type="button" disabled={offset === 0} onClick={() => onOffset(Math.max(0, offset - PAGE_SIZE))} aria-label={c("上一頁筆記", "Previous notes page")}><ChevronLeft size={16} /></button>
+          <nav className={styles.pagination} aria-label={c("笔记分页", "Notes pagination")}>
+            <button type="button" disabled={offset === 0} onClick={() => onOffset(Math.max(0, offset - PAGE_SIZE))} aria-label={c("上一页笔记", "Previous notes page")}><ChevronLeft size={16} /></button>
             <span>{notes.length ? `${offset + 1}–${offset + notes.length}` : "—"}{typeof total === "number" ? ` / ${total}` : ""}</span>
-            <button type="button" disabled={!result.data?.has_more} onClick={() => onOffset(offset + PAGE_SIZE)} aria-label={c("下一頁筆記", "Next notes page")}><ChevronRight size={16} /></button>
+            <button type="button" disabled={!result.data?.has_more} onClick={() => onOffset(offset + PAGE_SIZE)} aria-label={c("下一页笔记", "Next notes page")}><ChevronRight size={16} /></button>
           </nav>
         </div>
         {selected ? (
@@ -333,7 +333,7 @@ function NotesResults({ runName, live, filters, offset, onOffset }: {
         ) : (
           <div className={styles.readerEmpty}>
             <FileText size={26} />
-            <p>{c("選取筆記以閱讀內容與修訂歷程。", "Select a note to read its content and revision history.")}</p>
+            <p>{c("选择笔记以阅读内容与修订历史。", "Select a note to read its content and revision history.")}</p>
           </div>
         )}
       </div>
@@ -358,44 +358,44 @@ export default function NotesPanel({ runName, live }: { runName: string; live: b
   };
 
   return (
-    <section className={styles.panel} aria-label={c("共享筆記", "Shared notes")}>
+    <section className={styles.panel} aria-label={c("共享笔记", "Shared notes")}>
       <div className={styles.intro}>
         <div>
           <FileText size={16} />
-          <h2>{c("共享筆記", "Shared notes")}</h2>
-          <span>{c("唯讀", "Read only")}</span>
+          <h2>{c("共享笔记", "Shared notes")}</h2>
+          <span>{c("只读", "Read only")}</span>
         </div>
         <p>
           {c(
-            "供 Agent 共享參考資訊；筆記不代表已驗證的漏洞。",
+            "供 Agent 共享参考信息；笔记不代表已验证的漏洞。",
             "Reference information shared by agents. Notes are not verified vulnerabilities.",
           )}
         </p>
       </div>
-      <form className={styles.filters} onSubmit={apply} aria-label={c("篩選筆記", "Filter notes")}>
+      <form className={styles.filters} onSubmit={apply} aria-label={c("筛选笔记", "Filter notes")}>
         <label>
-          <span>{c("搜尋", "Search")}</span>
+          <span>{c("搜索", "Search")}</span>
           <input
             className="input-shell"
             value={draft.search}
             maxLength={500}
-            placeholder={c("標題、內容或標籤", "Title, content, or tags")}
+            placeholder={c("标题、内容或标签", "Title, content, or tags")}
             onChange={event => setDraft(value => ({ ...value, search: event.target.value }))}
           />
         </label>
         <label>
-          <span>{c("分類", "Category")}</span>
+          <span>{c("分类", "Category")}</span>
           <select
             className="input-shell"
             value={draft.category}
             onChange={event => setDraft(value => ({ ...value, category: event.target.value }))}
           >
-            <option value="">{c("所有分類", "All categories")}</option>
+            <option value="">{c("所有分类", "All categories")}</option>
             {NOTE_CATEGORIES.map(category => <option key={category} value={category}>{category}</option>)}
           </select>
         </label>
         <label>
-          <span>{c("標籤（逗號分隔）", "Tags (comma-separated)")}</span>
+          <span>{c("标签（逗号分隔）", "Tags (comma-separated)")}</span>
           <input
             className="input-shell"
             value={draft.tags}
@@ -421,7 +421,7 @@ export default function NotesPanel({ runName, live }: { runName: string; live: b
               checked={draft.includeDeleted}
               onChange={event => setDraft(value => ({ ...value, includeDeleted: event.target.checked }))}
             />
-            <span>{c("包含已刪除", "Include deleted")}</span>
+            <span>{c("包含已删除", "Include deleted")}</span>
           </label>
           <button
             type="button"
@@ -431,12 +431,12 @@ export default function NotesPanel({ runName, live }: { runName: string; live: b
             {c("清除", "Clear")}
           </button>
           <button type="submit" className="button-primary" disabled={invalidTags}>
-            <Search size={14} />{c("套用篩選", "Apply filters")}
+            <Search size={14} />{c("应用筛选", "Apply filters")}
           </button>
         </div>
         {invalidTags && (
           <p className={styles.filterError} id={tagsHintId} role="alert">
-            {c("最多可使用 20 個標籤，每個標籤不得超過 64 個字元。", "Use at most 20 tags, with no more than 64 characters per tag.")}
+            {c("最多可使用 20 个标签，每个标签不得超过 64 个字符。", "Use at most 20 tags, with no more than 64 characters per tag.")}
           </p>
         )}
       </form>

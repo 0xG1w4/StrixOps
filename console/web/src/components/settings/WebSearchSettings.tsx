@@ -144,14 +144,14 @@ export function WebSearchSettings() {
   };
   const tested = testResult?.success === true && testResult.code === "ok";
   const resultCode = testError || testResult?.code;
-  let statusText = c("已設 Key · 尚未測試", "Key set · Not tested");
+  let statusText = c("已设置 Key · 尚未测试", "Key set · Not tested");
   if (loadState === "loading") statusText = t("common.loading");
   else if (loadState === "error") statusText = t("settings.integrations.unavailable");
-  else if (testing) statusText = c("測試連線中…", "Testing connection…");
+  else if (testing) statusText = c("测试连接中…", "Testing connection…");
   else if (resultCode) statusText = webSearchStatus(resultCode, en);
   else if (settings?.perplexity_error_code) statusText = webSearchStatus(settings.perplexity_error_code, en);
-  else if (!settings?.perplexity_enabled) statusText = c("未啟用", "Disabled");
-  else if (!configured) statusText = c("未設定 API Key", "API key not set");
+  else if (!settings?.perplexity_enabled) statusText = c("未启用", "Disabled");
+  else if (!configured) statusText = c("未设置 API Key", "API key not set");
   const statusState = tested ? "success"
     : resultCode || settings?.perplexity_error_code || loadState === "error" ? "error" : "ready";
 
@@ -178,13 +178,13 @@ export function WebSearchSettings() {
             <h3 className={styles.providerName}>Perplexity</h3>
             <p className={styles.providerHint}>
               {c(
-                "讓 Agent 查找公開技術文件與漏洞資訊。設定將套用到之後啟動的任務。",
+                "让 Agent 查找公开技术文档与漏洞信息。设置将应用到之后启动的任务。",
                 "Let agents look up public technical documentation and vulnerability information. Settings apply to newly started tasks.",
               )}
             </p>
             <p className={styles.providerHint}>
               {c(
-                "未啟用或搜尋失敗時，任務會繼續使用其他工具。",
+                "未启用或搜索失败时，任务会继续使用其他工具。",
                 "When search is disabled or fails, tasks continue using other tools.",
               )}
             </p>
@@ -192,7 +192,7 @@ export function WebSearchSettings() {
         </div>
         <form className={styles.form} onSubmit={save} aria-busy={busy}>
           <label className={styles.enableRow} htmlFor={`${fieldId}-enabled`}>
-            <span>{c("啟用網頁搜尋", "Enable web search")}</span>
+            <span>{c("启用网页搜索", "Enable web search")}</span>
             <input
               id={`${fieldId}-enabled`}
               type="checkbox"
@@ -234,17 +234,17 @@ export function WebSearchSettings() {
           <p className={styles.hint} id={`${fieldId}-hint`}>
             {configured
               ? c(
-                "留白會保留目前的 Key。已儲存 Key 不代表連線或額度已驗證。",
+                "留空会保留当前的 Key。已保存 Key 不代表连接或额度已验证。",
                 "Leave blank to keep the current key. A saved key does not verify connectivity or available quota.",
               )
               : t("settings.integrations.storageHint")}
             {settings?.perplexity_key_source === "environment" && (
-              <> {c("目前使用主機環境中的 Key。", "Currently using the host environment's key.")}</>
+              <> {c("当前使用主机环境中的 Key。", "Currently using the host environment's key.")}</>
             )}
           </p>
           <div className={styles.options}>
             <label>
-              <span className="field-label">{c("搜尋模式", "Search mode")}</span>
+              <span className="field-label">{c("搜索模式", "Search mode")}</span>
               <select
                 className="input-shell"
                 value={model}
@@ -256,14 +256,14 @@ export function WebSearchSettings() {
                   clearTest();
                 }}
               >
-                <option value="sonar">{c("一般搜尋 · Sonar", "Standard search · Sonar")}</option>
+                <option value="sonar">{c("常规搜索 · Sonar", "Standard search · Sonar")}</option>
                 <option value="sonar-reasoning-pro">
-                  {c("深度搜尋 · Sonar Reasoning Pro", "Deep search · Sonar Reasoning Pro")}
+                  {c("深度搜索 · Sonar Reasoning Pro", "Deep search · Sonar Reasoning Pro")}
                 </option>
               </select>
             </label>
             <label>
-              <span className="field-label">{c("逾時秒數", "Timeout (seconds)")}</span>
+              <span className="field-label">{c("超时秒数", "Timeout (seconds)")}</span>
               <input
                 className="input-shell"
                 type="number"
@@ -284,7 +284,7 @@ export function WebSearchSettings() {
           </div>
           {!validTimeout && ready && (
             <p className={styles.error} role="alert">
-              {c("逾時秒數需為 10–300 的整數。", "Timeout must be a whole number from 10 to 300 seconds.")}
+              {c("超时秒数需为 10–300 的整数。", "Timeout must be a whole number from 10 to 300 seconds.")}
             </p>
           )}
           <div className={styles.actions}>
@@ -294,7 +294,7 @@ export function WebSearchSettings() {
             </button>
             {dirty && (
               <span className={styles.hint}>
-                {c("有未儲存的變更，請先儲存再測試連線。", "Save your changes before testing the connection.")}
+                {c("有未保存的变更，请先保存再测试连接。", "Save your changes before testing the connection.")}
               </span>
             )}
           </div>
@@ -320,10 +320,10 @@ export function WebSearchSettings() {
                 onClick={() => void testConnection()}
               >
                 {testing ? <Spinner /> : <Radio size={15} />}
-                {testing ? c("測試連線中…", "Testing connection…") : c("測試已儲存設定", "Test saved settings")}
+                {testing ? c("测试连接中…", "Testing connection…") : c("测试已保存设置", "Test saved settings")}
               </button>
               <small>
-                {c("會送出一次公開查詢，可能產生 API 費用。", "Sends one public query and may incur an API charge.")}
+                {c("会发送一次公开查询，可能产生 API 费用。", "Sends one public query and may incur an API charge.")}
               </small>
             </div>
             {resultCode && (
@@ -331,8 +331,8 @@ export function WebSearchSettings() {
                 <strong>{webSearchStatus(resultCode, en)}</strong>
                 {testResult && (
                   <span>
-                    {c("耗時", "Duration")}: {searchDuration(testResult.duration_seconds)} · {" "}
-                    {c("服務端回報費用", "Provider-reported cost")}: {searchCost(testResult.usage?.cost_usd)}
+                    {c("耗时", "Duration")}: {searchDuration(testResult.duration_seconds)} · {" "}
+                    {c("服务端返回的费用", "Provider-reported cost")}: {searchCost(testResult.usage?.cost_usd)}
                   </span>
                 )}
               </div>

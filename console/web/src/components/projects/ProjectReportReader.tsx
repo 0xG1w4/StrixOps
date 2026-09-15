@@ -240,12 +240,12 @@ function ReportMarkdown({ report, locale }: { report: ProjectReportVersion; loca
   const components = React.useMemo<Components>(() => ({
     table: ({ children }) => (
       <div className="report-table-scroll" role="region" tabIndex={0}
-        aria-label={locale === "en" ? "Report table, scroll horizontally when needed" : "報告表格，可左右捲動"}>
+        aria-label={locale === "en" ? "Report table, scroll horizontally when needed" : "报告表格，可左右滚动"}>
         <table>{children}</table>
       </div>
     ),
     pre: ({ children }) => (
-      <pre tabIndex={0} aria-label={locale === "en" ? "Code block" : "程式碼區塊"}>{children}</pre>
+      <pre tabIndex={0} aria-label={locale === "en" ? "Code block" : "代码块"}>{children}</pre>
     ),
     // Existing stored Markdown remains byte-for-byte unchanged. Only exact
     // snapshot source identifiers become navigation links in the reader.

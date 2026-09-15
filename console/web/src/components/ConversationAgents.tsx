@@ -59,14 +59,14 @@ export default function ConversationAgents({ name, run, selected, onSelect, onCl
   const entry = selected ? run?.agents?.[selected] : null;
   const file = prompt?.key === key ? prompt.file : null;
   return (
-    <aside className={styles.agents} aria-label={c("代理樹與詳情", "Agent tree and details")} onKeyDown={event => { if (event.key === "Escape") onClose(); }}>
+    <aside className={styles.agents} aria-label={c("代理树与详情", "Agent tree and details")} onKeyDown={event => { if (event.key === "Escape") onClose(); }}>
       <div className={styles.agentHeader}>
         <strong>{c("代理", "Agents")} · {entries.length}</strong>
-        <button type="button" onClick={onClose} aria-label={c("收合代理面板", "Close agent panel")}><X size={15} /></button>
+        <button type="button" onClick={onClose} aria-label={c("收起代理面板", "Close agent panel")}><X size={15} /></button>
       </div>
-      <nav className={styles.agentTree} aria-label={c("切換代理", "Select an agent")}>
+      <nav className={styles.agentTree} aria-label={c("切换代理", "Select an agent")}>
         <button type="button" className={styles.agentRow} aria-pressed={!selected} onClick={() => onSelect("")}>
-          <strong>{c("全部對話", "All conversations")}</strong><small>{c("指令僅送主代理", "Hints go only to root")}</small>
+          <strong>{c("全部对话", "All conversations")}</strong><small>{c("指令仅发送给主代理", "Hints go only to root")}</small>
         </button>
         {ordered.map(({ id, depth }) => {
           const agent = run!.agents[id];
@@ -78,15 +78,15 @@ export default function ConversationAgents({ name, run, selected, onSelect, onCl
             </button>
           );
         })}
-        {!entries.length && <p className={styles.agentEmpty}>{c("尚未取得代理紀錄。", "No agent records yet.")}</p>}
+        {!entries.length && <p className={styles.agentEmpty}>{c("暂无代理记录。", "No agent records yet.")}</p>}
       </nav>
       {selected && (
-        <section className={styles.agentDetail} aria-label={c("選取代理詳情", "Selected agent details")}>
+        <section className={styles.agentDetail} aria-label={c("选中代理详情", "Selected agent details")}>
           <h3>{entry?.name || selected}</h3><code>{selected}</code>
-          <p>{entry?.task || c("沒有任務說明。", "No task description recorded.")}</p>
+          <p>{entry?.task || c("没有任务说明。", "No task description recorded.")}</p>
           {file ? (
             <a href={apiURL(`/api/runs/${encodeURIComponent(name)}/prompts/${encodeURIComponent(file)}`)} target="_blank" rel="noopener noreferrer"><FileText size={13} />{c("查看 Prompt", "View prompt")}</a>
-          ) : <span>{c("此代理沒有可用的 Prompt 快照。", "No prompt snapshot is available for this agent.")}</span>}
+          ) : <span>{c("此代理没有可用的 Prompt 快照。", "No prompt snapshot is available for this agent.")}</span>}
         </section>
       )}
     </aside>

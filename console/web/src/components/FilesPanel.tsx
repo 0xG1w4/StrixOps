@@ -98,8 +98,8 @@ function FilesWorkspace({ name, live, initialFilter }: { name: string; live: boo
   const undelivered = files.filter(file => file.metadata && !file.metadata.deliverable).length;
   const tabs: Array<{ key: FileFilter; label: string; count: number }> = [
     { key: "all", label: en ? "All files" : "全部", count: files.length },
-    { key: "evidence", label: en ? "Evidence" : "證據", count: evidenceCount },
-    { key: "artifacts", label: en ? "Other files" : "其他檔案", count: files.length - evidenceCount },
+    { key: "evidence", label: en ? "Evidence" : "证据", count: evidenceCount },
+    { key: "artifacts", label: en ? "Other files" : "其他文件", count: files.length - evidenceCount },
   ];
   const choose = (file: RunFile) => {
     setSelectedPath(file.path);
@@ -109,50 +109,50 @@ function FilesWorkspace({ name, live, initialFilter }: { name: string; live: boo
   return (
     <div className={styles.panel} data-testid="files-panel">
       <div className={styles.toolbar}>
-        <div className={styles.filterGroup} role="group" aria-label={en ? "File sources" : "檔案來源"}>
+        <div className={styles.filterGroup} role="group" aria-label={en ? "File sources" : "文件来源"}>
           {tabs.map(tab => <button key={tab.key} type="button" aria-pressed={filter === tab.key}
             onClick={() => setFilter(tab.key)}>{tab.label}<span>{hasIndex ? tab.count : "—"}</span></button>)}
         </div>
         <div className={styles.actions}>
           <button className="button-ghost button-compact" type="button" onClick={() => setRefresh(value => value + 1)}
-            aria-label={en ? "Refresh files" : "重新整理檔案"}><RefreshCw size={14} />{en ? "Refresh" : "重新整理"}</button>
+            aria-label={en ? "Refresh files" : "刷新文件"}><RefreshCw size={14} />{en ? "Refresh" : "刷新"}</button>
           <a className="button-secondary button-compact" href={archiveURL(name)} download={`${name}.zip`}
-            title={en ? "Download the available run files as ZIP" : "下載任務中可交付的檔案 ZIP"}>
-            <Package size={14} />{en ? "Download ZIP" : "下載 ZIP"}</a>
+            title={en ? "Download the available run files as ZIP" : "将任务中可交付的文件下载为 ZIP"}>
+            <Package size={14} />{en ? "Download ZIP" : "下载 ZIP"}</a>
         </div>
       </div>
       {failures.length > 0 && <div className={styles.error} role="alert">
         <AlertTriangle size={16} />
-        <span>{en ? "Could not refresh " : "無法更新"}{failures.map(({ kind }) => kind === "evidence" ? en ? "evidence metadata" : "證據中繼資料" : en ? "file index" : "檔案索引").join(en ? " and " : "與")}{en ? ". " : "。"}
-          {failures.some(failure => failure.timeout) && (en ? "A request timed out. " : "請求逾時。")}
-          {en ? "The list may be incomplete or show the last available records." : "列表可能不完整，或顯示上次取得的資料。"}</span>
-        <button className="button-secondary button-compact" type="button" onClick={() => setRefresh(value => value + 1)}>{en ? "Retry" : "重試"}</button>
+        <span>{en ? "Could not refresh " : "无法刷新"}{failures.map(({ kind }) => kind === "evidence" ? en ? "evidence metadata" : "证据元数据" : en ? "file index" : "文件索引").join(en ? " and " : "与")}{en ? ". " : "。"}
+          {failures.some(failure => failure.timeout) && (en ? "A request timed out. " : "请求超时。")}
+          {en ? "The list may be incomplete or show the last available records." : "列表可能不完整，或显示上次获取的记录。"}</span>
+        <button className="button-secondary button-compact" type="button" onClick={() => setRefresh(value => value + 1)}>{en ? "Retry" : "重试"}</button>
       </div>}
       {undelivered > 0 && <p className={styles.deliverySummary}><AlertTriangle size={13} />
-        {en ? `${undelivered} evidence item(s) have metadata only; select one to see why.` : `${undelivered} 筆證據僅有中繼資料，選取後可查看未交付原因。`}</p>}
+        {en ? `${undelivered} evidence item(s) have metadata only; select one to see why.` : `${undelivered} 项证据仅有元数据，选择后可查看未交付原因。`}</p>}
       <div className={styles.workspace}>
-        <aside className={styles.sidebar} aria-label={en ? "Run files" : "任務檔案"}>
+        <aside className={styles.sidebar} aria-label={en ? "Run files" : "任务文件"}>
           <label className={styles.search}><Search size={14} /><input value={query} onChange={event => setQuery(event.target.value)}
-            placeholder={en ? "Search path, category or SHA256" : "搜尋路徑、類別或 SHA256"}
-            aria-label={en ? "Search files" : "搜尋檔案"} spellCheck={false} /></label>
-          <div className={styles.count} aria-live="polite">{loading ? en ? "Loading files…" : "載入檔案中…"
-            : !hasIndex ? en ? "File count unavailable" : "無法取得檔案數量" : en ? `${filtered.length} files` : `${filtered.length} 個檔案`}</div>
+            placeholder={en ? "Search path, category or SHA256" : "搜索路径、类别或 SHA256"}
+            aria-label={en ? "Search files" : "搜索文件"} spellCheck={false} /></label>
+          <div className={styles.count} aria-live="polite">{loading ? en ? "Loading files…" : "正在加载文件…"
+            : !hasIndex ? en ? "File count unavailable" : "无法获取文件数量" : en ? `${filtered.length} files` : `${filtered.length} 个文件`}</div>
           <div className={styles.tree}>
-            {loading && <div className={styles.empty}><Spinner /><span>{en ? "Loading file indexes" : "載入檔案索引"}</span></div>}
+            {loading && <div className={styles.empty}><Spinner /><span>{en ? "Loading file indexes" : "加载文件索引"}</span></div>}
             {!loading && !hasIndex && <div className={styles.empty}><AlertTriangle size={24} />
-              <strong>{en ? "File indexes unavailable" : "無法取得檔案索引"}</strong>
-              <small>{en ? "Retry to load the file and evidence indexes." : "請重試以載入檔案與證據索引。"}</small></div>}
+              <strong>{en ? "File indexes unavailable" : "无法获取文件索引"}</strong>
+              <small>{en ? "Retry to load the file and evidence indexes." : "请重试以加载文件与证据索引。"}</small></div>}
             {!loading && hasIndex && filtered.length === 0 && <div className={styles.empty}>
-              <Folder size={24} /><span>{query || filter !== "all" ? en ? "No matching files" : "沒有符合條件的檔案" : en ? "No files available yet" : "尚無可用檔案"}</span>
-              <small>{en ? "Files appear here as the task saves them." : "任務保存檔案後會顯示於此。"}</small>
+              <Folder size={24} /><span>{query || filter !== "all" ? en ? "No matching files" : "没有符合条件的文件" : en ? "No files available yet" : "尚无可用文件"}</span>
+              <small>{en ? "Files appear here as the task saves them." : "任务保存文件后会显示于此。"}</small>
             </div>}
             <TreeRows key={`${filter}:${query}`} tree={tree} selected={selectedPath} choose={choose} en={en} />
           </div>
         </aside>
-        <section className={styles.preview} ref={previewRef} aria-label={en ? "File preview" : "檔案預覽"}>
+        <section className={styles.preview} ref={previewRef} aria-label={en ? "File preview" : "文件预览"}>
           {selected ? <SelectedFile key={selected.path} file={selected} files={files} visible={visible} en={en} />
-            : <div className={styles.empty}><FileText size={32} /><strong>{en ? "Select a file" : "選取檔案"}</strong>
-              <span>{selectedPath ? en ? "This file is no longer in the available index." : "此檔案已不在目前索引中。" : en ? "Evidence and other outputs share one preview." : "證據與其他產物共用同一個預覽區。"}</span></div>}
+            : <div className={styles.empty}><FileText size={32} /><strong>{en ? "Select a file" : "选择文件"}</strong>
+              <span>{selectedPath ? en ? "This file is no longer in the available index." : "此文件已不在目前索引中。" : en ? "Evidence and other outputs share one preview." : "证据与其他产物共用同一个预览区。"}</span></div>}
         </section>
       </div>
     </div>
@@ -217,49 +217,49 @@ function SelectedFile({ file, files, visible, en }: { file: RunFile; files: RunF
     } catch { return preview.text; }
   }, [preview, raw, ext]);
   const csv = React.useMemo(() => preview && ext === "csv" && !raw ? parseFileCsv(preview.text) : [], [preview, ext, raw]);
-  const date = (value: string) => Number.isNaN(Date.parse(value)) ? value || "—" : new Date(value).toLocaleString(en ? "en-US" : "zh-TW");
+  const date = (value: string) => Number.isNaN(Date.parse(value)) ? value || "—" : new Date(value).toLocaleString(en ? "en-US" : "zh-CN");
 
   return <>
     <header className={styles.previewHeader}>
-      <div className={styles.identity}><span className={styles.kind}>{file.evidence ? en ? "Evidence" : "證據" : en ? "File" : "檔案"}</span>
+      <div className={styles.identity}><span className={styles.kind}>{file.evidence ? en ? "Evidence" : "证据" : en ? "File" : "文件"}</span>
         <h3>{file.path}</h3><small>{formatBytes(file.size)}{ext ? ` · ${ext.toUpperCase()}` : ""}</small></div>
       <div className={styles.actions}>
         {formattable && preview && !preview.binary && <button className="button-ghost button-compact" type="button" onClick={() => setRaw(value => !value)}>
-          {raw ? en ? "Formatted" : "格式化" : en ? "Raw" : "原始內容"}</button>}
+          {raw ? en ? "Formatted" : "格式化" : en ? "Raw" : "原始内容"}</button>}
         {file.downloadPath ? <a className="button-secondary button-compact" href={apiURL(file.downloadPath)} download={file.path.split("/").pop()}>
-          <Download size={14} />{en ? "Download file" : "下載檔案"}</a>
+          <Download size={14} />{en ? "Download file" : "下载文件"}</a>
           : <button className="button-secondary button-compact" type="button" disabled><Download size={14} />{en ? "Not delivered" : "未交付"}</button>}
       </div>
     </header>
     {metadata && <dl className={styles.metadata}>
-      <div><dt>{en ? "Category" : "類別"}</dt><dd>{metadata.categoryLabel || metadata.category}<small>{metadata.categoryLabel ? metadata.category : ""}</small></dd></div>
-      <div><dt>{en ? "Collected" : "收集時間"}</dt><dd><time dateTime={metadata.collectedAt}>{date(metadata.collectedAt)}</time></dd></div>
-      <div><dt>{en ? "Delivery" : "交付狀態"}</dt><dd className={!metadata.deliverable ? styles.warningText : undefined}>{metadata.deliverable ? en ? "Available" : "可下載" : en ? "Metadata only" : "僅中繼資料"}{metadata.oversize && <small>{en ? "Oversize" : "超出大小限制"}</small>}</dd></div>
-      <div className={styles.digest}><dt>SHA256</dt><dd>{metadata.sha256 || (en ? "Not recorded" : "未記錄")}</dd></div>
+      <div><dt>{en ? "Category" : "类别"}</dt><dd>{metadata.categoryLabel || metadata.category}<small>{metadata.categoryLabel ? metadata.category : ""}</small></dd></div>
+      <div><dt>{en ? "Collected" : "收集时间"}</dt><dd><time dateTime={metadata.collectedAt}>{date(metadata.collectedAt)}</time></dd></div>
+      <div><dt>{en ? "Delivery" : "交付状态"}</dt><dd className={!metadata.deliverable ? styles.warningText : undefined}>{metadata.deliverable ? en ? "Available" : "可下载" : en ? "Metadata only" : "仅元数据"}{metadata.oversize && <small>{en ? "Oversize" : "超出大小限制"}</small>}</dd></div>
+      <div className={styles.digest}><dt>SHA256</dt><dd>{metadata.sha256 || (en ? "Not recorded" : "未记录")}</dd></div>
     </dl>}
-    {file.evidence && !metadata && <p className={styles.notice}>{en ? "Evidence metadata is unavailable; this file was returned by the file index." : "證據中繼資料目前不可用；此檔案來自檔案索引。"}</p>}
+    {file.evidence && !metadata && <p className={styles.notice}>{en ? "Evidence metadata is unavailable; this file was returned by the file index." : "证据元数据目前不可用；此文件来自文件索引。"}</p>}
     {!file.downloadPath ? <div className={styles.unavailable}><AlertTriangle size={22} />
-      <strong>{en ? "This evidence was not delivered" : "這筆證據尚未交付"}</strong>
-      <p>{metadata?.oversize ? en ? "The captured file exceeded the collection limit. Only its metadata is available." : "擷取檔案超出收集大小限制，目前僅保留中繼資料。" : en ? "The attachment could not be collected or is no longer available. Preview and download are disabled." : "附件未能收集或已無法存取，因此無法預覽或下載。"}</p>
+      <strong>{en ? "This evidence was not delivered" : "这项证据尚未交付"}</strong>
+      <p>{metadata?.oversize ? en ? "The captured file exceeded the collection limit. Only its metadata is available." : "采集的文件超出收集大小限制，当前仅保留元数据。" : en ? "The attachment could not be collected or is no longer available. Preview and download are disabled." : "附件未能收集或已无法访问，因此无法预览或下载。"}</p>
       {metadata?.error && <pre>{metadata.error}</pre>}
-    </div> : status === "loading" ? <div className={styles.empty}><Spinner /><span>{en ? "Loading preview…" : "載入預覽中…"}</span></div>
-      : status === "error" || status === "timeout" ? <div className={styles.empty} role="alert"><AlertTriangle size={24} /><strong>{status === "timeout" ? en ? "Preview request timed out" : "預覽請求逾時" : en ? "Preview unavailable" : "無法載入預覽"}</strong>
-        <span>{status === "timeout" ? en ? "Loading exceeded 12 seconds. Retry or download the file." : "載入超過 12 秒，請重試或下載檔案。" : en ? "The file may have changed or become unavailable. Retry or download the file." : "檔案可能已變更或無法存取，請重試或下載檔案。"}</span>
-        <button className="button-secondary button-compact" type="button" onClick={() => setRetry(value => value + 1)}>{en ? "Retry preview" : "重試預覽"}</button></div>
-        : preview?.binary ? <div className={styles.empty}><FileText size={30} /><strong>{en ? "Binary file" : "二進位檔案"}</strong><span>{en ? "Download this file to view it in a compatible application." : "請下載後使用相容的程式開啟。"}</span></div>
+    </div> : status === "loading" ? <div className={styles.empty}><Spinner /><span>{en ? "Loading preview…" : "正在加载预览…"}</span></div>
+      : status === "error" || status === "timeout" ? <div className={styles.empty} role="alert"><AlertTriangle size={24} /><strong>{status === "timeout" ? en ? "Preview request timed out" : "预览请求超时" : en ? "Preview unavailable" : "无法加载预览"}</strong>
+        <span>{status === "timeout" ? en ? "Loading exceeded 12 seconds. Retry or download the file." : "加载超过 12 秒，请重试或下载文件。" : en ? "The file may have changed or become unavailable. Retry or download the file." : "文件可能已变更或无法访问，请重试或下载文件。"}</span>
+        <button className="button-secondary button-compact" type="button" onClick={() => setRetry(value => value + 1)}>{en ? "Retry preview" : "重试预览"}</button></div>
+        : preview?.binary ? <div className={styles.empty}><FileText size={30} /><strong>{en ? "Binary file" : "二进制文件"}</strong><span>{en ? "Download this file to view it in a compatible application." : "请下载后使用兼容的程序打开。"}</span></div>
           : preview && <>
-            {preview.truncated && <p className={styles.notice}>{en ? "Preview is limited to the first 400 KB. Download for the complete file." : "預覽僅顯示前 400 KB，下載可取得完整檔案。"}</p>}
+            {preview.truncated && <p className={styles.notice}>{en ? "Preview is limited to the first 400 KB. Download for the complete file." : "预览仅显示前 400 KB，下载可获取完整文件。"}</p>}
             <div className={styles.content}>
-              {!preview.text ? <p className={styles.notice}>{en ? "Empty file" : "空白檔案"}</p>
+              {!preview.text ? <p className={styles.notice}>{en ? "Empty file" : "空文件"}</p>
                 : ["md", "markdown"].includes(ext) && !raw ? <div className={`prose-report ${styles.markdown}`}><ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml
                   urlTransform={value => { const link = fileLink(value, file.path, files); return link.startsWith("/api/") ? apiURL(link) : link; }}
                   components={{
                     a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
-                    img: ({ alt }) => <span className={styles.notice}>{en ? "Image not loaded" : "圖片未載入"}{alt ? `: ${alt}` : ""}</span>,
+                    img: ({ alt }) => <span className={styles.notice}>{en ? "Image not loaded" : "图片未加载"}{alt ? `: ${alt}` : ""}</span>,
                   }}>{preview.text}</ReactMarkdown></div>
                   : ext === "csv" && !raw ? <><div className={styles.tableScroll}><table><thead><tr>{(csv[0] ?? []).slice(0, 200).map((cell, index) => <th key={index}>{cell}</th>)}</tr></thead>
                     <tbody>{csv.slice(1, 401).map((row, index) => <tr key={index}>{row.slice(0, 200).map((cell, column) => <td key={column}>{cell}</td>)}</tr>)}</tbody></table></div>
-                    {(csv.length > 401 || csv.some(row => row.length > 200)) && <p className={styles.notice}>{en ? "Table preview is limited to 400 rows and 200 columns." : "表格預覽上限為 400 列、200 欄。"}</p>}</>
+                    {(csv.length > 401 || csv.some(row => row.length > 200)) && <p className={styles.notice}>{en ? "Table preview is limited to 400 rows and 200 columns." : "表格预览上限为 400 行、200 列。"}</p>}</>
                     : <pre className={styles.code}>{formatted}</pre>}
             </div>
           </>}

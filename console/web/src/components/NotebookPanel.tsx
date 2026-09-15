@@ -17,13 +17,13 @@ export default function NotebookPanel({ name, run, view, onViewChange }: {
   const { locale } = useI18n();
   const en = locale === "en";
   const choices: Array<{ value: NotebookView; label: string; icon: typeof BookOpen }> = [
-    { value: "shared", label: en ? "Shared notes" : "共享筆記", icon: BookOpen },
-    { value: "coverage", label: en ? "Test coverage" : "測試覆蓋", icon: ListChecks },
-    { value: "threat_models", label: en ? "Threat models" : "威脅模型", icon: Network },
+    { value: "shared", label: en ? "Shared notes" : "共享笔记", icon: BookOpen },
+    { value: "coverage", label: en ? "Test coverage" : "测试覆盖", icon: ListChecks },
+    { value: "threat_models", label: en ? "Threat models" : "威胁模型", icon: Network },
   ];
   return (
-    <section className="min-w-0" aria-label={en ? "Notes" : "筆記"}>
-      <div className="flex flex-wrap gap-2 border-b border-line/6 p-3" role="group" aria-label={en ? "Note type" : "筆記類型"}>
+    <section className="min-w-0" aria-label={en ? "Notes" : "笔记"}>
+      <div className="flex flex-wrap gap-2 border-b border-line/6 p-3" role="group" aria-label={en ? "Note type" : "笔记类型"}>
         {choices.map(({ value, label, icon: Icon }) => (
           <button
             key={value}
