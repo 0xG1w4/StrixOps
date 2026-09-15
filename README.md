@@ -340,6 +340,22 @@ retain the submitted depth, and the rerun dialog starts with the source task's
 depth so you can keep or change it. Historical tasks without a saved mode use
 Default. The task detail and batch members display their saved depth.
 
+The rerun dialog offers **New task** (新任务) and **Continue task** (接续任务).
+Both create independent assessments. Continue task uses the source task's
+confirmed final model report as historical context and accepts additional
+instructions. A draft, missing report, or task still finalizing cannot be used;
+a stopped or failed task becomes eligible after a final report is generated.
+The dialog lets you preview the complete report before starting.
+
+Continuation saves an immutable `previous_report.md` and its source/hash in
+the new run, including queued targets. The full report enters the root's first
+input once; children receive relevant excerpts through their assignments.
+It never becomes operator instructions or automatically imports old findings,
+conversations, or evidence. Continuing again uses only the immediate source's
+final report. Current scope and instructions govern all new testing. Oversized
+input is rejected before launch, without truncating the report; offline budget
+estimates use the selected model's bundled limits or the configured fallback.
+
 | Limit | Console | CLI |
 |---|---|---|
 | Target count | 1 in single-target mode; 2–100 in multi-target mode | 1–100 distinct targets |

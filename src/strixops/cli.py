@@ -131,6 +131,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--instruction-file", default="", help="path to operator instruction markdown")
     parser.add_argument("--instruction", default="", help="inline instruction (fallback)")
+    for flag in (
+        "--previous-report-file", "--source-run", "--source-report-sha256", "--source-report-generated-at"
+    ):
+        parser.add_argument(flag, default="", help=argparse.SUPPRESS)
     parser.add_argument(
         "--max-concurrent", type=int, default=2, help="maximum active targets in a batch (1-16)"
     )
@@ -193,6 +197,16 @@ def main(argv: list[str] | None = None) -> int:
         report_language=(getattr(args, "report_language", "") or "").strip()
         or (os.environ.get("STRIXOPS_REPORT_LANG") or "").strip()
         or "zh-CN",
+        previous_report_file=args.previous_report_file,
+        continuation={
+            "source_run": args.source_run,
+            "report_sha256": args.source_report_sha256,
+            "snapshot_file": "previous_report.md",
+            **(
+                {"report_generated_at": args.source_report_generated_at}
+                if args.source_report_generated_at else {}
+            ),
+        } if any((args.source_run, args.source_report_sha256, args.source_report_generated_at)) else None,
     )
     if not spec.instruction_file and args.instruction:
         spec.instruction_text = args.instruction
@@ -204,6 +218,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_FAILED
 
     spec.load_instruction()
+    try:
+        spec.load_previous_report()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr, flush=True)
+        return EXIT_FAILED
 
     settings = EngineSettings.from_env()
     if args.dry_run:

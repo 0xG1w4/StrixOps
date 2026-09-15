@@ -60,6 +60,7 @@ from strixops.console import (
     prompt_probe,
     proxy_status,
     report_generation,
+    rerun_context,
     settings_store,
     web_search_settings,
 )
@@ -273,6 +274,13 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
         summary["failure_reason"] = str(record["failure_reason"])
     if isinstance(record.get("report_synthesized"), bool):
         summary["report_synthesized"] = record["report_synthesized"]
+    continuation = scan_config.get("continuation") or launch_meta.get("continuation")
+    if isinstance(continuation, dict):
+        summary["continuation"] = {
+            key: continuation[key] for key in (
+                "source_run", "report_sha256", "report_generated_at", "snapshot_file",
+            ) if isinstance(continuation.get(key), str)
+        }
     llm_usage = record.get("llm_usage")
     if isinstance(llm_usage, dict):
         summary["llm_usage"] = llm_usage
@@ -693,6 +701,17 @@ def _owned_engine_running(name: str) -> bool:
         and info["popen"].poll() is None
         for info in state.scans.values()
     )
+
+
+@app.get("/api/runs/{name}/rerun-context")
+def run_rerun_context(name: str, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    run_dir = _report_generation_dir(name)
+    try:
+        snapshot = rerun_context.read_snapshot(run_dir, engine_running=_owned_engine_running(name))
+    except rerun_context.ContinuationError as exc:
+        return {"can_continue": False, "source_run": name, "reason": exc.code, "message": str(exc)}
+    return {"can_continue": True, **snapshot["metadata"], "markdown": snapshot["markdown"]}
 
 
 @app.get("/api/runs/{name}/report/generate")
@@ -1400,6 +1419,10 @@ class ScanBody(BaseModel):
     name: str = Field(default="", max_length=160)
     max_concurrent: int = Field(default=2, ge=1, le=16, strict=True)
     source_draft_id: str = Field(default="", max_length=128)
+    rerun_mode: Literal["new", "continue"] = "new"
+    source_run: str = Field(default="", max_length=255)
+    source_report_sha256: str = Field(default="", max_length=64)
+    additional_instruction: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -1488,6 +1511,47 @@ def _validated_launch_project(body: ScanBody) -> dict[str, Any] | None:
     return project
 
 
+def _prepare_continuation(body: ScanBody, llm_env: dict[str, str]) -> tuple[ScanBody, dict | None]:
+    """Freeze the selected report and check full input before any launch mutation."""
+    if body.rerun_mode == "new":
+        return body, None
+    try:
+        if not body.source_run or not body.source_report_sha256:
+            raise rerun_context.ContinuationError("invalid_continuation")
+        try:
+            run_dir = _report_generation_dir(body.source_run)
+        except HTTPException as exc:
+            raise rerun_context.ContinuationError("report_unreadable") from exc
+        snapshot = rerun_context.read_snapshot(
+            run_dir, engine_running=_owned_engine_running(body.source_run),
+        )
+        if snapshot["metadata"]["report_sha256"] != body.source_report_sha256:
+            raise rerun_context.ContinuationError("report_changed")
+        instruction = body.instruction
+        if body.additional_instruction.strip():
+            instruction += "\n\nCURRENT FOLLOW-UP INSTRUCTIONS\n" + body.additional_instruction
+        prepared = body.model_copy(update={"instruction": instruction, "additional_instruction": ""})
+
+        from strixops.console.continuation_budget import validate_batch_budget
+        from strixops.engine.scanconfig import ScanSpec
+
+        # Each target is launched independently with the same reference. Count
+        # the shared report once while validating each target's actual scope.
+        specs = []
+        for target in _requested_targets(prepared):
+            specs.append(ScanSpec(
+                target=target, scan_type=prepared.scan_type, scan_mode=prepared.scan_mode,
+                crypto=prepared.crypto, instruction_text=instruction,
+                socks5_proxy=prepared.socks5, gsocket_key=prepared.gsocket,
+                report_language="en" if prepared.language.startswith("en") else "zh-CN",
+                continuation=snapshot["metadata"],
+            ))
+        validate_batch_budget(specs, snapshot["markdown"], llm_env)
+        return prepared, snapshot
+    except rerun_context.ContinuationError as exc:
+        raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": str(exc)}) from exc
+
+
 class TargetsPreflightBody(BaseModel):
     targets: list[str] = Field(min_length=1, max_length=MAX_TARGETS)
     scan_type: Literal["web", "internal"] = "web"
@@ -1543,6 +1607,7 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
     if not body.dry_run:
         llm_env = _resolve_llm_env(body)
         _validate_llm_env(llm_env)
+    body, continuation_snapshot = _prepare_continuation(body, llm_env)
     report_model = llm_env.get("report_llm") or llm_env.get("strix_llm") or ""
     report_api = (
         llm_env.get("report_api_mode") or "auto"
@@ -1568,6 +1633,9 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
 
     instruction_file = run_dir / "instruction.md"
     instruction_file.write_text(body.instruction or "# (no instruction)", encoding="utf-8")
+    continuation = (
+        rerun_context.materialize(run_dir, continuation_snapshot) if continuation_snapshot else None
+    )
 
     # Launch facts the engine does not put in run.json (dry run, model route)
     # for the cockpit's info surface and the Rerun action. The API key is
@@ -1578,6 +1646,7 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
                 "target": primary_target,
                 "scan_type": body.scan_type,
                 "scan_mode": body.scan_mode,
+                **({"continuation": continuation} if continuation else {}),
                 **({"targets": targets, "target_count": len(targets)} if len(targets) > 1 else {}),
                 "dry_run": bool(body.dry_run),
                 "model": llm_env.get("strix_llm") or "",
@@ -1616,6 +1685,14 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
         "--instruction-file",
         str(instruction_file),
     ]
+    if continuation:
+        argv += [
+            "--previous-report-file", str(run_dir / rerun_context.SNAPSHOT),
+            "--source-run", continuation["source_run"],
+            "--source-report-sha256", continuation["report_sha256"],
+        ]
+        if continuation.get("report_generated_at"):
+            argv += ["--source-report-generated-at", continuation["report_generated_at"]]
     if body.crypto:
         argv.append("--crypto")
     if body.socks5:
@@ -1763,11 +1840,13 @@ def _create_scan_batch(body: ScanBody) -> dict:
     llm = {} if body.dry_run else _resolve_llm_env(body)
     if llm:
         _validate_llm_env(llm)
+    body, continuation_snapshot = _prepare_continuation(body, llm)
     sources = _fofa_sources(body.source_draft_id, targets)
     try:
         batch = _queue_controller().create(
             body.model_dump(), targets=targets, llm_env=llm,
             search_env=web_search_settings.launch_environment(), sources=sources,
+            continuation=continuation_snapshot,
         )
     except QueueError as exc:
         raise _queue_http_error(exc) from exc

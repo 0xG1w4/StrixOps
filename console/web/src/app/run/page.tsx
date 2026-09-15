@@ -56,6 +56,8 @@ const TERMINAL_STATUSES = new Set([
   "cancelled",
   "stopped",
   "crashed",
+  "interrupted",
+  "aborted",
 ]);
 
 const FAILED_STATUSES = new Set(["failed", "crashed"]);
@@ -481,6 +483,15 @@ function Cockpit() {
                   {locale === "zh-CN" ? "批次" : "Batch"} ↗
                 </Link>
               )}
+              {run.continuation?.source_run && (
+                <Link
+                  className="mono-chip block min-w-0 max-w-full truncate hover:text-accent"
+                  href={`/run?name=${encodeURIComponent(run.continuation.source_run)}`}
+                  title={t("rerun.source", { name: run.continuation.source_run })}
+                >
+                  {t("rerun.source", { name: run.continuation.source_run })} ↗
+                </Link>
+              )}
               {run.source?.kind === "fofa" && run.source.search_id && (
                 <Link className="mono-chip hover:text-accent" href={`/fofa?search=${encodeURIComponent(run.source.search_id)}`}>
                   FOFA ↗
@@ -739,9 +750,11 @@ function Cockpit() {
           key={run.name}
           run={run}
           onCancel={() => setRerunOpen(false)}
-          onLaunched={(runName) => {
+          onLaunched={(result) => {
             setRerunOpen(false);
-            router.push(`/run?name=${encodeURIComponent(runName)}`);
+            router.push("batch_id" in result
+              ? `/batches/detail?id=${encodeURIComponent(result.batch_id)}`
+              : `/run?name=${encodeURIComponent(result.run_name)}`);
           }}
         />
       )}

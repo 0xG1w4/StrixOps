@@ -2,6 +2,7 @@
 
 import { authFetch } from "@/lib/auth";
 import type { ScanMode } from "@/lib/scan-mode";
+import type { BatchCreated } from "@/lib/task-batches";
 
 /* ============================================================================
    API client — the console backend contract.
@@ -103,6 +104,13 @@ export interface RunSummary {
   scan_mode?: ScanMode;
   batch_id?: string;
   source?: { kind: "fofa"; search_id: string; result_id: string };
+  /** Immutable final-report source used to start this independent task. */
+  continuation?: {
+    source_run: string;
+    report_sha256: string;
+    report_generated_at?: string;
+    snapshot_file?: string;
+  };
   queue?: { status: string };
   project_id: string;
   /** Whether the target still matches the project's current launch scope. */
@@ -447,6 +455,10 @@ export interface ScanRequest {
   socks5?: string | null;
   gsocket?: string | null;
   instruction?: string;
+  rerun_mode?: "new" | "continue";
+  source_run?: string;
+  source_report_sha256?: string;
+  additional_instruction?: string;
   dry_run?: boolean;
   profile_id?: string;
   language?: string;
@@ -461,6 +473,20 @@ export interface ScanLaunched {
   scan_id: string;
   run_name: string;
   pid: number;
+}
+
+/** Multi-target launches create a batch, including launches from a rerun. */
+export type ScanLaunchResult = ScanLaunched | BatchCreated;
+
+/** GET /api/runs/{name}/rerun-context; eligibility is verified by the backend. */
+export interface RerunContext {
+  can_continue: boolean;
+  reason?: string;
+  message?: string;
+  markdown?: string;
+  source_run: string;
+  report_sha256?: string;
+  report_generated_at?: string;
 }
 
 /* ------------------------------------------------------------------ settings */

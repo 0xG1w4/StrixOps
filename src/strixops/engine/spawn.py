@@ -21,11 +21,37 @@ from strixops.agents.prompts import engagement_context
 from strixops.engine.coordinator import STATUS_COMPLETED, AdmissionError, AgentCoordinator
 from strixops.engine.loop import run_agent_loop
 from strixops.engine.prompt_resources import PromptResources
-from strixops.engine.scanconfig import EngineContext, EngineServices
+from strixops.engine.scanconfig import (
+    PREVIOUS_REPORT_END,
+    PREVIOUS_REPORT_START,
+    EngineContext,
+    EngineServices,
+)
 from strixops.engine.sessions import scrub_images_from_items
 from strixops.platform.events import EventWriter
 
 logger = logging.getLogger(__name__)
+
+
+def _without_previous_report(value: Any) -> Any:
+    """Copy inherited history while omitting the root-only full report block."""
+    if isinstance(value, dict):
+        return {key: _without_previous_report(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_previous_report(item) for item in value]
+    if isinstance(value, str):
+        while PREVIOUS_REPORT_START in value:
+            start = value.index(PREVIOUS_REPORT_START)
+            end = value.find(PREVIOUS_REPORT_END, start + len(PREVIOUS_REPORT_START))
+            if end < 0:
+                break
+            value = (
+                value[:start]
+                + "\n[Previous final report omitted; "
+                "the parent supplies relevant excerpts in your assignment.]\n"
+                + value[end + len(PREVIOUS_REPORT_END):]
+            )
+    return value
 
 
 def make_spawn_child(services: EngineServices):
@@ -148,6 +174,9 @@ def _child_initial_input(
     """
     parts: list[str] = []
     if parent_history:
+        spec = frozen_spec if frozen_spec is not None else services.spec
+        if spec is not None and getattr(spec, "continuation", None):
+            parent_history = _without_previous_report(parent_history)
         rendered = json.dumps(scrub_images_from_items(parent_history), ensure_ascii=False, default=str)
         parts.append(
             "== Inherited context from parent (background only) ==\n"

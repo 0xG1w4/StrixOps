@@ -133,7 +133,7 @@ class ConsoleBatchController:
         )
 
     def create(self, body: dict, *, targets: list[str], llm_env: dict, search_env: dict,
-               sources: dict[str, dict] | None = None) -> dict:
+               sources: dict[str, dict] | None = None, continuation: dict | None = None) -> dict:
         scan_mode = body.get("scan_mode", SCAN_DEFAULT)
         if scan_mode not in SCAN_MODES:
             raise QueueError("queue_invalid")
@@ -147,6 +147,7 @@ class ConsoleBatchController:
             "scan": scan, "llm_env": llm_env, "search_env": search_env,
             "resources": _capture_resources(), "sources": sources or {},
             "runs_root": str(self.runs_root),
+            **({"continuation": continuation} if continuation is not None else {}),
         })
         try:
             return self.store.create_batch(
@@ -230,12 +231,20 @@ class ConsoleBatchController:
                 raise QueueError("scope_changed", "The project is no longer available.")
             project_assignment.write_assignment(run_dir, project["id"], source="console-batch")
         language = "en" if scan.get("language") == "en" else "zh-CN"
+        continuation = None
+        previous_report_file = ""
+        if snapshot.get("continuation") is not None:
+            from strixops.console.rerun_context import materialize
+
+            continuation = materialize(run_dir, snapshot["continuation"])
+            previous_report_file = str(run_dir / "previous_report.md")
         spec = ScanSpec(
             target=item["target"], scan_type=item["scan_type"], crypto=bool(scan.get("crypto")),
             scan_mode=scan.get("scan_mode", SCAN_DEFAULT),
             instruction_file=str(instruction_file), instruction_text=scan.get("instruction") or "",
             socks5_proxy=scan.get("socks5") or "", gsocket_key=scan.get("gsocket") or "",
             report_language=language,
+            previous_report_file=previous_report_file, continuation=continuation,
         )
         _publish_resources(run_dir, snapshot["resources"], spec)
         source = snapshot.get("sources", {}).get(item["target"])
@@ -264,11 +273,20 @@ class ConsoleBatchController:
             "project_scope_snapshot": projects_store.scope_for_project(project) if project else None,
             "batch_id": item["batch_id"], "batch_item_id": item["id"],
             **({"source": source} if source else {}),
+            **({"continuation": continuation} if continuation is not None else {}),
         }
         _write_private(run_dir / ".console_launch.json", metadata)
         argv = [sys.executable, "-m", "strixops.cli", "-t", item["target"],
                 "--scan-type", item["scan_type"], "--scan-mode", spec.scan_mode,
                 "--instruction-file", str(instruction_file)]
+        if continuation is not None:
+            argv.extend([
+                "--previous-report-file", previous_report_file,
+                "--source-run", continuation["source_run"],
+                "--source-report-sha256", continuation["report_sha256"],
+            ])
+            if continuation.get("report_generated_at"):
+                argv.extend(["--source-report-generated-at", continuation["report_generated_at"]])
         for key, flag in (("socks5", "--socks5"), ("gsocket", "--gsocket")):
             if scan.get(key):
                 argv.extend([flag, scan[key]])

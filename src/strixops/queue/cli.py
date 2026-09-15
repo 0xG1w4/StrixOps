@@ -48,6 +48,9 @@ class CliBatchController:
 
         spec = dataclasses.replace(spec)
         spec.load_instruction()
+        continuation = None
+        if spec.continuation is not None:
+            continuation = {"metadata": dict(spec.continuation), "markdown": spec.load_previous_report()}
         settings = dataclasses.replace(
             settings, strix_runs=str(resolve_runs_root(settings.strix_runs).resolve())
         )
@@ -57,6 +60,7 @@ class CliBatchController:
                 "spec": dataclasses.asdict(spec),
                 "settings": dataclasses.asdict(settings),
                 "resources": _capture_resources(),
+                **({"continuation": continuation} if continuation is not None else {}),
                 "environment": {
                     key: value
                     for key, value in os.environ.items()
@@ -123,6 +127,13 @@ class CliBatchController:
         spec = dataclasses.replace(
             ScanSpec(**snapshot["spec"]), target=item["target"], targets=[], instruction_file=""
         )
+        if snapshot.get("continuation") is not None:
+            from strixops.console.rerun_context import materialize
+
+            metadata = materialize(run_dir, snapshot["continuation"])
+            spec = dataclasses.replace(
+                spec, previous_report_file=str(run_dir / "previous_report.md"), continuation=metadata,
+            )
         _publish_resources(run_dir, snapshot["resources"], spec)
         env = os.environ.copy()
         for key in list(env):

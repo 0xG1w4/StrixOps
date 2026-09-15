@@ -321,6 +321,15 @@ async def _synthesize(source: SavedReportState, settings: EngineSettings) -> str
 
 
 def _publish(run_dir: Path, report: str, source: SavedReportState, generation: dict) -> None:
+    from strixops.console.rerun_context import publication_lock
+
+    # A continuation must capture one committed report version. This lock lasts
+    # only for publication; the potentially long model request runs outside it.
+    with publication_lock(run_dir):
+        _publish_locked(run_dir, report, source, generation)
+
+
+def _publish_locked(run_dir: Path, report: str, source: SavedReportState, generation: dict) -> None:
     # Re-read at commit time. Never save the snapshot or replace scan state with
     # the current model route; another Console operation may have added metadata.
     record = _json(run_dir, "run.json")

@@ -30,6 +30,12 @@ def main() -> int:
         spec = dataclasses.replace(
             ScanSpec(**snapshot["spec"]), target=item["target"], targets=[], instruction_file=""
         )
+        if snapshot.get("continuation") is not None:
+            spec = dataclasses.replace(
+                spec, previous_report_file=str(run_dir / "previous_report.md"),
+                continuation=snapshot["continuation"]["metadata"],
+            )
+            spec.load_previous_report()
         settings = dataclasses.replace(
             EngineSettings(**snapshot["settings"]),
             operator_hints_dir=str(run_dir / "operator_hints"),
