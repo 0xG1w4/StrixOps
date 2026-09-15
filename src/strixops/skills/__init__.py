@@ -171,7 +171,15 @@ def use_skill_snapshot(records: list[dict]):
         _FROZEN.reset(token)
 
 
-def default_root_skills(scan_type: str) -> list[str]:
+def _scan_mode_skills(scan_mode: str) -> list[str]:
+    if scan_mode == "default":
+        return []
+    if scan_mode == "deep":
+        return ["scan_modes/deep"]
+    raise SkillResolutionError(f"Unknown scan mode: {scan_mode!r}. Use default or deep.")
+
+
+def default_root_skills(scan_type: str, scan_mode: str = "default") -> list[str]:
     """Skills pre-loaded for the root agent by scan type.
 
     Names must exist in the corpus (verified by test). The methodology skill
@@ -179,15 +187,18 @@ def default_root_skills(scan_type: str) -> list[str]:
     technique skills are loaded by the agent on demand via load_skill.
     """
     if scan_type == "internal":
-        return ["internal/core_contract", "internal/methodology"]
+        return ["internal/core_contract", "internal/methodology", *_scan_mode_skills(scan_mode)]
     return [
         "tooling/python",
         "tooling/agent_browser",
         "analysis/counterevidence",
         "analysis/severity_calibration",
+        *_scan_mode_skills(scan_mode),
     ]
 
 
-def default_child_skills(scan_type: str) -> list[str]:
+def default_child_skills(scan_type: str, scan_mode: str = "default") -> list[str]:
     """Every web worker receives the same evidence and tooling foundations."""
-    return ["internal/core_contract"] if scan_type == "internal" else default_root_skills("web")
+    if scan_type == "internal":
+        return ["internal/core_contract", *_scan_mode_skills(scan_mode)]
+    return default_root_skills("web", scan_mode)

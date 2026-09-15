@@ -481,7 +481,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
 
     "rerun.path": "ops://run/rerun",
     "rerun.title": "编辑指令并重新启动",
-    "rerun.hint": "沿用目标、模式与网络路由，仅更新下方操作指令。",
+    "rerun.hint": "确认测试深度与操作指令，然后重新启动任务。",
     "rerun.instruction.loading": "正在载入 instruction.md…",
     "rerun.instruction.hint": "写入新运行的 instruction.md",
     "rerun.liveNotice": "每个阶段会通过 {profile} 调用 {model}。",
@@ -1242,7 +1242,7 @@ const Dictionaries: Record<Locale, Record<string, string>> = {
 
     "rerun.path": "ops://run/rerun",
     "rerun.title": "Edit instruction and relaunch",
-    "rerun.hint": "Reuse the target, mode, and route; update only the instruction below.",
+    "rerun.hint": "Review testing depth and instructions, then relaunch the task.",
     "rerun.instruction.loading": "Loading instruction.md…",
     "rerun.instruction.hint": "Written to the new run's instruction.md",
     "rerun.liveNotice": "Each phase calls {model} through {profile}.",

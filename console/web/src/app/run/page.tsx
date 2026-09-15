@@ -39,6 +39,7 @@ import type { Health, LogPage, RunDetail } from "@/lib/api";
 import { fmtDuration, fmtTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
 import { readRunNavigation, type RunTab } from "@/lib/run-navigation";
+import { scanModeLabel } from "@/lib/scan-mode";
 
 /** 12345 -> "12.3k" — compact token counts for the info tile. */
 function fmtTokens(n: number | undefined): string {
@@ -450,6 +451,7 @@ function Cockpit() {
               <Chip tone={run.scan_type === "internal" ? "success" : "accent"}>
                 {t("run.scope", { type: run.scan_type || "web" })}
               </Chip>
+              <Chip tone="neutral">{locale === "en" ? "Depth" : "深度"} · {scanModeLabel(run.scan_mode, locale === "en")}</Chip>
               {run.dry_run !== undefined && (
                 <Chip tone={run.dry_run ? "accent" : "warning"}>
                   {run.dry_run ? t("run.dryRun") : t("run.liveLlm")}
@@ -734,6 +736,7 @@ function Cockpit() {
       {/* rerun dialog — pre-filled from this run's instruction.md */}
       {rerunOpen && (
         <RerunDialog
+          key={run.name}
           run={run}
           onCancel={() => setRerunOpen(false)}
           onLaunched={(runName) => {

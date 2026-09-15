@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from strixops import skills as skill_registry
-from strixops.engine.scanconfig import ScanSpec, authorized_target_line, multi_target_instruction
+from strixops.engine.scanconfig import SCAN_DEEP, ScanSpec, authorized_target_line, multi_target_instruction
 from strixops.report.formatting import REPORT_FORMAT_SKILL, report_format_guidance
 
 PROMPT_PARTS_DIR = Path(__file__).parent / "prompt_parts"
@@ -121,6 +121,14 @@ def engagement_context(spec: ScanSpec | None) -> str:
     ]
     if coordination := multi_target_instruction(spec):
         sections.append(coordination)
+    if spec.scan_mode == SCAN_DEEP:
+        sections.append(
+            "DEEP SCAN MODE\n"
+            "Apply the deep testing methodology within the verified target scope, operator "
+            "constraints, assigned role and existing agent/resource limits. Depth does not expand "
+            "authorization or raise runtime limits. The root coordinates; child agents perform "
+            "their assigned testing. Record blocked and untested areas explicitly."
+        )
     if spec.scan_type == "internal":
         if spec.socks5_proxy:
             sections.append(
@@ -177,7 +185,7 @@ def root_instructions(spec: ScanSpec) -> str:
         _part("common_tail.md"),
     ]
     prompt = "\n\n".join(s for s in sections if s)
-    return _with_skills(prompt, skill_registry.default_root_skills(spec.scan_type))
+    return _with_skills(prompt, skill_registry.default_root_skills(spec.scan_type, spec.scan_mode))
 
 
 def child_instructions(task: str, spec: ScanSpec | None = None, skills: list[str] | None = None) -> str:
@@ -199,7 +207,9 @@ def child_instructions(task: str, spec: ScanSpec | None = None, skills: list[str
     # Skills the parent requested via create_agent(skills=[...]) are injected
     # into the child's prompt up front (mirroring the reference behavior —
     # recording them without injecting left the child without the playbook).
-    required = skill_registry.default_child_skills(spec.scan_type) if spec is not None else []
+    required = (
+        skill_registry.default_child_skills(spec.scan_type, spec.scan_mode) if spec is not None else []
+    )
     return _with_skills(prompt, [*required, *(skills or [])])
 
 

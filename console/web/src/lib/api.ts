@@ -1,6 +1,7 @@
 "use client";
 
 import { authFetch } from "@/lib/auth";
+import type { ScanMode } from "@/lib/scan-mode";
 
 /* ============================================================================
    API client — the console backend contract.
@@ -98,6 +99,8 @@ export interface RunSummary {
   target_count?: number;
   target_error?: string;
   scan_type: string;
+  /** Omitted by older runs, which use the default assessment workflow. */
+  scan_mode?: ScanMode;
   batch_id?: string;
   source?: { kind: "fofa"; search_id: string; result_id: string };
   queue?: { status: string };
@@ -438,6 +441,7 @@ export interface ScanRequest {
   target: string;
   targets?: string[];
   scan_type: string;
+  scan_mode?: ScanMode;
   project_id?: string | null;
   crypto?: boolean;
   socks5?: string | null;

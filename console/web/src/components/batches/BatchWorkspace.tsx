@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Layers, Plus, RefreshCw } from "lucide-react";
 import { ConfirmButton, Spinner } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
+import { scanModeLabel } from "@/lib/scan-mode";
 import {
   itemActive,
   queueStatus,
@@ -400,7 +401,7 @@ export default function BatchWorkspace({ id }: { id?: string }) {
                             </summary>
                             <span className={styles.target}>{item.target}</span>
                           </details>
-                          <span className={styles.meta}>{item.scan_type}</span>
+                          <span className={styles.meta}>{item.scan_type} · {scanModeLabel(item.scan_mode ?? batch?.scan_mode, en)}</span>
                         </td>
                         <td>
                           <span

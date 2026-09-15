@@ -33,17 +33,19 @@ import {
 import { EmptyState, Spinner } from "@/components/ui";
 import { useQueueResource } from "@/components/batches/useQueueResource";
 import { MAX_TARGETS, MultiTargetEditor, useMultiTargetCheck } from "@/components/scan/MultiTargetEditor";
+import ScanModeSelector from "@/components/scan/ScanModeSelector";
 import { Select } from "@/components/Select";
 import { useI18n } from "@/lib/i18n";
 import { INSTRUCTION_KEY, readStorage, writeStorage } from "@/lib/storage";
 import styles from "./scan.module.css";
 import { taskRequest, taskError, TaskApiError, type BatchCreated, type QueueSettings } from "@/lib/task-batches";
 import { fofaError, type FofaDraft } from "@/lib/fofa";
+import { scanMode, type ScanMode } from "@/lib/scan-mode";
 
 const INSTRUCTION_SOFT_LIMIT = 4000;
-type ScanMode = "web" | "internal";
+type ScanType = "web" | "internal";
 type Translate = (key: string, vars?: Record<string, string | number>) => string;
-type RecentTarget = { target: string; scan_type: ScanMode };
+type RecentTarget = { target: string; scan_type: ScanType };
 type LoadState = "loading" | "ready" | "error";
 type ScopeResult = {
   allowed: boolean;
@@ -249,7 +251,8 @@ export default function ScanLauncherPage() {
   }, []);
   const { t, locale } = useI18n();
   const copy = COPY[locale];
-  const [mode, setMode] = React.useState<ScanMode>("web");
+  const [mode, setMode] = React.useState<ScanType>("web");
+  const [depth, setDepth] = React.useState<ScanMode>("default");
   const [target, setTarget] = React.useState("");
   const [multiple, setMultiple] = React.useState(false);
   const [targetsText, setTargetsText] = React.useState("");
@@ -301,6 +304,7 @@ export default function ScanLauncherPage() {
     if (requestedTarget) setTarget(requestedTarget);
     const requestedMode = params.get("scan_type");
     if (requestedMode === "web" || requestedMode === "internal") setMode(requestedMode);
+    setDepth(scanMode(params.get("scan_mode")));
     try {
       const requestedTargets: unknown = JSON.parse(params.get("targets") || "null");
       if (Array.isArray(requestedTargets) && requestedTargets.length >= 2 && requestedTargets.length <= MAX_TARGETS
@@ -489,6 +493,7 @@ export default function ScanLauncherPage() {
       const body = {
         ...(multiple ? { targets: multiValidation.targets } : { target: trimmedTarget }),
         scan_type: mode,
+        scan_mode: depth,
         crypto: internal && crypto,
         socks5: internal && socks
           ? /^socks5h?:\/\//i.test(socks) ? socks : `socks5://${socks}`
@@ -585,6 +590,9 @@ export default function ScanLauncherPage() {
               })}
             </div>
           </fieldset>
+          <div className="col-span-full">
+            <ScanModeSelector id="scan-depth" value={depth} onChange={setDepth} disabled={busy || draftLoading} />
+          </div>
         </div>
 
         <div className={styles.targetSection}>

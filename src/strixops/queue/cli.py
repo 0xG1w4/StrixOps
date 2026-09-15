@@ -71,6 +71,7 @@ class CliBatchController:
             return self.store.create_batch(
                 targets=spec.all_targets(),
                 scan_type=spec.scan_type,
+                scan_mode=spec.scan_mode,
                 snapshot_ref=snapshot,
                 name=name,
                 max_concurrent=max_concurrent,

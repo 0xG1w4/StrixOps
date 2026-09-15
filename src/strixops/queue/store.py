@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from strixops.engine.scanconfig import SCAN_DEFAULT, SCAN_MODES
 from strixops.engine.targets import normalize_targets
 from strixops.platform.runname import derive_target_label, slugify_for_run_name
 
@@ -97,7 +98,8 @@ class QueueStore:
                 CREATE TABLE IF NOT EXISTS batches (
                     id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at REAL NOT NULL,
                     updated_at REAL NOT NULL, max_concurrent INTEGER NOT NULL,
-                    scan_type TEXT NOT NULL, snapshot_ref TEXT NOT NULL,
+                    scan_type TEXT NOT NULL, scan_mode TEXT NOT NULL DEFAULT 'default',
+                    snapshot_ref TEXT NOT NULL,
                     project_id TEXT NOT NULL, source_json TEXT NOT NULL,
                     cancel_requested INTEGER NOT NULL DEFAULT 0, last_started REAL NOT NULL DEFAULT 0,
                     owner TEXT NOT NULL DEFAULT 'default'
@@ -127,6 +129,8 @@ class QueueStore:
             columns = {row[1] for row in db.execute("PRAGMA table_info(batches)")}
             if "owner" not in columns:
                 db.execute("ALTER TABLE batches ADD COLUMN owner TEXT NOT NULL DEFAULT 'default'")
+            if "scan_mode" not in columns:
+                db.execute("ALTER TABLE batches ADD COLUMN scan_mode TEXT NOT NULL DEFAULT 'default'")
             lease_columns = {row[1] for row in db.execute("PRAGMA table_info(leases)")}
             for column, default in (
                 ("resource_phase", "unknown"),
@@ -161,6 +165,7 @@ class QueueStore:
         targets: list[str],
         scan_type: str,
         snapshot_ref: str,
+        scan_mode: str = SCAN_DEFAULT,
         name: str = "",
         max_concurrent: int = 2,
         project_id: str = "",
@@ -184,6 +189,7 @@ class QueueStore:
         _limit(max_concurrent)
         if (
             scan_type not in ("web", "internal")
+            or scan_mode not in SCAN_MODES
             or not isinstance(name, str)
             or len(name) > 200
             or len(source_json) > 8192
@@ -196,8 +202,8 @@ class QueueStore:
         batch_id, now = uuid.uuid4().hex, time.time()
         with self._db() as db:
             db.execute(
-                "INSERT INTO batches(id,name,created_at,updated_at,max_concurrent,scan_type,"
-                "snapshot_ref,project_id,source_json,owner) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO batches(id,name,created_at,updated_at,max_concurrent,scan_type,scan_mode,"
+                "snapshot_ref,project_id,source_json,owner) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     batch_id,
                     name.strip(),
@@ -205,6 +211,7 @@ class QueueStore:
                     now,
                     max_concurrent,
                     scan_type,
+                    scan_mode,
                     snapshot_ref,
                     project_id,
                     source_json,
@@ -250,6 +257,7 @@ class QueueStore:
             "updated_at": batch["updated_at"],
             "status": status,
             "max_concurrent": batch["max_concurrent"],
+            "scan_mode": batch["scan_mode"],
             "target_count": len(rows),
             "counts": counts,
         }
@@ -259,6 +267,7 @@ class QueueStore:
                     "id": row["id"],
                     "target": row["target"],
                     "scan_type": batch["scan_type"],
+                    "scan_mode": batch["scan_mode"],
                     "status": row["status"],
                     "run_name": row["run_name"],
                     "error_code": row["error_code"],
@@ -419,7 +428,7 @@ class QueueStore:
     @staticmethod
     def _item_query() -> str:
         return (
-            "SELECT i.*,b.scan_type,b.snapshot_ref,b.project_id,b.owner FROM items i "
+            "SELECT i.*,b.scan_type,b.scan_mode,b.snapshot_ref,b.project_id,b.owner FROM items i "
             "JOIN batches b ON b.id=i.batch_id "
         )
 

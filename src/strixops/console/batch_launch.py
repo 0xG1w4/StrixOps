@@ -25,7 +25,7 @@ from strixops import skills
 from strixops.agents import prompts
 from strixops.config.model_options import resolved_api_mode
 from strixops.console import parser, project_assignment, project_scope, projects_store
-from strixops.engine.scanconfig import ScanSpec
+from strixops.engine.scanconfig import SCAN_DEFAULT, SCAN_MODES, ScanSpec
 from strixops.queue import (
     BatchScheduler,
     LaunchReceipt,
@@ -134,11 +134,15 @@ class ConsoleBatchController:
 
     def create(self, body: dict, *, targets: list[str], llm_env: dict, search_env: dict,
                sources: dict[str, dict] | None = None) -> dict:
+        scan_mode = body.get("scan_mode", SCAN_DEFAULT)
+        if scan_mode not in SCAN_MODES:
+            raise QueueError("queue_invalid")
         # No raw inline credential is needed in public batch metadata.
         scan = {key: body.get(key) for key in (
             "scan_type", "crypto", "socks5", "gsocket", "instruction", "dry_run",
             "profile_id", "language", "project_id",
         )}
+        scan["scan_mode"] = scan_mode
         reference = self.snapshots.save({
             "scan": scan, "llm_env": llm_env, "search_env": search_env,
             "resources": _capture_resources(), "sources": sources or {},
@@ -147,6 +151,7 @@ class ConsoleBatchController:
         try:
             return self.store.create_batch(
                 targets=targets, scan_type=body.get("scan_type") or "web",
+                scan_mode=scan_mode,
                 snapshot_ref=reference, name=body.get("name") or "",
                 max_concurrent=body.get("max_concurrent", 2),
                 project_id=body.get("project_id") or "",
@@ -161,6 +166,9 @@ class ConsoleBatchController:
         snapshot = self.snapshots.read(item["snapshot_ref"])
         if Path(snapshot.get("runs_root", "")).resolve() != self.runs_root:
             raise QueueError("different_runs_root", "This batch belongs to another task directory.")
+        scan = snapshot.get("scan")
+        if not isinstance(scan, dict) or scan.get("scan_mode", SCAN_DEFAULT) not in SCAN_MODES:
+            raise QueueError("queue_snapshot_invalid")
         return snapshot
 
     def validate_launch(self, item: dict) -> None:
@@ -224,6 +232,7 @@ class ConsoleBatchController:
         language = "en" if scan.get("language") == "en" else "zh-CN"
         spec = ScanSpec(
             target=item["target"], scan_type=item["scan_type"], crypto=bool(scan.get("crypto")),
+            scan_mode=scan.get("scan_mode", SCAN_DEFAULT),
             instruction_file=str(instruction_file), instruction_text=scan.get("instruction") or "",
             socks5_proxy=scan.get("socks5") or "", gsocket_key=scan.get("gsocket") or "",
             report_language=language,
@@ -241,6 +250,7 @@ class ConsoleBatchController:
         )
         metadata = {
             "target": item["target"], "scan_type": item["scan_type"], "engine": "ops",
+            "scan_mode": spec.scan_mode,
             "dry_run": bool(scan.get("dry_run")), "model": llm.get("strix_llm", ""),
             "llm_api_mode": resolved_api_mode(llm["strix_llm"], llm["llm_api_mode"]) if llm else "",
             "llm_api_mode_requested": llm.get("llm_api_mode", ""),
@@ -257,7 +267,8 @@ class ConsoleBatchController:
         }
         _write_private(run_dir / ".console_launch.json", metadata)
         argv = [sys.executable, "-m", "strixops.cli", "-t", item["target"],
-                "--scan-type", item["scan_type"], "--instruction-file", str(instruction_file)]
+                "--scan-type", item["scan_type"], "--scan-mode", spec.scan_mode,
+                "--instruction-file", str(instruction_file)]
         for key, flag in (("socks5", "--socks5"), ("gsocket", "--gsocket")):
             if scan.get(key):
                 argv.extend([flag, scan[key]])

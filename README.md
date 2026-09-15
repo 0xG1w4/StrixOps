@@ -328,13 +328,25 @@ The Console keeps the single-target form as its default. **Multi-target task**
 creates a persistent batch of independent runs. Set concurrent targets for the batch;
 Settings also provides a host-wide active-target limit. Both default to two.
 
+**Testing depth** has two choices for both Web and internal tasks. **Default**
+preserves the existing assessment workflow. **Deep** additionally loads the deep
+testing playbook for the root and every child agent: broader reconnaissance,
+closer investigation of promising leads, related attack paths, and validation.
+Deep can take longer and use more model tokens; it keeps the selected model,
+reasoning setting, scope, and configured runtime/concurrency limits.
+
+Depth belongs to the task. New tasks start with Default; queued batch members
+retain the submitted depth, and the rerun dialog starts with the source task's
+depth so you can keep or change it. Historical tasks without a saved mode use
+Default. The task detail and batch members display their saved depth.
+
 | Limit | Console | CLI |
 |---|---|---|
 | Target count | 1 in single-target mode; 2–100 in multi-target mode | 1–100 distinct targets |
 | Text import | UTF-8 `.txt`, up to 512 KiB | `--target-list`, up to 1 MiB per file |
 | Target length | Up to 2,048 characters | Up to 2,048 characters |
 | Normalization | Ignore blank lines and full-line `#` comments; merge exact duplicates | Same |
-| Shared settings | One task type, model route, and instruction set | Same |
+| Shared settings | One task type, testing depth, model route, and instruction set | Same |
 
 Each target has its own agent context, assessment state, sandbox, evidence, and
 final report. Batch members are not assumed to be related. Common settings and
@@ -398,6 +410,7 @@ does not itself establish a remote shell.
 | `--batch-name` | Optional batch display name |
 | `--resume-batch ID` | Resume supervision of an existing CLI batch; does not repeat completed targets |
 | `--scan-type web\|internal` | Select the assessment workflow |
+| `--scan-mode default\|deep` | Select testing depth; omitted means `default` (existing workflow) |
 | `--instruction-file` | Load operator instructions from Markdown |
 | `--instruction` | Inline fallback when no instruction file is supplied |
 | `--socks5` / `--gsocket` | Select internal reachability settings; do not combine them |

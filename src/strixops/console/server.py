@@ -237,6 +237,7 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
         "target_count": len(targets),
         **({"target_error": target_error} if target_error else {}),
         "scan_type": scan_config.get("scan_type") or launch_meta.get("scan_type") or "web",
+        "scan_mode": scan_config.get("scan_mode") or launch_meta.get("scan_mode") or "default",
         "engine": str(scan_config.get("engine") or launch_meta.get("engine") or "ops"),
         "model_transport": str(
             scan_config.get("model_transport") or launch_meta.get("model_transport") or ""
@@ -1382,6 +1383,7 @@ class ScanBody(BaseModel):
     target: str = ""
     targets: list[str] | None = Field(default=None, min_length=1, max_length=MAX_TARGETS)
     scan_type: str = "web"
+    scan_mode: Literal["default", "deep"] = "default"
     crypto: bool = False
     socks5: str = ""
     gsocket: str = ""
@@ -1575,6 +1577,7 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
             {
                 "target": primary_target,
                 "scan_type": body.scan_type,
+                "scan_mode": body.scan_mode,
                 **({"targets": targets, "target_count": len(targets)} if len(targets) > 1 else {}),
                 "dry_run": bool(body.dry_run),
                 "model": llm_env.get("strix_llm") or "",
@@ -1608,6 +1611,8 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
         *[arg for target in targets for arg in ("-t", target)],
         "--scan-type",
         body.scan_type,
+        "--scan-mode",
+        body.scan_mode,
         "--instruction-file",
         str(instruction_file),
     ]
@@ -1667,6 +1672,7 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
     state.scans[scan_id] = {
         "pid": proc.pid, "popen": proc, "run_name": run_name,
         "target": primary_target, "targets": targets, "target_count": len(targets),
+        "scan_mode": body.scan_mode,
     }
     return {"ok": True, "scan_id": scan_id, "run_name": run_name, "pid": proc.pid}
 
@@ -1684,6 +1690,7 @@ def list_scans() -> dict:
                 "target": info.get("target"),
                 "targets": info.get("targets", [info.get("target")]),
                 "target_count": info.get("target_count", 1),
+                "scan_mode": info.get("scan_mode", "default"),
                 "alive": _pid_alive(info.get("pid")),
                 "exit_code": popen.poll() if popen is not None else None,
             }
@@ -1703,6 +1710,7 @@ def _queue_controller() -> ConsoleBatchController:
             state.scans[f"batch:{item['id']}"] = {
                 "pid": process.pid, "popen": process, "run_name": item["run_name"],
                 "target": item["target"], "targets": [item["target"]], "target_count": 1,
+                "scan_mode": item.get("scan_mode", "default"),
             }
 
         _batch_controller = ConsoleBatchController(QueueStore(path), state.runs_root, register)

@@ -1,5 +1,6 @@
 import { authFetch } from "@/lib/auth";
 import { apiURL } from "./api";
+import type { ScanMode } from "./scan-mode";
 
 export class TaskApiError extends Error {
   constructor(
@@ -97,6 +98,7 @@ export interface BatchItem {
   id: string;
   target: string;
   scan_type: string;
+  scan_mode?: ScanMode;
   status: BatchItemStatus;
   run_name: string | null;
   error_code: string | null;
@@ -111,6 +113,7 @@ export interface ScanBatch {
   status: string;
   max_concurrent: number;
   target_count: number;
+  scan_mode?: ScanMode;
   counts: {
     queued: number;
     active: number;

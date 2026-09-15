@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from strixops.engine.targets import normalize_targets
 
@@ -22,6 +22,9 @@ if TYPE_CHECKING:
 
 SCAN_WEB = "web"
 SCAN_INTERNAL = "internal"
+SCAN_DEFAULT = "default"
+SCAN_DEEP = "deep"
+SCAN_MODES = (SCAN_DEFAULT, SCAN_DEEP)
 
 
 @dataclass
@@ -35,6 +38,7 @@ class ScanSpec:
     instruction_text: str = ""
     report_language: str = "zh-CN"
     targets: list[str] = field(default_factory=list)
+    scan_mode: Literal["default", "deep"] = SCAN_DEFAULT
 
     def all_targets(self) -> list[str]:
         """Return the complete ordered scope, including legacy single-target specs."""
@@ -48,6 +52,8 @@ class ScanSpec:
             problems.append(str(exc))
         if self.scan_type not in (SCAN_WEB, SCAN_INTERNAL):
             problems.append(f"unknown --scan-type {self.scan_type!r}")
+        if self.scan_mode not in SCAN_MODES:
+            problems.append(f"unknown --scan-mode {self.scan_mode!r}")
         if self.socks5_proxy and self.gsocket_key:
             problems.append("--socks5 and --gsocket are mutually exclusive")
         return problems
@@ -77,6 +83,7 @@ class ScanSpec:
         cfg: dict = {
             "target": targets[0],
             "scan_type": self.scan_type,
+            "scan_mode": self.scan_mode,
             "crypto_mode": self.crypto,
             "report_language": self.report_language,
         }

@@ -23,7 +23,7 @@ from typing import Any
 from strixops import __version__
 from strixops.config.settings import EngineSettings
 from strixops.engine.runner import EXIT_FAILED, run_scan
-from strixops.engine.scanconfig import SCAN_INTERNAL, SCAN_WEB, ScanSpec
+from strixops.engine.scanconfig import SCAN_DEFAULT, SCAN_INTERNAL, SCAN_MODES, SCAN_WEB, ScanSpec
 from strixops.engine.targets import normalize_targets, read_target_list
 
 
@@ -119,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="web application or internal network assessment",
     )
     parser.add_argument(
+        "--scan-mode",
+        choices=SCAN_MODES,
+        default=SCAN_DEFAULT,
+        help="assessment depth: current default behavior or deep coverage (default: default)",
+    )
+    parser.add_argument(
         "--crypto",
         action="store_true",
         help="crypto-asset hunting emphasis (internal mode)",
@@ -179,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         target=targets[0],
         targets=targets if len(targets) > 1 else [],
         scan_type=args.scan_type,
+        scan_mode=args.scan_mode,
         crypto=bool(args.crypto),
         instruction_file=args.instruction_file or "",
         socks5_proxy=(args.socks5 or "").strip(),
