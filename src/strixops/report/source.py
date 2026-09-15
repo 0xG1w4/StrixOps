@@ -1,4 +1,4 @@
-"""Fit complete finding fields and referenced evidence into a report input budget."""
+"""Fit finding records and run context into a report input budget, without attachment bodies."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from strixops.engine.targets import normalize_targets
-from strixops.report.source_evidence import evidence_blocks, referenced_evidence_names
+from strixops.report.source_evidence import referenced_evidence_names
 from strixops.report.state import RunState
 
 _DEFAULT_SOURCE_TOKENS = 180_000
@@ -47,6 +47,14 @@ _REPORT_FIELDS = (
     "finding_class",
     "metadata",
     "dependency_metadata",
+    "timestamp",
+    "assumptions",
+    "remediation_steps",
+    "code_locations",
+    "fix_verification",
+    "fix_pr_body",
+    "cvss_breakdown",
+    "update_history",
 )
 
 _FINDING_FIELDS = (
@@ -59,6 +67,7 @@ _FINDING_FIELDS = (
     "severity",
     "metadata",
     "agent_name",
+    "timestamp",
 )
 
 
@@ -156,6 +165,8 @@ def build_report_source(
     Findings retain their identities even under pressure. Fields are indivisible:
     a credential, PoC or response is included verbatim or explicitly omitted.
     Retry drops supplemental context, never wholesale internal-finding bodies.
+    Inline evidence and PoC fields remain source material; raw files under
+    evidence/ are never opened. The attachment inventory contains links only.
     The caller supplies its model tokenizer; direct/offline use conservatively
     counts UTF-8 bytes. This function never mutates saved findings or evidence.
     """
@@ -196,8 +207,6 @@ def build_report_source(
             "root_draft", {key: value for key, value in draft.items() if value not in ("", None, [], {})},
         ))
     extras: list[tuple[str, str]] = []
-    admitted_evidence: list[dict[str, Any]] = []
-    evidence_omissions: list[dict[str, Any]] = []
     supplemental_omissions: list[dict[str, Any]] = []
     accepted: list[tuple[_Record, str]] = []
     # Charge complete serialized units conservatively, then verify the exact
@@ -228,23 +237,6 @@ def build_report_source(
         admit_fields(row, remaining)
     for row in records[core_count:]:
         admit_fields(row, remaining // 3)
-
-    evidence_heading = "## Referenced Evidence Content\n"
-    evidence_allowance = remaining - count(evidence_heading) - 16
-    if not trimmed and inventory["files"] and evidence_allowance > 0:
-        blocks, evidence_omissions = evidence_blocks(
-            run_state, inventory["files"],
-            max_block_tokens=evidence_allowance, token_count=count,
-            total_token_budget=evidence_allowance,
-        )
-        if blocks:
-            admitted_evidence.extend(blocks)
-            remaining -= count(evidence_heading + _dump_json(blocks) + "\n\n")
-    elif inventory["files"]:
-        supplemental_omissions.append({
-            "source": "referenced_evidence_content",
-            "reason": "retry_source" if trimmed else "input_token_budget",
-        })
 
     # Use remaining room for complete primary fields before ledgers/coverage.
     for row in records:
@@ -277,13 +269,14 @@ def build_report_source(
             {"source": row.source, "field": key, "reason": "input_token_budget"}
             for row in records for key in row.values if key not in row.kept
         ]
-        omissions = omitted_fields + evidence_omissions + supplemental_omissions
+        omissions = omitted_fields + supplemental_omissions
         audit = {
             "input_token_budget": token_budget,
             "finding_count": core_count,
             "omitted_field_count": len(omitted_fields),
-            "evidence_block_count": len(admitted_evidence),
-            "evidence_excerpt_count": sum(block["mode"] == "excerpt" for block in admitted_evidence),
+            "evidence_content_policy": "attachments_not_loaded",
+            "evidence_block_count": 0,
+            "evidence_excerpt_count": 0,
             "omission_count": len(omissions),
             "omissions": omissions,
             "omission_details_not_listed": 0,
@@ -292,8 +285,6 @@ def build_report_source(
             audit["omissions"] = audit["omissions"][:-1]
             audit["omission_details_not_listed"] += 1
         content = prefix + "".join(row.render() for row in records)
-        if admitted_evidence:
-            content += evidence_heading + _dump_json(admitted_evidence) + "\n\n"
         content += "".join(text for _, text in extras)
         return content + "## Source Coverage\n" + _dump_json(audit) + "\n"
 
@@ -302,9 +293,6 @@ def build_report_source(
         if extras:
             key, _ = extras.pop()
             supplemental_omissions.append({"source": key, "reason": "input_token_budget"})
-        elif admitted_evidence:
-            block = admitted_evidence.pop()
-            evidence_omissions.append({"filename": block["filename"], "reason": "input_token_budget"})
         elif accepted:
             row, key = accepted.pop()
             del row.kept[key]

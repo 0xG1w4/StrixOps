@@ -640,6 +640,9 @@ An operator-supplied workspace replaces the default workspace location. See the
 - Final synthesis uses the configured model, recorded findings, assessment state,
   and closing narrative. Deterministic report composition is the fallback if
   synthesis fails or is disabled.
+- Automatic and manually regenerated reports retain vulnerability and internal
+  finding content, including inline evidence and PoC. They do not read raw file
+  contents under `evidence/`; saved attachment links remain available for download.
 - Reports render headings, paragraphs, numbered and nested lists with explicit
   spacing; wide tables, code blocks and supported task flowcharts scroll within
   their own regions. Existing stored Markdown and downloads are not rewritten.

@@ -147,16 +147,19 @@ CLI 可用 `STRIX_REPORT_LLM`、`REPORT_LLM_API_MODE`、`REPORT_LLM_REASONING_EF
 若连目标范围和 finding 身份都无法放入输入容量，则保留草稿并记录原因。
 重试会移除补充资料，但不会再直接丢弃全部内部发现正文。
 
-来源还会读取 finding 或 root 草稿引用、且已经保存成功的文字证据。重要引用优先
-进入附件清单；大型文字日志可提供有关联的完整行及上下文，并标明来源行号与省略量。
-PoC 脚本、JSON、CSV、凭证行与多行密钥不会被切成半段。读取最多 80 个引用附件，
-单文件最多 4 MiB、总读取最多 32 MiB；超出限制、二进制或无法安全读取的附件
-只记录省略原因，不会被当成扫描失败。模型不会自动读取整个工作区或完整会话历史。
+自动生成和手动重新生成都不读取 `evidence/` 中的原始附件正文，即使该附件被
+finding 或 root 草稿引用，也不会把脚本、日志或 Markdown 附件内容送给报告模型。
+已保存附件仍保留下载链接；附件存在本身不代表测试成功或漏洞成立。
+漏洞与内部发现内容继续收录，包括记录内的 evidence、PoC、技术分析、假设与反证。
+自动生成使用扫描期间保存的发现对象；手动生成读取 `vulnerabilities.json` 和
+`internal_findings/*.md` 全文。漏洞 JSON 与 `vulnerabilities/*.md` 由同一份正式
+记录产生，使用 JSON 避免重复加入相同正文。模型不会读取完整工作区或完整会话历史。
 
 任务目录 `.state/report-system-prompt.md` 保存本次报告指令，
 `.state/report-source-1.md` 与可能存在的 `.state/report-source-2.md` 保存来源快照。
-排查报告缺漏时，可以直接核对 `Referenced Evidence Content` 与 `Source Coverage`，
-确认哪些完整字段、证据区段进入了输入，哪些资料被省略。
+排查报告缺漏时，可以核对来源中的漏洞、内部发现与 `Source Coverage`，确认哪些
+完整字段进入了输入、哪些被容量限制省略。`evidence_content_policy` 为
+`attachments_not_loaded`，表示原始附件正文依规则排除，不是扫描或归档失败。
 
 ## 从手动启动迁移
 

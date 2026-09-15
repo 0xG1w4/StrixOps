@@ -1,7 +1,7 @@
 """LLM synthesis of the client-facing executive report.
 
 Ports the reference platform's dedicated report worker: when a run finishes,
-complete finding fields, referenced evidence and supporting run context are
+complete finding fields, inline evidence and supporting run context are
 selected within the model's input budget and sent to a fresh model call. The
 model composes the deliverable Markdown under the platform's editorial rules.
 
