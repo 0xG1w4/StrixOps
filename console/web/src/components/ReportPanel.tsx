@@ -17,6 +17,7 @@ import MermaidDiagram from "@/components/MermaidDiagram";
 import { apiURL, generateReport, getJSON, getReportGeneration } from "@/lib/api";
 import type { ReportGeneration, ReportPage, RunDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { reportMermaidSource } from "@/lib/report-mermaid";
 
 const REPORT_POLL_MS = 5000;
 const FINALIZATION_PHASE_KEYS: Record<string, string> = {
@@ -71,19 +72,16 @@ function generationRequestErrorKey(error: unknown): string {
 
 type LoadOutcome = "ready" | "missing" | "error" | "stale";
 
-/* A fenced ```mermaid block arrives as <pre><code class="language-mermaid">.
- * Intercept it at the <pre> level (inline code has no pre) and hand the chart
- * to the diagram renderer; every other block falls through unchanged. */
+/* Intercept code fences at the pre level (never inline code). The parser also
+ * recognizes complete supported flowcharts with a missing/wrong language tag. */
 function mermaidSource(children: React.ReactNode): string | null {
   const child = Array.isArray(children) ? children[0] : children;
   if (!React.isValidElement(child)) return null;
   const props = child.props as { className?: unknown; children?: unknown };
   const className = typeof props.className === "string" ? props.className : "";
-  if (!className.split(/\s+/).includes("language-mermaid")) return null;
   const raw = props.children;
   const text = Array.isArray(raw) ? raw.join("") : String(raw ?? "");
-  const chart = text.trim();
-  return chart || null;
+  return reportMermaidSource(text, className);
 }
 
 export default function ReportPanel({ name, run }: { name: string; run: RunDetail | null }) {

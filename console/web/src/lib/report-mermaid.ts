@@ -15,7 +15,27 @@ type Edge = { from: string; to: string; label: string | null };
 function labelText(raw: string): string | null {
   let label = raw.trim();
   if (label.startsWith('"') && label.endsWith('"')) label = label.slice(1, -1).trim();
-  return label.length > 0 && label.length <= MAX_LABEL && PLAIN_LABEL.test(label) ? label : null;
+  // Model reports commonly use Mermaid's bare line-break tags. Normalize only
+  // those tags to text boundaries; attributes and all other markup stay invalid.
+  label = label.replace(/<br[ \t]*\/?>/gi, "\n").trim();
+  return label.length > 0 && label.length <= MAX_LABEL &&
+    label.split("\n").every(part => part === "" || PLAIN_LABEL.test(part)) ? label : null;
+}
+
+function serializedLabel(label: string): string {
+  // This is generated syntax, never arbitrary HTML from the original report.
+  return label.replace(/\n/g, "<br/>");
+}
+
+/** Code fences are occasionally mislabeled as CSS/text or have no language.
+ * Recognize those only when the entire block passes the bounded graph parser.
+ * Explicit Mermaid blocks retain their escaped-source fallback on failure.
+ */
+export function reportMermaidSource(source: string, className = ""): string | null {
+  const chart = source.trim();
+  if (!chart) return null;
+  if (className.toLowerCase().split(/\s+/).includes("language-mermaid")) return chart;
+  return prepareReportMermaid(chart) !== null ? chart : null;
 }
 
 export function prepareReportMermaid(source: string): string | null {
@@ -106,10 +126,10 @@ export function prepareReportMermaid(source: string): string | null {
   const canonical = [`flowchart ${header[1]}`];
   for (const node of nodes.values()) {
     const [open, close] = node.shape === "round" ? ["(", ")"] : node.shape === "diamond" ? ["{", "}"] : ["[", "]"];
-    canonical.push(`${node.id}${open}"${node.label}"${close}`);
+    canonical.push(`${node.id}${open}"${serializedLabel(node.label)}"${close}`);
   }
   for (const edge of edges) {
-    canonical.push(`${edge.from} -->${edge.label === null ? "" : `|"${edge.label}"|`} ${edge.to}`);
+    canonical.push(`${edge.from} -->${edge.label === null ? "" : `|"${serializedLabel(edge.label)}"|`} ${edge.to}`);
   }
   const result = canonical.join("\n");
   return result.length <= REPORT_MERMAID_MAX_SOURCE ? result : null;

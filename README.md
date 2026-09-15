@@ -708,6 +708,9 @@ An operator-supplied workspace replaces the default workspace location. See the
 - Reports render headings, paragraphs, numbered and nested lists with explicit
   spacing; wide tables, code blocks and supported task flowcharts scroll within
   their own regions. Existing stored Markdown and downloads are not rewritten.
+  Task flowcharts accept bare `<br>`, `<br/>`, and `<br />` label breaks. Complete
+  supported flowcharts also render when a code fence has a missing or incorrect
+  language tag; ordinary code and unsupported diagram syntax retain their source.
 - The shared `reporting/report_format` skill supplies formatting guidance to root
   and child Agents and final synthesis. New reports can split long plain prose
   at sentence boundaries while preserving required content and literal syntax.
