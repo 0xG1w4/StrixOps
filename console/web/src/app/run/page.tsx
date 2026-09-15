@@ -8,8 +8,8 @@
    actions (Stop / Delete / CSV export / artifacts path). Below it, a single
    tabbed console panel: Conversation · Findings · Notes · Files · Report.
 
-   Desktop (≥1360×760) switches to a full-height console layout where the
-   transcript and ledger panels scroll internally and the page never scrolls.
+   The page scrolls naturally while readers retain a usable minimum height.
+   Conversation and file readers keep their own bounded scrolling areas.
    ========================================================================= */
 
 import * as React from "react";
@@ -212,7 +212,7 @@ function Cockpit() {
   const runRef = React.useRef<RunDetail | null>(null);
   const firstMissRef = React.useRef<number | null>(null);
 
-  /* ---- viewport tracking (desktop console layout ≥1360×760) ---- */
+  /* ---- viewport tracking (compact desktop spacing ≥1360×760) ---- */
   React.useEffect(() => {
     const sync = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
     sync();
@@ -410,21 +410,19 @@ function Cockpit() {
     }
   })();
 
-  const internalScroll = tab === "conversation" || tab === "files";
-
   return (
     <div
       className={cn(
         "mx-auto flex w-full max-w-[1720px] flex-col",
         desktop
-          ? "h-[calc(100dvh-7.6rem)] gap-3 overflow-hidden" /* main padding + status strip + ticker */
+          ? "gap-3"
           : "max-w-[1440px] gap-4"
       )}
     >
       {/* ============================ header ============================ */}
       <div className={cn("flex-shrink-0", desktop && "xl:[&_.hero-panel]:px-5 xl:[&_.hero-panel]:py-4")}>
         <div className="hero-panel mb-0">
-          <div className="hero-copy min-w-0 flex-1">
+          <div className="hero-copy min-w-0 max-w-full flex-1">
             <div className="flex flex-wrap items-center gap-3">
               <span className="eyebrow">&gt; {t("run.path")}</span>
               <Link
@@ -458,7 +456,7 @@ function Cockpit() {
                 </Chip>
               )}
               {run.model && (
-                <span className="mono-chip" title={t("run.modelRoute", { model: run.model })}>
+                <span className="mono-chip block min-w-0 max-w-full truncate" title={t("run.modelRoute", { model: run.model })}>
                   model · {run.model}
                 </span>
               )}
@@ -669,12 +667,7 @@ function Cockpit() {
       <ProxyStatusPanel key={name} runName={name} live={live} enabled={run.scan_type === "web" && !run.dry_run} />
 
       {/* ============================ console ============================ */}
-      <section
-        className={cn(
-          "panel panel-hairline flex flex-col overflow-hidden",
-          desktop ? "min-h-0 flex-1" : ""
-        )}
-      >
+      <section className="panel panel-hairline flex flex-none flex-col">
         <div className="tabs-bar flex-shrink-0" role="tablist">
           {tabs.map((t) => (
             <button
@@ -711,18 +704,9 @@ function Cockpit() {
           id="run-tab-content"
           role="tabpanel"
           aria-labelledby={`run-tab-${tab}`}
-          className={cn(
-            "min-h-0 flex-1",
-            internalScroll
-              ? cn(
-                  "flex flex-col overflow-hidden",
-                  !desktop && tab === "conversation" && "h-[72dvh] max-h-[44rem] min-h-[26rem]",
-                  !desktop && tab === "files" && "h-[76dvh] max-h-[52rem] min-h-[26rem]"
-                )
-              : desktop
-                ? "overflow-y-auto"
-                : ""
-          )}
+          className={tab === "files"
+            ? "flex h-[76dvh] min-h-[32rem] max-h-[52rem] flex-col"
+            : cn("min-h-[26rem]", tab === "conversation" && "flex flex-col")}
         >
           {tabContent}
         </div>

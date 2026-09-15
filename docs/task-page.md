@@ -37,6 +37,12 @@ behavior and do not stop the assessment.
 
 ## Conversation and hints
 
+The transcript has its own height: half the viewport, bounded between 20rem
+and 40rem (320–640px at the default text size). Task headers, diagnostics,
+Agent details and the hint composer grow the page around it instead of shrinking
+the transcript. Scroll the page to reach the console and its controls; scroll
+inside the transcript to read messages. The Agent tree scrolls independently.
+
 New task views open on **all Agents**. Links that explicitly select an Agent
 retain that selection. The transcript controls adapt to the panel width: on
 narrow screens the Agent selector gets its own row, above the Agent-panel and

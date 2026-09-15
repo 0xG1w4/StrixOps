@@ -995,7 +995,7 @@ export default function ConversationView({
 
   return (
     <section
-      className={`${styles.conversation} panel panel-hairline flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface/92`}
+      className={`${styles.conversation} panel panel-hairline flex min-w-0 flex-col overflow-hidden bg-surface/92`}
       aria-label={c("任务对话", "Task conversation")}
       onKeyDown={event => { if (event.key === "Escape" && agentsOpen) closeAgents(); }}
     >
@@ -1081,7 +1081,7 @@ export default function ConversationView({
         {agentsOpen && <ConversationAgents name={name} run={run} selected={agentFilter} onSelect={chooseAgent} onClose={closeAgents} />}
         <div className={styles.main}>
       {/* scroll area */}
-      <div ref={scrollRef} aria-label={c("对话时间轴", "Conversation timeline")} className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-deep/32 p-4">
+      <div ref={scrollRef} aria-label={c("对话时间轴", "Conversation timeline")} className={`${styles.timeline} space-y-3 overflow-y-auto bg-surface-deep/32 p-4`}>
         {phase === "loading" && messages.length === 0 ? (
           <div className="space-y-3 p-2">
             <div className="skeleton-line w-5/6" />

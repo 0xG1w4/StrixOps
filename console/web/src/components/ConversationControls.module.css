@@ -8,6 +8,8 @@
 .controls { display: grid; grid-template-columns: auto minmax(0, 240px) auto; grid-template-areas: "agents selection follow"; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .workspace { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
 .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; flex: 1; }
+/* The transcript owns its height; headers and hints grow the page around it. */
+.timeline { flex: none; height: clamp(20rem, 50dvh, 40rem); min-height: 20rem; }
 .toggle { grid-area: agents; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--signal-line); border-radius: 3px; padding: 6px 10px; color: var(--signal-text); font-size: 11px; height: 36px; white-space: nowrap; }
 .toggle[aria-expanded="true"] { color: var(--signal-accent); border-color: var(--signal-accent); background: color-mix(in srgb, var(--signal-accent) 8%, transparent); }
 .toggle:hover { color: var(--signal-accent); border-color: var(--signal-accent); }
@@ -19,7 +21,7 @@
 .follow[data-enabled="true"] { color: var(--signal-text); background: var(--signal-raised); }
 .follow input { width: 14px; height: 14px; margin: 0; flex-shrink: 0; accent-color: var(--signal-accent); }
 .agentSelect:focus-visible, .follow:focus-within { outline: 2px solid var(--signal-accent); outline-offset: 2px; }
-.agents { flex: 0 0 270px; width: 270px; min-height: 0; overflow-y: auto; border-right: 1px solid var(--signal-line); background: var(--signal-surface); }
+.agents { flex: 0 0 270px; width: 270px; min-height: 0; contain: size; overflow-y: auto; border-right: 1px solid var(--signal-line); background: var(--signal-surface); }
 .agentHeader { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px 12px; color: var(--signal-muted); font-size: 11px; border-bottom: 1px solid var(--signal-line); }
 .agentHeader strong { font-weight: 500; }.agentHeader button { width: 26px; height: 26px; display: grid; place-items: center; }
 .agentTree { display: flex; flex-direction: column; }
