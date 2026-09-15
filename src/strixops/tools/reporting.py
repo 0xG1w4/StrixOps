@@ -876,6 +876,10 @@ def create_finding(
         metadata: Structured context, including evidence_files
             (paths relative to /workspace/output/, or absolute /workspace/output/... paths).
             Workspace-relative output/... paths are also accepted when no exact archive path exists.
+            For credentials, credentials may be a list of objects with host, username,
+            password, hash, source, severity, note, secret_type and validation_status.
+            Preserve exact values; use unverified, validated or failed based on actual checks.
+            Large sets may use a declared credential CSV with these columns instead.
     """
     run_state: RunState = ctx.context.run_state  # type: ignore[assignment]
     finding_type = finding_type.strip().lower()

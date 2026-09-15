@@ -69,6 +69,24 @@ relevant verified capabilities and the evidence file. Large datasets belong in
 attachments; there is no requirement to copy the first 50 entries or every secret
 into tool arguments, parent summaries or compaction summaries.
 
+Use a credential CSV (for example `application-credentials.csv`) with columns
+`host,username,password,hash,source,severity,note`; optional `secret_type` and
+`validation_status` columns preserve the material's type and authentication result.
+For API keys, tokens or private keys, put the exact value in `password` and name
+its type in `secret_type`. Use proper CSV quoting for commas and multiline values.
+Use `unverified` until authentication is actually checked; then record `validated`
+or `failed` with the exact observed scope/result. Do not substitute examples,
+placeholders or redacted values for the material actually discovered.
+List this saved CSV in a credential finding's `metadata.evidence_files`. The
+Console can aggregate its structured rows once captured; general scripts and
+logs are not read by the report composer.
+
+For small sets, record the same named fields directly in `metadata.credentials`
+as a list of objects. This makes them available to the credential inventory
+during scanning without requiring file capture. Preserve each distinct
+host/account/secret combination and retain its source; never mark an entire set
+validated because only one account was tested.
+
 List every attachment in `metadata.evidence_files`, using paths relative to
 `/workspace/output/` (preferred) or absolute `/workspace/output/...` paths:
 

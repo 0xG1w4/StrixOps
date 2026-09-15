@@ -46,9 +46,7 @@ from starlette.types import Scope
 from strixops import __version__
 from strixops.config.model_options import resolved_api_mode, validate_model_options
 from strixops.console import (
-    hints as operator_hints,
-)
-from strixops.console import (
+    credentials,
     model_catalog,
     model_probe,
     notes,
@@ -63,6 +61,9 @@ from strixops.console import (
     report_generation,
     settings_store,
     web_search_settings,
+)
+from strixops.console import (
+    hints as operator_hints,
 )
 from strixops.console.auth import AuthMiddleware, static_csp
 from strixops.console.auth import router as auth_router
@@ -475,6 +476,34 @@ def run_note(name: str, note_id: str, include_history: bool = False) -> Response
         _notes_run_directory(name), _open_run_file, note_id, include_history=include_history
     )
     return JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/runs/{name}/credentials")
+def run_credentials(name: str) -> Response:
+    payload = credentials.list_response(
+        _notes_run_directory(name), _open_run_file, valid_assessment=_valid_assessment_document,
+    )
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/runs/{name}/credentials.csv")
+def run_credentials_csv(name: str) -> Response:
+    payload = credentials.list_response(
+        _notes_run_directory(name), _open_run_file, valid_assessment=_valid_assessment_document,
+    )
+    if payload["source_status"] == "unreadable":
+        return JSONResponse(
+            {"detail": "Credential sources could not be read.", "source_status": "unreadable"},
+            status_code=503, headers={"Cache-Control": "no-store"},
+        )
+    return Response(
+        credentials.csv_bytes(payload["credentials"]), media_type="text/csv; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="credentials.csv"',
+            "X-Credential-Source-Status": payload["source_status"],
+        },
+    )
 
 
 def _valid_assessment_document(data: Any) -> bool:

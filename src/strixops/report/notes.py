@@ -438,6 +438,21 @@ class NotesStore:
     def _get_note(self, **kwargs: Any) -> dict:
         return project_get(self._load(), **kwargs)
 
+    def snapshot(self) -> dict:
+        """Read all active current notes, without previews or superseded history."""
+        return self._invoke("snapshot")
+
+    def _snapshot(self) -> dict:
+        document = self._load()
+        rows = [
+            {key: copy.deepcopy(value) for key, value in note.items() if key in {
+                "note_id", "title", "content", "category", "tags", "revision",
+                "created_by", "updated_by", "created_at", "updated_at",
+            }}
+            for note in document["notes"] if not note["deleted"]
+        ]
+        return _success(notes=rows, source_status="available" if self._fingerprint else "missing")
+
     def create_note(
         self,
         *,

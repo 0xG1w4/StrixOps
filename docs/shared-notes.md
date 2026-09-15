@@ -94,11 +94,29 @@ While the tab is visible, it refreshes periodically so Agent updates appear.
 Markdown is rendered without executing raw HTML or automatically loading
 embedded remote images.
 
+The same notebook area includes **Test coverage**, **Threat models** and
+**Credentials**. The credential view combines explicit recorded credential
+fields, tables and labeled observations with recognized saved credential CSVs,
+retaining their sources and authentication status. Search and status filters
+affect the view; **Download CSV** exports the full inventory using the legacy
+`host,username,password,hash,source,severity,note` columns.
+
+Final reports now include active current notes, current coverage conclusions,
+current threat models with active amendments, and the credential inventory.
+Deleted notes and superseded history stay available for audit but are excluded
+from report input. Each notebook record must fit completely with its provenance;
+input-budget omissions are listed in the report source snapshot. Report prompts
+distinguish working notes and hypotheses from verified findings. Normalized
+credential CSV rows are the only attachment exception; general scripts and logs
+are not read or sent to the report model.
+
 The existing Console task access boundary also covers these read-only routes:
 
 - `GET /api/runs/{name}/notes`: `search`, `category`, repeated `tags`, `author`,
   `include_deleted`, `limit` and `offset`.
 - `GET /api/runs/{name}/notes/{note_id}`: `include_history`, default `false`.
+- `GET /api/runs/{name}/credentials`: aggregated current credential records.
+- `GET /api/runs/{name}/credentials.csv`: full inventory CSV download.
 
 Tag filters require all selected tags. Author filtering matches creator or
 latest editor identity. Missing old data is distinguishable from unreadable

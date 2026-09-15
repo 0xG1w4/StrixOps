@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { BookOpen, ListChecks, Network } from "lucide-react";
+import { BookOpen, KeyRound, ListChecks, Network } from "lucide-react";
 import AssessmentPanel from "@/components/AssessmentPanel";
+import CredentialsPanel from "@/components/CredentialsPanel";
 import NotesPanel from "@/components/NotesPanel";
 import type { RunDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -20,6 +21,7 @@ export default function NotebookPanel({ name, run, view, onViewChange }: {
     { value: "shared", label: en ? "Shared notes" : "共享笔记", icon: BookOpen },
     { value: "coverage", label: en ? "Test coverage" : "测试覆盖", icon: ListChecks },
     { value: "threat_models", label: en ? "Threat models" : "威胁模型", icon: Network },
+    { value: "credentials", label: en ? "Credentials" : "凭据", icon: KeyRound },
   ];
   return (
     <section className="min-w-0" aria-label={en ? "Notes" : "笔记"}>
@@ -38,7 +40,9 @@ export default function NotebookPanel({ name, run, view, onViewChange }: {
       </div>
       {view === "shared"
         ? <NotesPanel key={name} runName={name} live={Boolean(run?.live)} />
-        : <AssessmentPanel key={name} name={name} run={run} view={view} />}
+        : view === "credentials"
+          ? <CredentialsPanel key={name} name={name} live={Boolean(run?.live)} />
+          : <AssessmentPanel key={name} name={name} run={run} view={view} />}
     </section>
   );
 }

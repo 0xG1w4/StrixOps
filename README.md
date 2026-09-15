@@ -641,8 +641,14 @@ An operator-supplied workspace replaces the default workspace location. See the
   and closing narrative. Deterministic report composition is the fallback if
   synthesis fails or is disabled.
 - Automatic and manually regenerated reports retain vulnerability and internal
-  finding content, including inline evidence and PoC. They do not read raw file
-  contents under `evidence/`; saved attachment links remain available for download.
+  finding content, inline evidence and PoC, current shared notes, coverage,
+  threat models and aggregated credentials. Raw scripts/logs under `evidence/`
+  are excluded; only recognized credential CSVs contribute normalized rows.
+  Saved attachment links remain available for download.
+- The task's **Notes → Credentials** view aggregates recorded accounts, passwords,
+  hashes and keys with their sources and validation status. Its CSV download
+  preserves the platform's `host,username,password,hash,source,severity,note`
+  columns. Unreadable sources are reported, not treated as a clean empty result.
 - Reports render headings, paragraphs, numbered and nested lists with explicit
   spacing; wide tables, code blocks and supported task flowcharts scroll within
   their own regions. Existing stored Markdown and downloads are not rewritten.

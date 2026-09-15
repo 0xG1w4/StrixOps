@@ -31,6 +31,8 @@ from strixops.console.model_catalog import normalize_api_base
 from strixops.platform import artifacts
 from strixops.report.assessment import empty_assessment
 from strixops.report.diagnostics import MESSAGES
+from strixops.report.notebook import notebook_context
+from strixops.report.notes import NotesStore
 from strixops.report.synthesis import synthesize_executive_report
 
 logger = logging.getLogger(__name__)
@@ -214,6 +216,8 @@ class SavedReportState:
     internal_findings: list[dict[str, Any]]
     assessment: SavedAssessment
     final_fields: dict[str, Any] | None
+    report_notes: dict[str, Any] | None = None
+    report_notebook: dict[str, Any] | None = None
 
     def duration_seconds(self) -> int:
         return int(self.run_record.get("duration_seconds") or 0)
@@ -261,9 +265,17 @@ def load_source(run_dir: Path) -> SavedReportState:
         draft = record.get("scan_results")
         if draft is not None and not isinstance(draft, dict):
             raise ValueError("invalid root narrative")
-        if not reports and not internal and not draft:
+        report_notes = NotesStore(run_dir).snapshot()
+        source = SavedReportState(
+            run_dir, record, reports, internal, SavedAssessment(assessment), draft, report_notes,
+        )
+        source.report_notebook = notebook_context(source)
+        has_notebook = any(source.report_notebook[key] for key in (
+            "notes", "coverage", "threat_models", "credentials",
+        ))
+        if not reports and not internal and not draft and not has_notebook:
             raise ValueError("no saved findings or root narrative")
-        return SavedReportState(run_dir, record, reports, internal, SavedAssessment(assessment), draft)
+        return source
     except (OSError, UnicodeError, ValueError, TypeError) as exc:
         raise GenerationError("source_error") from exc
 

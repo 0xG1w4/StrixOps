@@ -35,6 +35,7 @@ from strixops.platform import artifacts
 from strixops.report.dedupe import _extract_text
 from strixops.report.diagnostics import set_report_synthesis_status, synthesis_error_code
 from strixops.report.formatting import format_report_markdown, report_format_guidance
+from strixops.report.notebook import notebook_context
 from strixops.report.prompt import synthesis_system_prompt as synthesis_system_prompt
 from strixops.report.source import ReportSourceTooLarge
 from strixops.report.source import build_report_source as build_report_source
@@ -205,8 +206,10 @@ async def _synthesize_report(
         logger.warning("No report source budget remains after instructions and output reserve")
         return None
 
+    notebook = notebook_context(run_state)
     full_source = build_report_source(
-        run_state, generated_at=generated_at, token_budget=source_budget, token_count=count,
+        run_state, generated_at=generated_at,
+        token_budget=source_budget, token_count=count, notebook=notebook,
     )
     for attempt, trimmed in enumerate((False, True), start=1):
         if loop.time() >= deadline:
@@ -216,12 +219,10 @@ async def _synthesize_report(
         if trimmed:
             source = build_report_source(
                 run_state, generated_at=generated_at, trimmed=True,
-                token_budget=source_budget, token_count=count,
+                token_budget=source_budget, token_count=count, notebook=notebook,
             )
-            if source == full_source:
-                # Repacking can replace context with complete finding fields,
-                # so character length is not a reliable measure of the change.
-                break
+            # The current notebook can be identical after trimming. A transient
+            # model failure or incomplete response still deserves its retry.
         else:
             source = full_source
         # Save the exact source prepared for this attempt for report review.

@@ -145,21 +145,34 @@ CLI 可用 `STRIX_REPORT_LLM`、`REPORT_LLM_API_MODE`、`REPORT_LLM_REASONING_EF
 不再固定截为每栏 6,000 字符：能放入的字段保留完整值；放不下的整个字段会在
 `Source Coverage` 中明确记录，原始记录保持完整。所有 finding 的身份都会保留；
 若连目标范围和 finding 身份都无法放入输入容量，则保留草稿并记录原因。
-重试会移除补充资料，但不会再直接丢弃全部内部发现正文。
+重试会移除补充台账，但保留共享笔记、测试覆盖、威胁模型和凭据记录。
+笔记采用当前有效版本，排除已删除笔记及旧版本；覆盖采用当前结论；威胁模型采用
+当前正文和有效补充。每条记录连同来源、验证状态整体加入，容量不足时逐条记录省略，
+不会截断密码、密钥或把结论与依据拆开。手动生成及同次生成的重试使用固定来源快照。
 
-自动生成和手动重新生成都不读取 `evidence/` 中的原始附件正文，即使该附件被
-finding 或 root 草稿引用，也不会把脚本、日志或 Markdown 附件内容送给报告模型。
+自动生成和手动重新生成都不把 `evidence/` 中的原始附件正文送给模型：脚本、日志、
+Markdown 等普通附件仍不读取。唯一例外是已保存、可明确识别的凭据 CSV；程序验证
+表头并只提取结构化凭据行，将其与发现、笔记中的凭据去重，送入凭据清单而非原始文件正文。
 已保存附件仍保留下载链接；附件存在本身不代表测试成功或漏洞成立。
 漏洞与内部发现内容继续收录，包括记录内的 evidence、PoC、技术分析、假设与反证。
 自动生成使用扫描期间保存的发现对象；手动生成读取 `vulnerabilities.json` 和
 `internal_findings/*.md` 全文。漏洞 JSON 与 `vulnerabilities/*.md` 由同一份正式
 记录产生，使用 JSON 避免重复加入相同正文。模型不会读取完整工作区或完整会话历史。
 
+「笔记 → 凭据」提供整个任务已记录凭据的汇总、搜索、验证状态筛选和 CSV 下载。
+来源包括漏洞、内部发现、当前共享笔记、测试覆盖、威胁模型、root 结论、内部台账，
+以及上述凭据 CSV；不会读取模型设置中的 API 密钥。重复项保留全部来源；发现某个
+密码不等于已验证可登录。无法读取的来源会显示不完整提示，不能据此判断没有凭据。
+CSV 保留旧版列 `host,username,password,hash,source,severity,note`，类型和验证状态
+写入备注；下载全部汇总行，不受当前筛选或分页影响。CSV 使用 UTF-8 BOM 和单元格
+转义以适配电子表格，界面及报告中的原始凭据值保持不变。
+
 任务目录 `.state/report-system-prompt.md` 保存本次报告指令，
 `.state/report-source-1.md` 与可能存在的 `.state/report-source-2.md` 保存来源快照。
 排查报告缺漏时，可以核对来源中的漏洞、内部发现与 `Source Coverage`，确认哪些
 完整字段进入了输入、哪些被容量限制省略。`evidence_content_policy` 为
-`attachments_not_loaded`，表示原始附件正文依规则排除，不是扫描或归档失败。
+`attachments_not_loaded`，表示原始附件正文依规则排除，不是扫描或归档失败；
+`credential_csv_policy` 的 `explicit_structured_credentials_only` 标识凭据 CSV 特例。
 
 ## 从手动启动迁移
 

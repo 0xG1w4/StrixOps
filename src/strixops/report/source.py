@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from strixops.engine.targets import normalize_targets
+from strixops.report.notebook import notebook_context
 from strixops.report.source_evidence import referenced_evidence_names
 from strixops.report.state import RunState
 
@@ -159,14 +160,16 @@ def build_report_source(
     trimmed: bool = False,
     token_budget: int = _DEFAULT_SOURCE_TOKENS,
     token_count: Callable[[str], int] | None = None,
+    notebook: dict[str, Any] | None = None,
 ) -> str:
     """Keep whole values, explain omissions, and enforce the final token budget.
 
     Findings retain their identities even under pressure. Fields are indivisible:
     a credential, PoC or response is included verbatim or explicitly omitted.
-    Retry drops supplemental context, never wholesale internal-finding bodies.
-    Inline evidence and PoC fields remain source material; raw files under
-    evidence/ are never opened. The attachment inventory contains links only.
+    Retry keeps current notebook records and drops only supplemental ledgers.
+    Inline evidence and PoC fields remain source material. Only recognized
+    credential CSV attachments contribute normalized rows; other attachment
+    bodies are never read. The attachment inventory itself contains links only.
     The caller supplies its model tokenizer; direct/offline use conservatively
     counts UTF-8 bytes. This function never mutates saved findings or evidence.
     """
@@ -207,7 +210,21 @@ def build_report_source(
             "root_draft", {key: value for key, value in draft.items() if value not in ("", None, [], {})},
         ))
     extras: list[tuple[str, str]] = []
-    supplemental_omissions: list[dict[str, Any]] = []
+    notebook = notebook if notebook is not None else notebook_context(run_state)
+    notebook_records: list[_Record] = []
+    for key, heading in (
+        ("credentials", "Credential Inventory (aggregated observations, retain validation status)"),
+        ("coverage", "Coverage Records (agent-reported per-surface outcomes)"),
+        ("threat_models", "Threat Models (current baseline and active amendments)"),
+        ("notes", "Shared Notes (current working references, not verified findings)"),
+    ):
+        for index, value in enumerate(notebook[key], 1):
+            identifier = str(value.get("id") or value.get("note_id") or f"{key}-{index}")
+            notebook_records.append(_Record(
+                f"## {heading}\n\n### {identifier}", f"{key}:{identifier}", value, value,
+            ))
+    admitted_notebook: list[_Record] = []
+    supplemental_omissions: list[dict[str, Any]] = list(notebook["omissions"])
     accepted: list[tuple[_Record, str]] = []
     # Charge complete serialized units conservatively, then verify the exact
     # assembled input. Token boundaries across units need not be additive.
@@ -241,18 +258,26 @@ def build_report_source(
     # Use remaining room for complete primary fields before ledgers/coverage.
     for row in records:
         admit_fields(row, remaining)
+    # A notebook row is atomic: its credential/observation must travel with its
+    # host, source, current outcome and author. Fair shares let later small rows
+    # survive even when one early note or threat model is too large.
+    pending_notebook = list(notebook_records)
+    share = remaining // max(1, len(pending_notebook))
+    for allowance in (share, None):
+        for row in pending_notebook[:]:
+            cost = count(row.render())
+            if cost <= remaining and (allowance is None or cost <= allowance):
+                admitted_notebook.append(row)
+                pending_notebook.remove(row)
+                remaining -= cost
+    for row in pending_notebook:
+        supplemental_omissions.append({"source": row.source, "reason": "input_token_budget"})
     supplemental: list[tuple[str, str, Any]] = []
     campaign = run_state.run_record.get("internal_campaign")
     if campaign:
         supplemental.append((
             "campaign", "Internal Campaign Ledger (engagement-created resources and observations)", campaign,
         ))
-    try:
-        coverage = run_state.assessment.snapshot(overview["run_status"])["coverage"]
-    except Exception:  # Optional assessment must not block report generation.
-        coverage = None
-    if coverage:
-        supplemental.append(("coverage", "Coverage Records (agent-reported per-surface outcomes)", coverage))
     for key, heading, value in supplemental:
         text = f"## {heading}\n" + _dump_json(value) + "\n\n"
         cost = count(text)
@@ -275,8 +300,13 @@ def build_report_source(
             "finding_count": core_count,
             "omitted_field_count": len(omitted_fields),
             "evidence_content_policy": "attachments_not_loaded",
+            "credential_csv_policy": "explicit_structured_credentials_only",
             "evidence_block_count": 0,
             "evidence_excerpt_count": 0,
+            "notebook_record_count": len(notebook_records),
+            "included_notebook_record_count": len(admitted_notebook),
+            "omitted_notebook_record_count": len(notebook_records) - len(admitted_notebook),
+            "notebook_policy": "current_records_without_deleted_notes_or_superseded_history",
             "omission_count": len(omissions),
             "omissions": omissions,
             "omission_details_not_listed": 0,
@@ -285,6 +315,7 @@ def build_report_source(
             audit["omissions"] = audit["omissions"][:-1]
             audit["omission_details_not_listed"] += 1
         content = prefix + "".join(row.render() for row in records)
+        content += "".join(row.render() for row in admitted_notebook)
         content += "".join(text for _, text in extras)
         return content + "## Source Coverage\n" + _dump_json(audit) + "\n"
 
@@ -293,6 +324,9 @@ def build_report_source(
         if extras:
             key, _ = extras.pop()
             supplemental_omissions.append({"source": key, "reason": "input_token_budget"})
+        elif admitted_notebook:
+            row = admitted_notebook.pop()
+            supplemental_omissions.append({"source": row.source, "reason": "input_token_budget"})
         elif accepted:
             row, key = accepted.pop()
             del row.kept[key]
