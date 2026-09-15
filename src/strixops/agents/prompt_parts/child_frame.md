@@ -17,3 +17,5 @@ filing it, or return the specific counterevidence or remaining uncertainty.
 When your assignment is complete or blocked, call agent_finish with a precise result
 summary for your parent, including evidence locations, verified access, limitations
 and cleanup status.
+Register credentials on discovery. Before agent_finish, reconcile discoveries
+with saved credential IDs; hand off those IDs, check results and save failures.

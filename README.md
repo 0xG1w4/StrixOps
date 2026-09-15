@@ -646,8 +646,12 @@ An operator-supplied workspace replaces the default workspace location. See the
   are excluded; only recognized credential CSVs contribute normalized rows.
   Saved attachment links remain available for download.
 - The task's **Notes → Credentials** view aggregates recorded accounts, passwords,
-  hashes and keys with their sources and validation status. Its CSV download
-  preserves the platform's `host,username,password,hash,source,severity,note`
+  hashes and keys with their sources and validation status. Agents register
+  discoveries immediately using `record_credential` and update validation with
+  revision checks; `.state/credentials.json` retains the shared register. Saved
+  finding/CSV extraction supplements the register without overwriting current
+  validation. The same inventory supplies reports and CSV downloads, preserving
+  the platform's `host,username,password,hash,source,severity,note`
   columns. Unreadable sources are reported, not treated as a clean empty result.
 - Reports render headings, paragraphs, numbered and nested lists with explicit
   spacing; wide tables, code blocks and supported task flowcharts scroll within

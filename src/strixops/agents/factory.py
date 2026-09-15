@@ -36,6 +36,12 @@ from strixops.tools.collaboration import (
     view_agent_graph,
     wait_for_agents,
 )
+from strixops.tools.credentials import (
+    get_credential,
+    list_credentials,
+    record_credential,
+    update_credential,
+)
 from strixops.tools.internal_campaign import get_internal_campaign, record_internal_event
 from strixops.tools.lifecycle import agent_finish, finish_scan
 from strixops.tools.notes import create_note, delete_note, get_note, list_notes, update_note
@@ -94,6 +100,10 @@ def base_tools() -> list[Any]:
         get_note,
         update_note,
         delete_note,
+        record_credential,
+        update_credential,
+        list_credentials,
+        get_credential,
         load_skill,
         list_skills,
         record_coverage,

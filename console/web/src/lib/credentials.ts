@@ -12,6 +12,7 @@ export interface Credential {
   note: string;
   secret_type: string;
   validation_status: CredentialStatus;
+  validation_evidence?: string;
   sources: Array<{ kind: string; id: string; title: string }>;
 }
 
@@ -37,6 +38,7 @@ export function parseCredentialsPage(value: unknown): CredentialsPage {
     if (!value || typeof value !== "object") throw new Error("invalid_credentials");
     const row = value as Record<string, unknown>;
     if (STRING_FIELDS.some(field => typeof row[field] !== "string") || !row.id
+      || (row.validation_evidence !== undefined && typeof row.validation_evidence !== "string")
       || (row.validation_status != null && !CREDENTIAL_STATUSES.includes(row.validation_status as CredentialStatus))
       || !Array.isArray(row.sources) || row.sources.some(source => !source || typeof source !== "object"
         || ["kind", "id", "title"].some(field => typeof (source as Record<string, unknown>)[field] !== "string"))) {
@@ -51,6 +53,7 @@ export function filterCredentials(rows: Credential[], search: string, status: Cr
   const query = search.trim().toLocaleLowerCase();
   return rows.filter(row => (!status || row.validation_status === status)
     && (!query || [row.host, row.username, row.password, row.hash, row.source, row.note, row.secret_type,
+      row.validation_evidence ?? "",
       ...row.sources.flatMap(source => [source.kind, source.id, source.title])]
       .some(value => value.toLocaleLowerCase().includes(query))));
 }

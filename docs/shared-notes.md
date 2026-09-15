@@ -101,6 +101,24 @@ retaining their sources and authentication status. Search and status filters
 affect the view; **Download CSV** exports the full inventory using the legacy
 `host,username,password,hash,source,severity,note` columns.
 
+Agents maintain the task's primary credential register through
+`record_credential`, `list_credentials`, `get_credential` and `update_credential`.
+They register discovered values immediately and reconcile their discoveries
+before handing off or finishing. The backend serializes writes to
+`.state/credentials.json`, preserves exact values and attribution, and deduplicates
+identical host/account/secret/type combinations. Validation updates require the
+current revision and an observed result for `validated` or `failed`; a stale
+writer receives a conflict instead of replacing another agent's result.
+Distinct secrets are separate records. Repeated registration does not reset a
+previous validation; agents use the update tool for changes.
+
+The UI, CSV download and reports use this register plus the existing fallback
+extraction. The register's current validation and evidence take precedence over
+older parsed observations, whose sources remain attached. CSV is generated from
+this shared inventory when downloaded; agents do not append to a separate CSV
+file in the sandbox. Missing registers on older runs still use saved findings,
+notes and recognized credential CSVs; unreadable registers display a warning.
+
 Final reports now include active current notes, current coverage conclusions,
 current threat models with active amendments, and the credential inventory.
 Deleted notes and superseded history stay available for audit but are excluded

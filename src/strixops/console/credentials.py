@@ -13,8 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from strixops.platform.artifacts import csv_safe
+from strixops.report import credential_store
 from strixops.report.credential_csv import load_credential_csv
-from strixops.report.credentials import collect_credentials, credential_source_warnings, merge_credentials
+from strixops.report.credentials import (
+    collect_credentials,
+    credential_source_warnings,
+    merge_credential_inventory,
+)
 from strixops.report.notes import NotesError, parse_document
 
 OpenRunFile = Callable[[Path, str], int]
@@ -131,6 +136,20 @@ def list_response(
     """Keep readable sources when another source is corrupt; only import credential CSV attachments."""
     reader = _Reader(run_dir, open_file)
     record = reader.document("run.json", "run_unreadable", dict)
+    # Read the primary register before spending the source budget on fallback
+    # findings. A large legacy dataset must not crowd out registered records.
+    registered: list[dict] = []
+    raw_register = reader.text(
+        ".state/credentials.json", "credential_register_unreadable", limit=credential_store.MAX_STORE_BYTES,
+    )
+    if raw_register is not None:
+        try:
+            registered = credential_store.project_snapshot(
+                credential_store.parse_document(raw_register.encode("utf-8")),
+            )["credentials"]
+            reader.available += 1
+        except ValueError:
+            reader.warn("credential_register_unreadable")
     reports = reader.document("vulnerabilities.json", "vulnerabilities_unreadable", list)
     # The JSON record is authoritative when its Markdown rendering also exists.
     report_ids = {row.get("id") for row in reports}
@@ -175,7 +194,9 @@ def list_response(
         reports=reports,
         internal_findings=findings,
     )
-    rows = merge_credentials(rows, imported)
+    rows = merge_credential_inventory(
+        registered, rows, imported, reports=reports, internal_findings=findings,
+    )
     for warning in csv_warnings:
         reader.warn(warning)
     for warning in credential_source_warnings(
@@ -202,6 +223,8 @@ def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
                 None,
                 [
                     str(row.get("note") or ""),
+                    f"validation_evidence={row['validation_evidence']}"
+                    if row.get("validation_evidence") else "",
                     f"type={row.get('secret_type', 'secret')}; "
                     f"validation={row.get('validation_status', 'unverified')}",
                 ],

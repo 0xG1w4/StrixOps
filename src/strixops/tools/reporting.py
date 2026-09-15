@@ -839,6 +839,10 @@ def create_finding(
     Record each distinct discovery promptly, with observed facts and validation
     status. One extracted dataset may use one finding plus a complete evidence
     attachment; do not emit one finding per row or repeat unchanged facts.
+    For credentials, also call record_credential immediately for each distinct
+    material and reference its saved ID in metadata.credential_ids (a list of strings).
+    Update that record after actual authentication checks; findings do not replace
+    the shared credential registry.
 
     **Content formatting rules:**
     - Use markdown structure (## sections, bullet points, code blocks)
@@ -879,7 +883,9 @@ def create_finding(
             For credentials, credentials may be a list of objects with host, username,
             password, hash, source, severity, note, secret_type and validation_status.
             Preserve exact values; use unverified, validated or failed based on actual checks.
-            Large sets may use a declared credential CSV with these columns instead.
+            A declared credential CSV with these columns preserves complete raw evidence
+            or recovers unavailable registry writes; new credentials belong in
+            record_credential, with saved IDs listed in metadata.credential_ids.
     """
     run_state: RunState = ctx.context.run_state  # type: ignore[assignment]
     finding_type = finding_type.strip().lower()

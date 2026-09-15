@@ -27,6 +27,7 @@ from strixops.platform import artifacts
 from strixops.platform.events import EventWriter
 from strixops.report.assessment import AssessmentState
 from strixops.report.assessment import summary as assessment_summary
+from strixops.report.credential_store import CredentialStore
 from strixops.report.evidence import collect_files, finding_references
 from strixops.report.formatting import format_report_markdown
 from strixops.report.notes import NotesStore
@@ -103,6 +104,7 @@ class RunState:
         self.events = events
         self._lock = threading.RLock()
         self._notes = NotesStore(self.run_dir, self._lock)
+        self._credentials = CredentialStore(self.run_dir, self._lock)
         self.assessment = AssessmentState(self.save, self._lock)
         self.reports: list[dict[str, Any]] = []
         self.internal_findings: list[dict[str, Any]] = []
@@ -120,6 +122,11 @@ class RunState:
     def notes(self) -> NotesStore:
         """One lazy note store shared by this run's root and children."""
         return self._notes
+
+    @property
+    def credentials(self) -> CredentialStore:
+        """One credential register shared by this run's root and children."""
+        return self._credentials
 
     # -- lifecycle ---------------------------------------------------------
 

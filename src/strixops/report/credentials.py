@@ -524,12 +524,96 @@ def credential_source_warnings(
         for source in row.get("sources", [])
         if isinstance(source, dict)
     }
+    known_ids = {row.get("id") for row in credentials}
     for finding in [*reports, *internal_findings]:
+        references = _credential_references(finding) if isinstance(finding, dict) else set()
         if (
             isinstance(finding, dict)
             and finding.get("finding_type") == "credential"
-            and finding.get("id") not in covered
+            and (
+                bool(references - known_ids)
+                or (finding.get("id") not in covered and not references)
+            )
             and (finding.get("content") or finding.get("metadata"))
         ):
             return ["credential_records_unparsed"]
     return []
+
+
+def _credential_references(record: dict[str, Any]) -> set[str]:
+    """Read current explicit register references without old histories or scripts."""
+    references: set[str] = set()
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        values = metadata.get("credential_ids", [])
+        if isinstance(values, list):
+            references.update(value for value in values if isinstance(value, str))
+        value = metadata.get("credential_id")
+        if isinstance(value, str):
+            references.add(value)
+    for field in ("content", "description", "evidence", "technical_analysis"):
+        value = record.get(field)
+        if isinstance(value, str):
+            # Saved internal Markdown contains its structured Metadata again.
+            # Read only current explicit metadata keys above, not history or
+            # examples serialized inside that trailing JSON block.
+            value = re.sub(r"\n## Metadata\s*\n```json\s*\n.*\n```\s*$", "", value, flags=re.S)
+            references.update(re.findall(r"\bcred-[0-9a-f]{20}\b", value))
+    return references
+
+
+def merge_credential_inventory(
+    registered: list[dict[str, Any]], *supplemental: list[dict[str, Any]],
+    reports: Iterable[dict[str, Any]] = (), internal_findings: Iterable[dict[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """Keep registered current validation authoritative while preserving other sources.
+
+    Discovery parsing is a fallback. An older finding or CSV must not undo an
+    explicit later registry update, or turn it into an unknown status. Conflicting
+    supplemental observations remain attributable separately from current state.
+    """
+    def identity(row: dict[str, Any]) -> tuple[str, ...]:
+        return tuple(row.get(key, "") for key in ("host", "username", "password", "hash", "secret_type"))
+
+    current = {identity(row): row for row in registered}
+    observations: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for group in supplemental:
+        for row in group:
+            key = identity(row)
+            if key not in current:
+                continue
+            status = row.get("validation_status", "unverified")
+            if status in {"unverified", current[key]["validation_status"]}:
+                continue
+            observed = {"validation_status": status, "sources": row.get("sources", [])}
+            if observed not in observations.setdefault(key, []):
+                observations[key].append(observed)
+    result = merge_credentials(registered, *supplemental)
+    for row in result:
+        key = identity(row)
+        if key not in current:
+            continue
+        record = current[key]
+        for field in (
+            "validation_status", "validation_evidence", "severity", "revision",
+            "created_by", "updated_by", "created_at", "updated_at",
+        ):
+            if field in record:
+                row[field] = record[field]
+        if key in observations:
+            row["supplemental_validation"] = observations[key]
+    by_id = {row["id"]: row for row in result if identity(row) in current}
+    for kind, records in (("vulnerability", reports), ("finding", internal_findings)):
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            source_id = _scalar(record.get("id"))
+            provenance = {
+                "kind": kind, "id": source_id,
+                "title": _scalar(record.get("title")) or source_id,
+            }
+            for reference in _credential_references(record):
+                row = by_id.get(reference)
+                if row is not None and provenance not in row["sources"]:
+                    row["sources"].append(provenance)
+    return result

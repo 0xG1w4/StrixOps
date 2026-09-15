@@ -6,7 +6,12 @@ import copy
 from typing import Any
 
 from strixops.report.credential_csv import load_credential_csv
-from strixops.report.credentials import collect_credentials, credential_source_warnings, merge_credentials
+from strixops.report.credential_store import CredentialStore
+from strixops.report.credentials import (
+    collect_credentials,
+    credential_source_warnings,
+    merge_credential_inventory,
+)
 from strixops.report.notes import NotesStore
 
 
@@ -62,6 +67,7 @@ def notebook_context(run_state: Any) -> dict[str, Any]:
     except Exception:
         credentials = []
         omissions.append({"source": "credentials", "reason": "source_unreadable"})
+    csv_credentials: list[dict[str, Any]] = []
     try:
         csv_credentials, csv_warnings = load_credential_csv(
             run_dir=run_state.run_dir,
@@ -69,10 +75,22 @@ def notebook_context(run_state: Any) -> dict[str, Any]:
             reports=run_state.reports,
             internal_findings=run_state.internal_findings,
         )
-        credentials = merge_credentials(credentials, csv_credentials)
         omissions.extend({"source": "credential_csv", "reason": code} for code in csv_warnings)
     except Exception:
         omissions.append({"source": "credential_csv", "reason": "source_unreadable"})
+    registered: list[dict[str, Any]] = []
+    try:
+        register = getattr(run_state, "credentials", None) or CredentialStore(run_state.run_dir)
+        inventory = register.snapshot()
+        if inventory.get("success") is not True:
+            raise ValueError("credential register unavailable")
+        registered = inventory["credentials"]
+    except Exception:
+        omissions.append({"source": "credential_register", "reason": "source_unreadable"})
+    credentials = merge_credential_inventory(
+        registered, credentials, csv_credentials,
+        reports=run_state.reports, internal_findings=run_state.internal_findings,
+    )
     omissions.extend(
         {"source": "credentials", "reason": code}
         for code in credential_source_warnings(

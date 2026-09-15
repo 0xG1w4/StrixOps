@@ -63,13 +63,30 @@ usefulness for planning is different from its demonstrated security impact.
 ## Preserve complete evidence without flooding context
 
 Save complete, untruncated evidence under `/workspace/output/` in the sandbox.
-For credential sets, use a structured file with identity, value/type, source,
-and validation status. The finding should identify the dataset, record count,
-relevant verified capabilities and the evidence file. Large datasets belong in
-attachments; there is no requirement to copy the first 50 entries or every secret
-into tool arguments, parent summaries or compaction summaries.
+For every discovered credential, call `record_credential` immediately with its
+exact host, account, value/type, source and validation status. Do not defer this to
+the report composer, a shared note, or a later extraction pass. The run owns the
+shared registry, so use the tool instead of directly appending its CSV. The
+Console inventory, CSV download and report use the saved records. Do not register
+guessed passwords, examples, or the operator's infrastructure/model-provider keys.
 
-Use a credential CSV (for example `application-credentials.csv`) with columns
+The finding should identify the dataset, record count, relevant verified
+capabilities, saved credential IDs and complete evidence files. Keep raw datasets
+as attachments too. Register each distinct credential once; do not repeatedly
+copy the full inventory into findings, parent summaries or compaction summaries.
+Use filtered `list_credentials` and `get_credential` to reuse saved records.
+
+Use `unverified` until an actual authorized authentication check. Then read the
+current record and call `update_credential` with `expected_revision`, `validated`
+or `failed`, and `validation_evidence` identifying the exact service, scope,
+result and supporting evidence. Preserve each distinct host/account/secret
+combination; never mark a set validated because only one account was tested.
+On revision conflict, reread and reconcile. Re-registering duplicate material
+does not change its validation status. Before handoff or completion, reconcile
+your discoveries with saved IDs and disclose any material that could not be saved.
+
+For raw evidence or if registry writes are unavailable, use a credential CSV
+(for example `application-credentials.csv`) with columns
 `host,username,password,hash,source,severity,note`; optional `secret_type` and
 `validation_status` columns preserve the material's type and authentication result.
 For API keys, tokens or private keys, put the exact value in `password` and name
@@ -79,13 +96,13 @@ or `failed` with the exact observed scope/result. Do not substitute examples,
 placeholders or redacted values for the material actually discovered.
 List this saved CSV in a credential finding's `metadata.evidence_files`. The
 Console can aggregate its structured rows once captured; general scripts and
-logs are not read by the report composer.
+logs are not read by the report composer. Report a registry save failure to your
+parent and continue independent work; do not claim the material was registered.
 
-For small sets, record the same named fields directly in `metadata.credentials`
-as a list of objects. This makes them available to the credential inventory
-during scanning without requiring file capture. Preserve each distinct
-host/account/secret combination and retain its source; never mark an entire set
-validated because only one account was tested.
+Older findings with the same named fields in `metadata.credentials` remain a
+supported fallback. New discoveries should use the shared credential tools;
+registering a credential does not replace the observational finding or verified
+vulnerability report needed to establish its exposure and impact.
 
 List every attachment in `metadata.evidence_files`, using paths relative to
 `/workspace/output/` (preferred) or absolute `/workspace/output/...` paths:

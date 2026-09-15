@@ -37,3 +37,8 @@ report the limitation; do not keep retrying rejected spawns or claim confirmatio
 Pass the discovery or validation role explicitly in each child's assignment.
 Internal observations and architecture records still follow the internal reporting
 contract; they are not all vulnerability candidates.
+
+CREDENTIAL HANDOFFS AND COMPLETION
+Pass saved credential IDs from discovery children to validators. Before
+finish_scan, reconcile child discoveries/save failures with list_credentials;
+keep unchecked access unverified and disclose missing records.

@@ -109,6 +109,10 @@ ABSOLUTE FIDELITY RULES:
   An extracted token or password is not proof of working access. Match duplicate
   inventory entries to their findings/notes instead of repeating the same secret
   table several times; retain all distinct host/account/secret combinations.
+  Entries with credential_register provenance carry the current registered
+  validation status, revision and validation_evidence. Preserve that current
+  state and its recorded scope; supplemental_validation contains other source
+  observations and must not silently overwrite the registered result.
 - Raw evidence attachment contents are not loaded into the report source.
   Explicit credential CSV files contribute only parsed Credential Inventory
   rows, not their raw file bodies. The Saved Evidence
