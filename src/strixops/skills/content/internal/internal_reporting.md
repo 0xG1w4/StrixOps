@@ -63,8 +63,8 @@ usefulness for planning is different from its demonstrated security impact.
 ## Preserve complete evidence without flooding context
 
 Save complete, untruncated evidence under `/workspace/output/` in the sandbox.
-For every discovered credential, call `record_credential` immediately with its
-exact host, account, value/type, source and validation status. Do not defer this to
+For individual discoveries, call `record_credential` immediately with the exact
+host, account, value/type, source and validation status. Do not defer this to
 the report composer, a shared note, or a later extraction pass. The run owns the
 shared registry, so use the tool instead of directly appending its CSV. The
 Console inventory, CSV download and report use the saved records. Do not register
@@ -76,6 +76,20 @@ as attachments too. Register each distinct credential once; do not repeatedly
 copy the full inventory into findings, parent summaries or compaction summaries.
 Use filtered `list_credentials` and `get_credential` to reuse saved records.
 
+For large credential datasets, preserve the complete original dump under
+`/workspace/output/` and programmatically extract every credential into a normalized
+CSV there. Call `import_credentials(csv_path="/workspace/output/credentials.csv")`
+once for the complete dataset. Do not paste the dump into conversation, ask the
+model to transcribe rows, issue one tool call per row, or select only a sample.
+The importer streams all rows into one atomic registry transaction and returns
+only counts and a dataset ID. Verify counts and filtered/paginated records; list
+dataset IDs in the finding's `metadata.credential_dataset_ids` and both raw/normalized
+paths in `metadata.evidence_files`. Important individual examples may additionally
+use `metadata.credential_ids`; never enumerate 100,000 IDs in a finding. If any row
+is invalid or the source changes, the import rolls back: fix the normalized file
+and retry, without discarding the original evidence. Imported duplicates do not
+override existing validation; update individual records after actual checks.
+
 Use `unverified` until an actual authorized authentication check. Then read the
 current record and call `update_credential` with `expected_revision`, `validated`
 or `failed`, and `validation_evidence` identifying the exact service, scope,
@@ -85,10 +99,13 @@ On revision conflict, reread and reconcile. Re-registering duplicate material
 does not change its validation status. Before handoff or completion, reconcile
 your discoveries with saved IDs and disclose any material that could not be saved.
 
-For raw evidence or if registry writes are unavailable, use a credential CSV
+For bulk import, raw evidence or if registry writes are unavailable, use a credential CSV
 (for example `application-credentials.csv`) with columns
 `host,username,password,hash,source,severity,note`; optional `secret_type` and
-`validation_status` columns preserve the material's type and authentication result.
+`validation_status` and `validation_evidence` columns preserve type and check results.
+Use the exact named headers without extra columns. Leave status blank or use
+`unverified` for unchecked material; `validated`/`failed` require nonempty
+`validation_evidence`. Use separate rows for a password and hash of one account.
 For API keys, tokens or private keys, put the exact value in `password` and name
 its type in `secret_type`. Use proper CSV quoting for commas and multiline values.
 Use `unverified` until authentication is actually checked; then record `validated`

@@ -190,10 +190,19 @@ EDITORIAL RULES:
   exploitation; a discovered secret is not proof of authenticated access unless
   the source records that validation. State contradictions that affect a
   conclusion instead of silently selecting a stronger claim.
-- In the credentials section, list EVERY credential, hash, key and secret in
-  the source completely — one per line or in a table. Never summarize as
-  "N accounts found". Associate each value with its recorded account, service,
-  host and validation status when available; never invent missing attributes.
+- In the credentials section, use the Credential Inventory Summary for full
+  counts and recorded validation/type breakdowns. Large inventories include
+  at most 100 selected records, prioritized by validated status then severity.
+  State the total and number represented, identify the detail as a sample, and
+  point to the full credentials.csv download in the Credentials tab. Never
+  describe the sample as the complete inventory or extrapolate its proportions.
+  Present the supplied credential details with their recorded account, service,
+  host and validation status; preserve literal values and never invent missing
+  attributes. Retain significant credential evidence in findings even when it
+  is outside the selected inventory sample. If input-budget omissions remove
+  additional rows, distinguish the provided sample count from details actually
+  included in this report. Raw SQL dumps and other bulk evidence are attachments,
+  not report input; do not claim to have read their remaining contents.
 - In the architecture section, organize by hosts, services and access paths,
   and state what each system appears to do. For web engagements cover the
   observed external infrastructure and application components the same way.

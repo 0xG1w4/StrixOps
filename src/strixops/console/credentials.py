@@ -8,17 +8,16 @@ import json
 import os
 import re
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 from strixops.platform.artifacts import csv_safe
-from strixops.report import credential_store
-from strixops.report.credential_csv import load_credential_csv
+from strixops.report.credential_csv import imported_csv_paths, load_credential_csv
+from strixops.report.credential_inventory import CredentialInventory
+from strixops.report.credential_store import CredentialStore
 from strixops.report.credentials import (
     collect_credentials,
-    credential_source_warnings,
-    merge_credential_inventory,
 )
 from strixops.report.notes import NotesError, parse_document
 
@@ -127,29 +126,21 @@ class _Reader:
         return result
 
 
-def list_response(
+def load_inventory(
     run_dir: Path,
     open_file: OpenRunFile,
     *,
     valid_assessment: Callable[[Any], bool] | None = None,
-) -> dict[str, Any]:
+) -> tuple[CredentialInventory, _Reader]:
     """Keep readable sources when another source is corrupt; only import credential CSV attachments."""
     reader = _Reader(run_dir, open_file)
     record = reader.document("run.json", "run_unreadable", dict)
-    # Read the primary register before spending the source budget on fallback
-    # findings. A large legacy dataset must not crowd out registered records.
-    registered: list[dict] = []
-    raw_register = reader.text(
-        ".state/credentials.json", "credential_register_unreadable", limit=credential_store.MAX_STORE_BYTES,
-    )
-    if raw_register is not None:
-        try:
-            registered = credential_store.project_snapshot(
-                credential_store.parse_document(raw_register.encode("utf-8")),
-            )["credentials"]
-            reader.available += 1
-        except ValueError:
-            reader.warn("credential_register_unreadable")
+    register = CredentialStore(run_dir)
+    metadata = register.report_snapshot(limit=1)
+    if metadata.get("success") and metadata.get("source_status") == "available":
+        reader.available += 1
+    elif not metadata.get("success"):
+        reader.warn("credential_register_unreadable")
     reports = reader.document("vulnerabilities.json", "vulnerabilities_unreadable", list)
     # The JSON record is authoritative when its Markdown rendering also exists.
     report_ids = {row.get("id") for row in reports}
@@ -193,30 +184,47 @@ def list_response(
         manifest=record.get("evidence"),
         reports=reports,
         internal_findings=findings,
+        skip_paths=imported_csv_paths(run_dir, metadata.get("datasets", []), store=register),
     )
-    rows = merge_credential_inventory(
-        registered, rows, imported, reports=reports, internal_findings=findings,
+    inventory = CredentialInventory(
+        register, [*rows, *imported], reports=reports, internal_findings=findings,
+        datasets=metadata.get("datasets", []),
     )
     for warning in csv_warnings:
         reader.warn(warning)
-    for warning in credential_source_warnings(
-        reports=reports,
-        internal_findings=findings,
-        credentials=rows,
-    ):
+    return inventory, reader
+
+
+def source_state(inventory: CredentialInventory, reader: _Reader) -> dict:
+    for warning in inventory.warnings:
         reader.warn(warning)
+    available = reader.available or inventory.source_status == "available"
     if reader.warnings:
-        status = "partial" if reader.available else "unreadable"
+        status = "partial" if available else "unreadable"
     else:
-        status = "available" if reader.available else "missing"
-    return {"credentials": rows, "source_status": status, "warnings": reader.warnings}
+        status = "available" if available else "missing"
+    return {"source_status": status, "warnings": reader.warnings}
 
 
-def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
+def list_response(
+    run_dir: Path, open_file: OpenRunFile, *,
+    valid_assessment: Callable[[Any], bool] | None = None,
+    query: str | None = None, validation_status: str | None = None,
+    limit: int = 25, offset: int = 0,
+) -> dict[str, Any]:
+    inventory, reader = load_inventory(run_dir, open_file, valid_assessment=valid_assessment)
+    page = inventory.page(query=query, validation_status=validation_status, limit=limit, offset=offset)
+    return {**page, **source_state(inventory, reader)}
+
+
+def csv_chunks(rows: Iterable[dict[str, Any]]) -> Iterator[bytes]:
     """Legacy seven-column layout, BOM and formula-safe quoted literal cells."""
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, quoting=csv.QUOTE_ALL)
     writer.writeheader()
+    yield output.getvalue().encode("utf-8-sig")
+    output.seek(0)
+    output.truncate(0)
     for row in rows:
         note = "\n".join(
             filter(
@@ -232,4 +240,14 @@ def csv_bytes(rows: list[dict[str, Any]]) -> bytes:
         )
         cells = {field: csv_safe(note if field == "note" else row.get(field, "")) for field in CSV_FIELDS}
         writer.writerow(cells)
-    return output.getvalue().encode("utf-8-sig")
+        if output.tell() >= 64 * 1024:
+            yield output.getvalue().encode("utf-8")
+            output.seek(0)
+            output.truncate(0)
+    if output.tell():
+        yield output.getvalue().encode("utf-8")
+
+
+def csv_bytes(rows: Iterable[dict[str, Any]]) -> bytes:
+    """Convenience for small callers; HTTP exports use bounded chunks directly."""
+    return b"".join(csv_chunks(rows))

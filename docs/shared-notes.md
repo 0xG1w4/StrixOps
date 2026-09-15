@@ -97,20 +97,40 @@ embedded remote images.
 The same notebook area includes **Test coverage**, **Threat models** and
 **Credentials**. The credential view combines explicit recorded credential
 fields, tables and labeled observations with recognized saved credential CSVs,
-retaining their sources and authentication status. Search and status filters
-affect the view; **Download CSV** exports the full inventory using the legacy
+retaining their sources and authentication status. Search, status filters and
+pagination run on the server; a page does not load the entire inventory into the
+browser. **Download CSV** streams the full available inventory using the legacy
 `host,username,password,hash,source,severity,note` columns.
 
 Agents maintain the task's primary credential register through
-`record_credential`, `list_credentials`, `get_credential` and `update_credential`.
-They register discovered values immediately and reconcile their discoveries
-before handing off or finishing. The backend serializes writes to
-`.state/credentials.json`, preserves exact values and attribution, and deduplicates
-identical host/account/secret/type combinations. Validation updates require the
-current revision and an observed result for `validated` or `failed`; a stale
-writer receives a conflict instead of replacing another agent's result.
+`record_credential`, `import_credentials`, `list_credentials`, `get_credential`
+and `update_credential`. They register individual discoveries immediately and
+reconcile their discoveries before handing off or finishing. The backend stores
+the full register in `.state/credentials.sqlite3`, preserves exact values and
+attribution, and deduplicates identical host/account/secret/type combinations.
+Legacy `.state/credentials.json` is read without modification and migrated into
+SQLite on the first write; the original JSON remains intact. Validation updates
+require the current revision and an observed result for `validated` or `failed`;
+a stale writer receives a conflict instead of replacing another agent's result.
 Distinct secrets are separate records. Repeated registration does not reset a
-previous validation; agents use the update tool for changes.
+previous validation; agents use the update tool for changes. Mutation receipts
+contain IDs and revisions; `get_credential` retrieves a complete selected record.
+
+For datasets with thousands or hundreds of thousands of credentials, Agents keep
+the original dump in `/workspace/output/` and programmatically extract every row
+into a normalized CSV there. They call `import_credentials` once with that file
+path, rather than copying the dump into conversation or issuing one call per row.
+The backend does not automatically parse arbitrary SQL or secret dumps. The CSV
+accepts the legacy seven columns plus optional `secret_type`, `validation_status`
+and `validation_evidence`; quoted commas/newlines and UTF-8 BOM are supported.
+Unknown/duplicate columns, invalid rows, changed files or interrupted imports fail
+the transaction; rows are never silently truncated. Per-field limits still apply.
+
+The import receipt contains counts and a dataset ID, not all secrets. Agents
+check counts and filtered/paginated records, then put the returned ID in the
+finding's `metadata.credential_dataset_ids` and raw/normalized file paths in
+`metadata.evidence_files`. They can reference important individual examples in
+`metadata.credential_ids` without enumerating every ID in a large dataset.
 
 The UI, CSV download and reports use this register plus the existing fallback
 extraction. The register's current validation and evidence take precedence over
@@ -118,9 +138,18 @@ older parsed observations, whose sources remain attached. CSV is generated from
 this shared inventory when downloaded; agents do not append to a separate CSV
 file in the sandbox. Missing registers on older runs still use saved findings,
 notes and recognized credential CSVs; unreadable registers display a warning.
+Already imported CSV evidence is skipped only when the captured file's SHA256 and
+size match a committed import. A matching filename alone is insufficient. Old
+unimported CSVs retain the existing bounded fallback parser and warn when limits
+are exceeded; upgrading or regenerating a report does not retroactively import
+every row of an old oversized CSV.
 
 Final reports now include active current notes, current coverage conclusions,
 current threat models with active amendments, and the credential inventory.
+For credentials, the report source receives total/status/type/severity summaries
+and at most 100 examples, prioritizing validated material and then severity.
+The full register and CSV remain complete; this bound applies to model input.
+Vulnerability and finding content remains included under the normal source budget.
 Deleted notes and superseded history stay available for audit but are excluded
 from report input. Each notebook record must fit completely with its provenance;
 input-budget omissions are listed in the report source snapshot. Report prompts
@@ -133,8 +162,11 @@ The existing Console task access boundary also covers these read-only routes:
 - `GET /api/runs/{name}/notes`: `search`, `category`, repeated `tags`, `author`,
   `include_deleted`, `limit` and `offset`.
 - `GET /api/runs/{name}/notes/{note_id}`: `include_history`, default `false`.
-- `GET /api/runs/{name}/credentials`: aggregated current credential records.
-- `GET /api/runs/{name}/credentials.csv`: full inventory CSV download.
+- `GET /api/runs/{name}/credentials`: a page of aggregated current credentials;
+  accepts `limit` (1–100, default 25), `offset`, `query` and `validation_status`.
+- `POST /api/runs/{name}/credentials/query`: the same read-only search with those
+  fields in a JSON body. The frontend uses this route to keep search text out of URLs.
+- `GET /api/runs/{name}/credentials.csv`: full unfiltered inventory, streamed as CSV.
 
 Tag filters require all selected tags. Author filtering matches creator or
 latest editor identity. Missing old data is distinguishable from unreadable

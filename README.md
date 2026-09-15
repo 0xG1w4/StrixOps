@@ -625,6 +625,8 @@ Console can show launch errors even when the sandbox or model fails early.
 └── .state/
     ├── agents.db                 Per-agent conversation sessions
     ├── agents.json               Agent state
+    ├── notes.json                Shared working notes
+    ├── credentials.sqlite3       Complete credential register and dataset receipts
     ├── prompt_resources.json     Frozen prompt and skill contents
     ├── prompt_manifest.json      Resource hashes
     └── prompt_*.md               Agent prompt snapshots
@@ -646,13 +648,26 @@ An operator-supplied workspace replaces the default workspace location. See the
   are excluded; only recognized credential CSVs contribute normalized rows.
   Saved attachment links remain available for download.
 - The task's **Notes → Credentials** view aggregates recorded accounts, passwords,
-  hashes and keys with their sources and validation status. Agents register
-  discoveries immediately using `record_credential` and update validation with
-  revision checks; `.state/credentials.json` retains the shared register. Saved
-  finding/CSV extraction supplements the register without overwriting current
-  validation. The same inventory supplies reports and CSV downloads, preserving
-  the platform's `host,username,password,hash,source,severity,note`
-  columns. Unreadable sources are reported, not treated as a clean empty result.
+  hashes and keys with sources and validation status. Agents register individual
+  discoveries using `record_credential`. For large dumps, they preserve the raw
+  evidence, programmatically extract the complete normalized CSV under
+  `/workspace/output/`, and call `import_credentials` once. Imports stream all rows
+  into an atomic transaction and return counts/dataset IDs, without sending the
+  dataset through model context. Raw SQL and secret dumps are not parsed by the
+  backend automatically. Later validation uses revision-checked updates.
+- `.state/credentials.sqlite3` stores the complete register. Legacy
+  `.state/credentials.json` remains readable and is migrated on the first write;
+  simply viewing an old run does not rewrite it. The Console filters and paginates
+  on the server; CSV downloads stream the full available inventory independently
+  of the current view, using `host,username,password,hash,source,severity,note`.
+  Reports receive totals/status summaries and at most 100 credential examples,
+  prioritizing validated material and severity. Finding content remains part of
+  the report source under its existing input-budget rules.
+- Saved finding/CSV extraction supplements the register without replacing current
+  validation. A captured CSV is skipped only when its SHA256 and size match a
+  committed full import. Unimported legacy CSVs still use bounded fallback parsing;
+  oversized or unreadable sources show warnings. Upgrading does not automatically
+  import every row of an old large CSV. See [Shared task notes](docs/shared-notes.md).
 - Reports render headings, paragraphs, numbered and nested lists with explicit
   spacing; wide tables, code blocks and supported task flowcharts scroll within
   their own regions. Existing stored Markdown and downloads are not rewritten.

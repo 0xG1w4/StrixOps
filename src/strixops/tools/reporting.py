@@ -839,8 +839,11 @@ def create_finding(
     Record each distinct discovery promptly, with observed facts and validation
     status. One extracted dataset may use one finding plus a complete evidence
     attachment; do not emit one finding per row or repeat unchanged facts.
-    For credentials, also call record_credential immediately for each distinct
-    material and reference its saved ID in metadata.credential_ids (a list of strings).
+    For individual credentials, call record_credential immediately and reference
+    its saved ID in metadata.credential_ids (a list of strings). For large datasets,
+    programmatically extract a complete normalized CSV and call import_credentials;
+    put returned dataset IDs in metadata.credential_dataset_ids (a list of strings)
+    and raw/normalized file paths in metadata.evidence_files, without copying every secret here.
     Update that record after actual authentication checks; findings do not replace
     the shared credential registry.
 

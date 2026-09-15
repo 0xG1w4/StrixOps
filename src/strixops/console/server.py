@@ -28,6 +28,7 @@ import uuid
 import weakref
 import zipfile
 from collections.abc import AsyncIterator
+from itertools import chain
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote, urlsplit
@@ -479,25 +480,56 @@ def run_note(name: str, note_id: str, include_history: bool = False) -> Response
 
 
 @app.get("/api/runs/{name}/credentials")
-def run_credentials(name: str) -> Response:
+def run_credentials(
+    name: str, limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    query: Annotated[str | None, Query(max_length=500)] = None,
+    validation_status: Literal["unverified", "validated", "failed", "unknown"] | None = None,
+) -> Response:
     payload = credentials.list_response(
         _notes_run_directory(name), _open_run_file, valid_assessment=_valid_assessment_document,
+        query=query, validation_status=validation_status, limit=limit, offset=offset,
     )
     return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
+class CredentialQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    limit: int = Field(default=25, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+    query: str | None = Field(default=None, max_length=500)
+    validation_status: Literal["unverified", "validated", "failed", "unknown"] | None = None
+
+
+@app.post("/api/runs/{name}/credentials/query")
+def query_run_credentials(name: str, request: CredentialQuery) -> Response:
+    # Searches may contain literal secrets; keep UI search text out of URLs
+    # and HTTP access logs. The authenticated POST also uses normal CSRF checks.
+    return run_credentials(name, **request.model_dump())
+
+
 @app.get("/api/runs/{name}/credentials.csv")
 def run_credentials_csv(name: str) -> Response:
-    payload = credentials.list_response(
+    inventory, reader = credentials.load_inventory(
         _notes_run_directory(name), _open_run_file, valid_assessment=_valid_assessment_document,
     )
+    inventory.page(limit=1)
+    payload = credentials.source_state(inventory, reader)
     if payload["source_status"] == "unreadable":
         return JSONResponse(
             {"detail": "Credential sources could not be read.", "source_status": "unreadable"},
             status_code=503, headers={"Cache-Control": "no-store"},
         )
-    return Response(
-        credentials.csv_bytes(payload["credentials"]), media_type="text/csv; charset=utf-8",
+    rows = inventory.iter_credentials()
+    try:
+        first = next(rows, None)
+    except ValueError:
+        rows.close()
+        raise HTTPException(503, "Credential sources could not be read.") from None
+    return _OwnedFileStream(
+        rows,
+        credentials.csv_chunks(chain([first] if first is not None else [], rows)),
+        media_type="text/csv; charset=utf-8",
         headers={
             "Cache-Control": "no-store",
             "Content-Disposition": 'attachment; filename="credentials.csv"',

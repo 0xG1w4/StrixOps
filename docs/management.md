@@ -149,6 +149,9 @@ CLI 可用 `STRIX_REPORT_LLM`、`REPORT_LLM_API_MODE`、`REPORT_LLM_REASONING_EF
 笔记采用当前有效版本，排除已删除笔记及旧版本；覆盖采用当前结论；威胁模型采用
 当前正文和有效补充。每条记录连同来源、验证状态整体加入，容量不足时逐条记录省略，
 不会截断密码、密钥或把结论与依据拆开。手动生成及同次生成的重试使用固定来源快照。
+凭据输入包含全量总数、状态／类型／严重程度统计，以及最多 100 条示例，优先选择
+已验证和较高严重程度的记录。此限制只作用于报告模型输入；完整登记与 CSV 不截断。
+漏洞、finding 正文仍按原有来源容量规则保留，并不会因为凭据示例限制而只剩摘要。
 
 自动生成和手动重新生成都不把 `evidence/` 中的原始附件正文送给模型：脚本、日志、
 Markdown 等普通附件仍不读取。唯一例外是已保存、可明确识别的凭据 CSV；程序验证
@@ -160,20 +163,42 @@ Markdown 等普通附件仍不读取。唯一例外是已保存、可明确识�
 记录产生，使用 JSON 避免重复加入相同正文。模型不会读取完整工作区或完整会话历史。
 
 「笔记 → 凭据」提供整个任务已记录凭据的汇总、搜索、验证状态筛选和 CSV 下载。
-新任务的 Agent 发现凭据后立即调用 `record_credential` 登记，后续使用
+新任务的 Agent 发现单条凭据后立即调用 `record_credential` 登记，后续使用
 `update_credential` 更新验证结果；`list_credentials` 和 `get_credential` 用于核对。
-登记保存在任务的 `.state/credentials.json`，由后端串行、原子写入并保留作者和修订记录。
+登记保存在任务的 `.state/credentials.sqlite3`，通过事务写入，保留作者和修订记录。
+旧 `.state/credentials.json` 仍可只读查看；首次写入时自动迁移到 SQLite，并保留原 JSON。
+仅查看旧任务不会改写资料。界面搜索、筛选和分页由服务器执行，不会把完整大型清单
+一次传给浏览器；单条写入只返回 ID、版本等简短回执，需要时再读取详细记录。
 更新需要当前版本号；验证通过或失败必须附上实际验证依据。重复登记不会覆盖已有验证，
 不同的主机、账号或密钥值各自保留。任务结束与子 Agent 交接前会收到核对清单的指引。
+
+对于十万条等大型凭据集，Agent 将原始 dump 保存在 `/workspace/output/`，再用程序
+完整提取成同目录下的规范 CSV，调用一次 `import_credentials` 流式导入全部行。
+后台不会自动解析任意 SQL 或 secret dump；不能把整份数据塞进对话让模型逐行抄写，
+也不需要每行调用一次登记工具。CSV 支持旧版七列，以及可选的 `secret_type`、
+`validation_status`、`validation_evidence`；支持 UTF-8 BOM、逗号和多行值的 CSV 引号。
+表头、行或字段无效，源文件变化，或导入被中断时事务回滚，明确报错而非静默截断。
+成功只返回总数、插入数、重复数和数据集 ID；Agent 核对计数与筛选结果，在 finding 的
+`metadata.credential_dataset_ids` 引用该 ID，并在 `metadata.evidence_files` 保留原始和
+规范 CSV 路径。重要个案可另用 `metadata.credential_ids` 引用，无需列出十万个 ID。
+
 界面、CSV 下载和报告共用登记清单，并沿用以下来源作为补漏；同一凭据的当前登记状态
 优先，旧来源的不同验证观察保留为补充资料。CSV 在下载时从统一清单生成，无需 Agent
 在沙箱中维护另一份文件，也不增加报告模型的抽取调用。
 来源包括漏洞、内部发现、当前共享笔记、测试覆盖、威胁模型、root 结论、内部台账，
 以及上述凭据 CSV；不会读取模型设置中的 API 密钥。重复项保留全部来源；发现某个
 密码不等于已验证可登录。无法读取的来源会显示不完整提示，不能据此判断没有凭据。
+已导入的凭据 CSV 只有在归档文件的 SHA256 与大小均匹配成功导入记录时，才跳过重复
+解析；仅文件名相同不够。未导入的旧 CSV 仍使用有容量限制的补漏解析，超限会警告，
+不会因升级或重新生成报告而自动把旧大型 CSV 的每行导入登记库。
 CSV 保留旧版列 `host,username,password,hash,source,severity,note`，类型和验证状态
-写入备注；下载全部汇总行，不受当前筛选或分页影响。CSV 使用 UTF-8 BOM 和单元格
+写入备注；流式下载全部可用汇总行，不受当前筛选或分页影响。CSV 使用 UTF-8 BOM 和单元格
 转义以适配电子表格，界面及报告中的原始凭据值保持不变。
+
+凭据 API 的 `GET /api/runs/{name}/credentials` 接受 `limit`（1–100，默认 25）、
+`offset`、`query`、`validation_status`。只读的 `POST /api/runs/{name}/credentials/query`
+接受相同 JSON 字段；前端使用 POST 搜索，避免搜索内容出现在 URL。
+`GET /api/runs/{name}/credentials.csv` 始终下载完整、未筛选的可用清单。
 
 任务目录 `.state/report-system-prompt.md` 保存本次报告指令，
 `.state/report-source-1.md` 与可能存在的 `.state/report-source-2.md` 保存来源快照。

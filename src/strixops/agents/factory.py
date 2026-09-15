@@ -38,6 +38,7 @@ from strixops.tools.collaboration import (
 )
 from strixops.tools.credentials import (
     get_credential,
+    import_credentials,
     list_credentials,
     record_credential,
     update_credential,
@@ -101,6 +102,7 @@ def base_tools() -> list[Any]:
         update_note,
         delete_note,
         record_credential,
+        import_credentials,
         update_credential,
         list_credentials,
         get_credential,

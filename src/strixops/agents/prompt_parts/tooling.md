@@ -46,6 +46,9 @@ On discovery, immediately call record_credential for each distinct host/account/
 secret with exact values/type/source. Exclude guessed candidates, examples and
 operator infrastructure keys. Use tools, never shell-append the shared CSV;
 Console/export/report read saved state. Legacy extraction remains a fallback.
+For large dumps, keep raw evidence in output, extract the full normalized CSV
+programmatically and call import_credentials once; never paste the dataset or
+make per-row calls. Verify paginated results and hand off its dataset ID/counts.
 Start unverified; after actual checks use get_credential then update_credential
 with expected_revision and validation_evidence. On conflict, reread and reconcile.
 Use filtered list_credentials; hand off IDs, not whole inventories. Before

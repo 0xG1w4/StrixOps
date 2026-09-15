@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import re
 import stat
@@ -28,6 +29,43 @@ _NAME = re.compile(
 
 class _CSVLimitError(ValueError):
     pass
+
+
+def imported_csv_paths(run_dir: Path, datasets: list[dict], *, store: Any = None) -> set[str]:
+    """Skip a captured CSV only when its digest matches a committed full import.
+
+    This reads the small engine-created capture index, never the dump body.
+    A changed CSV captured after an import remains eligible for the legacy reader.
+    """
+    if not datasets:
+        return set()
+    try:
+        raw = _read(run_dir, ".evidence_index.json", _FILE_LIMIT)
+        index = json.loads(raw)
+        if not isinstance(index, list):
+            return set()
+        if store is not None:
+            matched = store.get_datasets(paths=(
+                "/workspace/output/" + row["filename"] for row in index
+                if isinstance(row, dict) and isinstance(row.get("filename"), str)
+                and row["filename"].lower().endswith(".csv")
+            ))
+            if matched.get("success"):
+                datasets = matched["datasets"]
+        imported = {
+            (row.get("path", "").removeprefix("/workspace/output/"), row.get("sha256"), row.get("size"))
+            for row in datasets
+            if isinstance(row, dict) and row.get("sha256") and isinstance(row.get("path"), str)
+        }
+        return {
+            row["filename"] for row in index
+            if isinstance(row, dict) and row.get("deliverable") is True
+            and isinstance(row.get("filename"), str)
+            and isinstance(row.get("sha256"), str) and type(row.get("size")) is int
+            and (row["filename"], row.get("sha256"), row.get("size")) in imported
+        }
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return set()
 
 
 def _read(run_dir: Path, filename: str, limit: int) -> str:
@@ -69,6 +107,7 @@ def load_credential_csv(
     manifest: dict | None,
     reports: list[dict],
     internal_findings: list[dict],
+    skip_paths: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Import complete rows only; report invalid/oversized candidate files explicitly."""
     warnings: list[str] = []
@@ -109,7 +148,10 @@ def load_credential_csv(
                         "title": str(finding.get("title") or finding.get("id") or ""),
                     }
                 )
-    selected = [name for name in names if name in linked or _NAME.search(PurePosixPath(name).name)]
+    selected = [
+        name for name in names if name not in (skip_paths or set())
+        and (name in linked or _NAME.search(PurePosixPath(name).name))
+    ]
     if len(selected) > _FILE_COUNT:
         warnings.append("credential_csv_limit")
         selected = selected[:_FILE_COUNT]

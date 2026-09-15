@@ -5,12 +5,11 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from strixops.report.credential_csv import load_credential_csv
+from strixops.report.credential_csv import imported_csv_paths, load_credential_csv
+from strixops.report.credential_inventory import CredentialInventory
 from strixops.report.credential_store import CredentialStore
 from strixops.report.credentials import (
     collect_credentials,
-    credential_source_warnings,
-    merge_credential_inventory,
 )
 from strixops.report.notes import NotesStore
 
@@ -67,6 +66,8 @@ def notebook_context(run_state: Any) -> dict[str, Any]:
     except Exception:
         credentials = []
         omissions.append({"source": "credentials", "reason": "source_unreadable"})
+    register = getattr(run_state, "credentials", None) or CredentialStore(run_state.run_dir)
+    metadata = register.report_snapshot(limit=1)
     csv_credentials: list[dict[str, Any]] = []
     try:
         csv_credentials, csv_warnings = load_credential_csv(
@@ -74,29 +75,19 @@ def notebook_context(run_state: Any) -> dict[str, Any]:
             manifest=run_state.run_record.get("evidence"),
             reports=run_state.reports,
             internal_findings=run_state.internal_findings,
+            skip_paths=imported_csv_paths(run_state.run_dir, metadata.get("datasets", []), store=register),
         )
         omissions.extend({"source": "credential_csv", "reason": code} for code in csv_warnings)
     except Exception:
         omissions.append({"source": "credential_csv", "reason": "source_unreadable"})
-    registered: list[dict[str, Any]] = []
-    try:
-        register = getattr(run_state, "credentials", None) or CredentialStore(run_state.run_dir)
-        inventory = register.snapshot()
-        if inventory.get("success") is not True:
-            raise ValueError("credential register unavailable")
-        registered = inventory["credentials"]
-    except Exception:
-        omissions.append({"source": "credential_register", "reason": "source_unreadable"})
-    credentials = merge_credential_inventory(
-        registered, credentials, csv_credentials,
+    inventory = CredentialInventory(
+        register, [*credentials, *csv_credentials],
         reports=run_state.reports, internal_findings=run_state.internal_findings,
+        datasets=metadata.get("datasets", []),
     )
+    credential_context = inventory.report_snapshot()
     omissions.extend(
-        {"source": "credentials", "reason": code}
-        for code in credential_source_warnings(
-            reports=run_state.reports,
-            internal_findings=run_state.internal_findings,
-            credentials=credentials,
-        )
+        {"source": "credential_register" if "register" in code else "credentials", "reason": code}
+        for code in inventory.warnings
     )
-    return {"notes": notes, **groups, "credentials": credentials, "omissions": omissions}
+    return {"notes": notes, **groups, **credential_context, "omissions": omissions}

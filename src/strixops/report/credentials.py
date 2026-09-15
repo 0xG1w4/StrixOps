@@ -516,6 +516,8 @@ def credential_source_warnings(
     reports: list[dict],
     internal_findings: list[dict],
     credentials: list[dict],
+    dataset_ids: set[str] | None = None,
+    known_credential_ids: set[str] | None = None,
 ) -> list[str]:
     """A recorded credential finding without extractable values is not an all-clear."""
     covered = {
@@ -524,15 +526,21 @@ def credential_source_warnings(
         for source in row.get("sources", [])
         if isinstance(source, dict)
     }
-    known_ids = {row.get("id") for row in credentials}
+    known_ids = {row.get("id") for row in credentials} | (known_credential_ids or set())
     for finding in [*reports, *internal_findings]:
         references = _credential_references(finding) if isinstance(finding, dict) else set()
+        metadata = finding.get("metadata") if isinstance(finding, dict) else None
+        dataset_refs = metadata.get("credential_dataset_ids", []) if isinstance(metadata, dict) else []
+        dataset_refs = {value for value in dataset_refs if isinstance(value, str)} if (
+            isinstance(dataset_refs, list)
+        ) else set()
         if (
             isinstance(finding, dict)
             and finding.get("finding_type") == "credential"
             and (
                 bool(references - known_ids)
-                or (finding.get("id") not in covered and not references)
+                or bool(dataset_refs - (dataset_ids or set()))
+                or (finding.get("id") not in covered and not references and not dataset_refs)
             )
             and (finding.get("content") or finding.get("metadata"))
         ):

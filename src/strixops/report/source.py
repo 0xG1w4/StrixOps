@@ -212,6 +212,13 @@ def build_report_source(
     extras: list[tuple[str, str]] = []
     notebook = notebook if notebook is not None else notebook_context(run_state)
     notebook_records: list[_Record] = []
+    credential_summary = notebook.get("credential_summary")
+    if credential_summary and credential_summary.get("total"):
+        counts = {key: value for key, value in credential_summary.items() if key != "datasets"}
+        notebook_records.append(_Record(
+            "## Credential Inventory Summary (full counts, bounded detail sample)",
+            "credential_summary", counts, counts,
+        ))
     for key, heading in (
         ("credentials", "Credential Inventory (aggregated observations, retain validation status)"),
         ("coverage", "Coverage Records (agent-reported per-surface outcomes)"),
@@ -223,6 +230,12 @@ def build_report_source(
             notebook_records.append(_Record(
                 f"## {heading}\n\n### {identifier}", f"{key}:{identifier}", value, value,
             ))
+    for dataset in (credential_summary or {}).get("datasets", []):
+        identifier = dataset["id"]
+        notebook_records.append(_Record(
+            f"## Credential Dataset\n\n### {identifier}",
+            f"credential_dataset:{identifier}", dataset, dataset,
+        ))
     admitted_notebook: list[_Record] = []
     supplemental_omissions: list[dict[str, Any]] = list(notebook["omissions"])
     accepted: list[tuple[_Record, str]] = []
@@ -232,6 +245,12 @@ def build_report_source(
     remaining = token_budget - count(prefix + "".join(row.render() for row in records)) - coverage_reserve
     if remaining < 0:
         raise ReportSourceTooLarge("Run scope and finding identities exceed the report input budget")
+    # Full inventory counts remain useful even when individual examples or long
+    # dataset paths do not fit. Charge the small summary before optional fields.
+    for row in notebook_records:
+        if row.source == "credential_summary" and count(row.render()) <= remaining:
+            admitted_notebook.append(row)
+            remaining -= count(row.render())
 
     def admit_fields(record: _Record, allowance: int) -> None:
         nonlocal remaining
@@ -261,7 +280,7 @@ def build_report_source(
     # A notebook row is atomic: its credential/observation must travel with its
     # host, source, current outcome and author. Fair shares let later small rows
     # survive even when one early note or threat model is too large.
-    pending_notebook = list(notebook_records)
+    pending_notebook = [row for row in notebook_records if row not in admitted_notebook]
     share = remaining // max(1, len(pending_notebook))
     for allowance in (share, None):
         for row in pending_notebook[:]:
@@ -311,6 +330,12 @@ def build_report_source(
             "omissions": omissions,
             "omission_details_not_listed": 0,
         }
+        if credential_summary and credential_summary.get("sampled"):
+            audit.update(
+                credential_inventory_total=credential_summary["total"],
+                credential_sample_count=len(notebook["credentials"]),
+                credential_sample_policy="up_to_100_validated_first_then_severity",
+            )
         while audit["omissions"] and count(_dump_json(audit)) > coverage_reserve:
             audit["omissions"] = audit["omissions"][:-1]
             audit["omission_details_not_listed"] += 1

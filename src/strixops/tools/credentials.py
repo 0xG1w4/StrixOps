@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
 from strixops.engine.scanconfig import EngineContext
+from strixops.report.credential_import import import_credential_csv
 from strixops.report.credential_store import error_result
 
 
@@ -17,11 +20,15 @@ def _tool_failure(ctx: Any, error: Exception) -> str:
     return json.dumps(error_result("invalid_arguments"))
 
 
-async def _run_in_thread(operation: Any, **kwargs: Any) -> dict:
+async def _run_in_thread(
+    operation: Any, *, cancel_event: threading.Event | None = None, **kwargs: Any
+) -> dict:
     worker = asyncio.create_task(asyncio.to_thread(operation, **kwargs))
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError:
+        if cancel_event is not None:
+            cancel_event.set()
         # Join the bounded store operation before run cleanup. A thread cannot
         # be cancelled halfway through a durable registry write.
         while not worker.done():
@@ -63,6 +70,47 @@ async def _invoke(
 
 
 @function_tool(strict_mode=False, failure_error_function=_tool_failure)
+async def import_credentials(
+    ctx: RunContextWrapper[EngineContext], csv_path: str, source: str = ""
+) -> str:
+    """Import an entire normalized credential CSV atomically without model-sized limits.
+
+    csv_path must name /workspace/output/...csv (or output/...csv). Save the raw
+    dump as evidence and programmatically extract every credential into this CSV;
+    do not paste large datasets into conversation or issue one tool call per row.
+    Headers: host,username,password,hash,source,severity,note; optional secret_type,
+    validation_status,validation_evidence. A subset is allowed; unknown/duplicate
+    headers or malformed rows fail the whole import. UTF-8 BOM and quoted multiline
+    keys are supported. Preserve exact secrets; one password or hash per row.
+    Blank type/status use defaults; unverified is the default, while validated/failed
+    require actual validation_evidence. Exclude guesses/examples/operator keys.
+    The file must be regular, without symlinks or extra hard links, in this run's workspace.
+    Returns counts and dataset_id only. Verify with filtered list_credentials/get_credential,
+    and reference the dataset ID in metadata.credential_dataset_ids and both raw/CSV
+    paths in metadata.evidence_files on the finding. Duplicate records
+    are merged without changing existing validation; use update_credential for checks.
+    Changed files, invalid rows or cancellation roll back the import; nothing is truncated.
+    """
+    try:
+        state = ctx.context.run_state
+        store = getattr(state, "credentials", None)
+        run_record = getattr(state, "run_record", None)
+        workspace = run_record.get("workspace") if isinstance(run_record, dict) else None
+        path = workspace.get("path") if isinstance(workspace, dict) else None
+        if store is None or not isinstance(path, str) or not path or "\x00" in path:
+            return json.dumps(error_result("storage_unavailable"))
+        cancellation = threading.Event()
+        result = await _run_in_thread(
+            import_credential_csv, cancel_event=cancellation, store=store, workspace=Path(path),
+            csv_path=csv_path, source=source, agent_id=ctx.context.agent_id,
+            agent_name=ctx.context.agent_name, cancelled=cancellation.is_set,
+        )
+    except Exception:
+        result = error_result("internal_error")
+    return json.dumps(result, ensure_ascii=False)
+
+
+@function_tool(strict_mode=False, failure_error_function=_tool_failure)
 async def record_credential(
     ctx: RunContextWrapper[EngineContext],
     host: str = "",
@@ -89,6 +137,7 @@ async def record_credential(
     use update_credential to record later validation. Authors come from context.
     Success returns a compact receipt; use get_credential for the full saved record.
     Registry writes maintain the shared inventory; do not append its CSV yourself.
+    For large extracted datasets, call import_credentials with a normalized CSV instead.
     File distinct discoveries/verified vulnerabilities with the reporting tools too.
     """
     return await _invoke(

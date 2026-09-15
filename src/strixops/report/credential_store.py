@@ -8,19 +8,18 @@ create files. Console readers may use the pure parser and projection helpers.
 from __future__ import annotations
 
 import copy
-import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
-import threading
-import time
 import uuid
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from strixops.report.credential_database import CredentialDatabase, DatabaseError
 
 MAX_STORE_BYTES = 16 * 1024 * 1024
 MAX_CREDENTIALS = 5000
@@ -54,6 +53,8 @@ _VERSION_KEYS = set(_LIMITS) | {
 }
 _MESSAGES = {
     "invalid_arguments": "Invalid credential arguments; check the tool fields and limits.",
+    "invalid_dataset": "The credential dataset is invalid; no records were imported.",
+    "cancelled": "Credential import was cancelled; no records were imported.",
     "credential_not_found": "The credential was not found in this run.",
     "revision_conflict": "The credential changed; read its current revision before updating it.",
     "content_limit": "The credential exceeds a field, provenance or revision limit.",
@@ -281,159 +282,221 @@ def _fingerprint(info: os.stat_result) -> tuple:
 
 
 class CredentialStore:
-    """Lazy register; independent processes serialize mutations and reread state."""
+    """Queryable run register; bulk imports use one disk-backed transaction."""
 
     def __init__(self, run_dir: Path, lock: Any = None) -> None:
         self.run_dir = Path(run_dir).absolute()
-        self._lock = lock if lock is not None else threading.RLock()
+        # Accept the old shared-lock argument without blocking run activity.
+        self._database = CredentialDatabase(self.run_dir)
 
-    def _directory(self, *, create: bool = False) -> int | None:
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        root = os.open(self.run_dir, flags)
-        try:
-            if create:
-                with suppress(FileExistsError):
-                    os.mkdir(".state", mode=0o700, dir_fd=root)
-            try:
-                return os.open(".state", flags, dir_fd=root)
-            except FileNotFoundError:
-                return None
-        finally:
-            os.close(root)
-
-    @staticmethod
-    def _stat(directory: int, filename: str = "credentials.json") -> tuple | None:
-        try:
-            info = os.stat(filename, dir_fd=directory, follow_symlinks=False)
-        except FileNotFoundError:
-            return None
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            raise CredentialError("unsafe_storage")
+    def _load_legacy(self, directory: int | None) -> tuple[dict, str]:
+        if directory is None:
+            return empty_document(), "missing"
+        info = self._database.safe_file(directory, "credentials.json")
+        if info is None:
+            return empty_document(), "missing"
         if info.st_size > MAX_STORE_BYTES:
             raise CredentialError("store_limit")
-        return _fingerprint(info)
-
-    def _load(self, directory: int | None) -> tuple[dict, tuple | None]:
-        if directory is None:
-            return empty_document(), None
-        expected = self._stat(directory)
-        if expected is None:
-            return empty_document(), None
         descriptor = os.open(
             "credentials.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
         )
         with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            opened = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
                 raise CredentialError("unsafe_storage")
-            if info.st_size > MAX_STORE_BYTES:
-                raise CredentialError("store_limit")
-            raw = stream.read(MAX_STORE_BYTES + 1)
-            if _fingerprint(info) != expected or _fingerprint(os.fstat(stream.fileno())) != expected:
+            if _fingerprint(opened) != _fingerprint(info):
                 raise CredentialError("storage_unavailable")
-        if self._stat(directory) != expected or len(raw) != expected[2]:
-            raise CredentialError("storage_unavailable")
-        return parse_document(raw), expected
+            raw = stream.read(MAX_STORE_BYTES + 1)
+            current = self._database.safe_file(directory, "credentials.json")
+            if current is None or _fingerprint(current) != _fingerprint(info) or len(raw) != info.st_size:
+                raise CredentialError("storage_unavailable")
+        return parse_document(raw), "available"
 
     @contextmanager
-    def _transaction(self, *, write: bool = False):
-        directory = self._directory(create=write)
-        descriptor = None
-        try:
-            if write:
-                if directory is None:
-                    raise CredentialError("storage_unavailable")
-                self._stat(directory, "credentials.lock")
-                flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
-                try:
-                    descriptor = os.open(
-                        "credentials.lock",
-                        flags | os.O_CREAT | os.O_EXCL,
-                        0o600,
-                        dir_fd=directory,
-                    )
-                except FileExistsError:
-                    descriptor = os.open("credentials.lock", flags, dir_fd=directory)
-                info = os.fstat(descriptor)
-                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                    raise CredentialError("unsafe_storage")
-                deadline = time.monotonic() + 5
-                while True:
-                    try:
-                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() >= deadline:
-                            raise CredentialError("storage_unavailable") from None
-                        time.sleep(0.01)
-                if self._stat(directory, "credentials.lock") != _fingerprint(info):
-                    raise CredentialError("storage_unavailable")
-            document, fingerprint = self._load(directory)
-            yield document, directory, fingerprint
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
-            if directory is not None:
-                os.close(directory)
-
-    def _save(self, directory: int, document: dict, expected: tuple | None) -> None:
-        raw = json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        if len(raw) > MAX_STORE_BYTES:
-            raise CredentialError("store_limit")
-        temporary = f".credentials-{uuid.uuid4().hex}.tmp"
-        try:
-            if self._stat(directory) != expected:
-                raise CredentialError("storage_unavailable")
-            descriptor = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=directory,
-            )
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            if self._stat(directory) != expected:
-                raise CredentialError("storage_unavailable")
-            os.replace(temporary, "credentials.json", src_dir_fd=directory, dst_dir_fd=directory)
-            # Publication succeeded: a directory-fsync failure must not report rollback.
-            with suppress(OSError):
-                os.fsync(directory)
-        finally:
-            with suppress(OSError):
-                os.unlink(temporary, dir_fd=directory)
+    def _transaction(self, *, write: bool = False, cancelled=None):
+        with self._database.transaction(write=write, cancelled=cancelled) as (connection, fresh, directory):
+            if fresh:
+                legacy, _ = self._load_legacy(directory)
+                for row in legacy["credentials"]:
+                    self._put(connection, row)
+            yield connection, directory
 
     def _invoke(self, operation: str, **kwargs: Any) -> dict:
         try:
-            with self._lock:
-                return getattr(self, f"_{operation}")(**kwargs)
+            # Never hold RunState's shared lock during bulk imports or reads.
+            # SQLite and the database's writer lock own credential serialization.
+            return getattr(self, f"_{operation}")(**kwargs)
         except CredentialError as exc:
             return error_result(exc.code, current_revision=exc.current_revision)
+        except DatabaseError as exc:
+            return error_result(exc.code)
         except OSError:
             return error_result("storage_unavailable")
         except Exception:
             return error_result("internal_error")
 
-    def snapshot(self) -> dict:
-        return self._invoke("snapshot")
+    @staticmethod
+    def _put(connection, row: dict) -> None:
+        fields = ("id", "host", "username", "secret_type", "validation_status", "severity", "updated_at")
+        values = [row[field] for field in fields]
+        values.extend(
+            [
+                int(row["validation_status"] == "validated"),
+                _SEVERITIES.index(row["severity"]),
+                "\n".join(row[field] for field in _LIMITS).casefold(),
+                json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+            ]
+        )
+        connection.execute(
+            "INSERT INTO credentials (id,host,username,secret_type,validation_status,severity,updated_at,"
+            "validation_rank,severity_rank,search_text,record) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET host=excluded.host,username=excluded.username,"
+            "secret_type=excluded.secret_type,validation_status=excluded.validation_status,"
+            "severity=excluded.severity,updated_at=excluded.updated_at,validation_rank=excluded.validation_rank,"
+            "severity_rank=excluded.severity_rank,search_text=excluded.search_text,record=excluded.record",
+            values,
+        )
 
-    def _snapshot(self) -> dict:
-        with self._transaction() as (document, _, fingerprint):
-            result = project_snapshot(document)
-            result["source_status"] = "available" if fingerprint else "missing"
-            return result
+    @staticmethod
+    def _decode(raw: str) -> dict:
+        if not isinstance(raw, str) or len(raw) > MAX_STORE_BYTES:
+            raise CredentialError("invalid_store")
+        wrapped = ('{"schema_version":1,"credentials":[' + raw + "]}").encode("utf-8")
+        return parse_document(wrapped)["credentials"][0]
 
-    def get_credential(self, credential_id: str, *, include_history: bool = False) -> dict:
-        return self._invoke("get_credential", credential_id=credential_id, include_history=include_history)
+    def _fetch(self, connection, credential_id: str) -> dict | None:
+        saved = connection.execute("SELECT record FROM credentials WHERE id=?", (credential_id,)).fetchone()
+        if saved is None:
+            return None
+        row = self._decode(saved[0])
+        if row["id"] != credential_id:
+            raise CredentialError("invalid_store")
+        return row
 
-    def _get_credential(self, credential_id: str, include_history: bool) -> dict:
-        if type(include_history) is not bool:
+    @staticmethod
+    def _filters(query=None, validation_status=None, exclude_ids=()) -> tuple[str, list, set[str]]:
+        if query is not None:
+            query = _text(query, 500).casefold()
+        if validation_status is not None:
+            _choice(validation_status, VALIDATION_STATUSES)
+        excluded = {_id(value) for value in exclude_ids}
+        clauses, values = [], []
+        if query:
+            clauses.append("instr(search_text,?)>0")
+            values.append(query)
+        if validation_status is not None:
+            clauses.append("validation_status=?")
+            values.append(validation_status)
+        if excluded:
+            clauses.append("id NOT IN (SELECT value FROM json_each(?))")
+            values.append(json.dumps(sorted(excluded)))
+        return " WHERE " + " AND ".join(clauses) if clauses else "", values, excluded
+
+    @staticmethod
+    def _summary(connection, *, exclude_ids=()) -> tuple[int, dict]:
+        where, values, _ = CredentialStore._filters(exclude_ids=exclude_ids)
+        summary = {
+            "validation_status": dict.fromkeys(VALIDATION_STATUSES, 0),
+            "secret_type": dict.fromkeys(SECRET_TYPES, 0),
+            "severity": dict.fromkeys(_SEVERITIES, 0),
+        }
+        total = connection.execute("SELECT COUNT(*) FROM credentials" + where, values).fetchone()[0]
+        for field in summary:
+            for key, count in connection.execute(
+                f"SELECT {field},COUNT(*) FROM credentials" + where + f" GROUP BY {field}", values
+            ):
+                if key not in summary[field]:
+                    raise CredentialError("invalid_store")
+                summary[field][key] = count
+        return total, summary
+
+    @staticmethod
+    def _legacy_summary(rows: list[dict]) -> dict:
+        summary = {
+            "validation_status": dict.fromkeys(VALIDATION_STATUSES, 0),
+            "secret_type": dict.fromkeys(SECRET_TYPES, 0),
+            "severity": dict.fromkeys(_SEVERITIES, 0),
+        }
+        for row in rows:
+            for field in summary:
+                summary[field][row[field]] += 1
+        return summary
+
+    @staticmethod
+    def _datasets(connection, *, limit: int | None = 100, ids=(), paths=()) -> list[dict]:
+        ids, paths = list(ids), list(paths)
+        if any(
+            not isinstance(value, str) or not re.fullmatch(r"dataset-[0-9a-f]{32}", value) for value in ids
+        ):
             raise CredentialError("invalid_arguments")
-        with self._transaction() as (document, _, _):
-            return _success(
-                credential=_current(_find(document, credential_id), include_history=include_history)
-            )
+        for path in paths:
+            _text(path, 4096)
+        clauses, values = [], []
+        if ids:
+            clauses.append("id IN (SELECT value FROM json_each(?))")
+            values.append(json.dumps(ids))
+        if paths:
+            clauses.append("path IN (SELECT value FROM json_each(?))")
+            values.append(json.dumps(paths))
+        sql = "SELECT record FROM credential_datasets"
+        if clauses:
+            sql += " WHERE " + " OR ".join(clauses)
+        sql += " ORDER BY created_at DESC,id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            values.append(limit)
+        rows = []
+        for (raw,) in connection.execute(sql, values):
+            if not isinstance(raw, str) or len(raw) > 16384:
+                raise CredentialError("invalid_store")
+            try:
+                row = json.loads(raw, object_pairs_hook=_unique_object)
+                if not isinstance(row, dict) or set(row) != {
+                    "id",
+                    "source",
+                    "path",
+                    "rows_read",
+                    "inserted",
+                    "duplicates",
+                    "created_by",
+                    "created_at",
+                    "sha256",
+                    "size",
+                }:
+                    raise CredentialError("invalid_store")
+                if not re.fullmatch(r"dataset-[0-9a-f]{32}", row["id"]):
+                    raise CredentialError("invalid_store")
+                for field in ("rows_read", "inserted", "duplicates"):
+                    if type(row[field]) is not int or row[field] < 0:
+                        raise CredentialError("invalid_store")
+                if row["inserted"] + row["duplicates"] != row["rows_read"]:
+                    raise CredentialError("invalid_store")
+                _text(row["source"], 4096)
+                _text(row["path"], 4096)
+                if row["sha256"] and not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]):
+                    raise CredentialError("invalid_store")
+                if not isinstance(row["sha256"], str) or type(row["size"]) is not int or row["size"] < 0:
+                    raise CredentialError("invalid_store")
+                _author(**row["created_by"])
+                if datetime.fromisoformat(row["created_at"]).tzinfo is None:
+                    raise CredentialError("invalid_store")
+            except (TypeError, ValueError, KeyError):
+                raise CredentialError("invalid_store") from None
+            rows.append(row)
+        return rows
+
+    def get_datasets(self, *, ids=(), paths=()) -> dict:
+        """Return requested committed imports, including ones outside the report sample."""
+        return self._invoke("get_datasets", ids=ids, paths=paths)
+
+    def _get_datasets(self, ids, paths) -> dict:
+        ids, paths = list(ids), list(paths)
+        with self._transaction() as (connection, directory):
+            if connection is None:
+                _, source_status = self._load_legacy(directory)
+                return _success(datasets=[], source_status=source_status)
+            datasets = self._datasets(connection, limit=None, ids=ids, paths=paths) if ids or paths else []
+            return _success(datasets=datasets, source_status="available")
 
     def list_credentials(
         self,
@@ -442,40 +505,260 @@ class CredentialStore:
         validation_status: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        exclude_ids=(),
     ) -> dict:
         return self._invoke(
-            "list_credentials", query=query, validation_status=validation_status, limit=limit, offset=offset
+            "list_credentials",
+            query=query,
+            validation_status=validation_status,
+            limit=limit,
+            offset=offset,
+            exclude_ids=exclude_ids,
         )
 
-    def _list_credentials(
-        self, query: str | None, validation_status: str | None, limit: int, offset: int
-    ) -> dict:
+    def _list_credentials(self, *, query=None, validation_status=None, limit=20, offset=0, exclude_ids=()):
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or offset < 0:
             raise CredentialError("invalid_arguments")
-        query = _text(query, 500).casefold() if query is not None else ""
-        if validation_status is not None:
-            _choice(validation_status, VALIDATION_STATUSES)
-        with self._transaction() as (document, _, _):
+        where, values, excluded = self._filters(query, validation_status, exclude_ids)
+        with self._transaction() as (connection, directory):
+            if connection is None:
+                document, source_status = self._load_legacy(directory)
+                overall = [row for row in document["credentials"] if row["id"] not in excluded]
+                rows = [
+                    row
+                    for row in overall
+                    if (validation_status is None or row["validation_status"] == validation_status)
+                    and (
+                        not query or query.casefold() in "\n".join(row[field] for field in _LIMITS).casefold()
+                    )
+                ]
+                rows.sort(key=lambda row: (row["updated_at"], row["id"]), reverse=True)
+                return _success(
+                    credentials=[_current(row) for row in rows[offset : offset + limit]],
+                    total=len(rows),
+                    overall_total=len(overall),
+                    summary=self._legacy_summary(overall),
+                    limit=limit,
+                    offset=offset,
+                    has_more=offset + limit < len(rows),
+                    source_status=source_status,
+                )
+            overall_total, summary = self._summary(connection, exclude_ids=excluded)
+            total = connection.execute("SELECT COUNT(*) FROM credentials" + where, values).fetchone()[0]
             rows = [
-                row
-                for row in document["credentials"]
-                if (validation_status is None or row["validation_status"] == validation_status)
-                and (not query or query in "\n".join(row[field] for field in _LIMITS).casefold())
+                _current(self._decode(row[0]))
+                for row in connection.execute(
+                    "SELECT record FROM credentials"
+                    + where
+                    + " ORDER BY updated_at DESC,id LIMIT ? OFFSET ?",
+                    [*values, limit, offset],
+                )
             ]
-            rows.sort(key=lambda row: (row["updated_at"], row["id"]), reverse=True)
             return _success(
-                credentials=[_current(row) for row in rows[offset : offset + limit]],
-                total=len(rows),
+                credentials=rows,
+                total=total,
+                overall_total=overall_total,
+                summary=summary,
                 limit=limit,
                 offset=offset,
-                has_more=offset + limit < len(rows),
+                has_more=offset + limit < total,
+                source_status="available",
             )
+
+    def get_credential(self, credential_id: str, *, include_history: bool = False) -> dict:
+        return self._invoke("get_credential", credential_id=credential_id, include_history=include_history)
+
+    def _get_credential(self, credential_id: str, include_history: bool) -> dict:
+        _id(credential_id)
+        if type(include_history) is not bool:
+            raise CredentialError("invalid_arguments")
+        with self._transaction() as (connection, directory):
+            row = (
+                self._fetch(connection, credential_id)
+                if connection is not None
+                else _find(self._load_legacy(directory)[0], credential_id)
+            )
+            if row is None:
+                raise CredentialError("credential_not_found")
+            return _success(credential=_current(row, include_history=include_history))
+
+    def get_credentials(self, ids) -> dict:
+        return self._invoke("get_credentials", ids=ids)
+
+    def existing_credential_ids(self, ids) -> dict:
+        """Resolve references through the ID index without loading credential bodies."""
+        return self._invoke("existing_credential_ids", ids=ids)
+
+    def _existing_credential_ids(self, ids) -> dict:
+        with self._transaction() as (connection, directory):
+            if connection is None:
+                document, source_status = self._load_legacy(directory)
+                known = {row["id"] for row in document["credentials"]}
+                found = [value for value in dict.fromkeys(_id(value) for value in ids) if value in known]
+            else:
+                source_status = "available"
+                found, batch, seen = [], [], set()
+                for value in ids:
+                    value = _id(value)
+                    if value not in seen:
+                        seen.add(value)
+                        batch.append(value)
+                    if len(batch) >= 500:
+                        found.extend(self._existing_batch(connection, batch))
+                        batch.clear()
+                found.extend(self._existing_batch(connection, batch))
+            return _success(credential_ids=found, source_status=source_status)
+
+    @staticmethod
+    def _existing_batch(connection, batch: list[str]) -> list[str]:
+        if not batch:
+            return []
+        placeholders = ",".join("?" for _ in batch)
+        return [
+            row[0]
+            for row in connection.execute(
+                f"SELECT id FROM credentials WHERE id IN ({placeholders})",
+                batch,
+            )
+        ]
+
+    def _get_credentials(self, ids) -> dict:
+        with self._transaction() as (connection, directory):
+            if connection is None:
+                document, source_status = self._load_legacy(directory)
+                lookup = {row["id"]: row for row in document["credentials"]}
+                rows = [
+                    _current(lookup[value])
+                    for value in dict.fromkeys(_id(value) for value in ids)
+                    if value in lookup
+                ]
+            else:
+                source_status = "available"
+                rows, batch, seen = [], [], set()
+                for value in ids:
+                    value = _id(value)
+                    if value not in seen:
+                        seen.add(value)
+                        batch.append(value)
+                    if len(batch) >= 500:
+                        rows.extend(self._get_batch(connection, batch))
+                        batch.clear()
+                rows.extend(self._get_batch(connection, batch))
+            return _success(credentials=rows, source_status=source_status)
+
+    def _get_batch(self, connection, batch: list[str]) -> list[dict]:
+        if not batch:
+            return []
+        placeholders = ",".join("?" for _ in batch)
+        return [
+            _current(self._decode(row[0]))
+            for row in connection.execute(
+                f"SELECT record FROM credentials WHERE id IN ({placeholders})",
+                batch,
+            )
+        ]
+
+    def snapshot(self, limit: int | None = None, *, exclude_ids=()) -> dict:
+        return self._invoke("snapshot", limit=limit, exclude_ids=exclude_ids, prioritized=False)
+
+    def report_snapshot(self, limit: int = 100, *, exclude_ids=()) -> dict:
+        return self._invoke("snapshot", limit=limit, exclude_ids=exclude_ids, prioritized=True)
+
+    def _snapshot(self, limit: int | None, exclude_ids, prioritized: bool) -> dict:
+        if limit is not None and (type(limit) is not int or limit < 0):
+            raise CredentialError("invalid_arguments")
+        where, values, excluded = self._filters(exclude_ids=exclude_ids)
+        with self._transaction() as (connection, directory):
+            if connection is None:
+                document, source_status = self._load_legacy(directory)
+                rows = [row for row in document["credentials"] if row["id"] not in excluded]
+                summary, total = self._legacy_summary(rows), len(rows)
+                if prioritized:
+                    rows.sort(
+                        key=lambda row: (
+                            row["validation_status"] == "validated",
+                            _SEVERITIES.index(row["severity"]),
+                            row["updated_at"],
+                            row["id"],
+                        ),
+                        reverse=True,
+                    )
+                rows = rows if limit is None else rows[:limit]
+                rows = [
+                    {key: copy.deepcopy(value) for key, value in row.items() if key in _VERSION_KEYS}
+                    for row in rows
+                ]
+                return _success(
+                    credentials=rows,
+                    total=total,
+                    overall_total=total,
+                    summary=summary,
+                    datasets=[],
+                    dataset_count=0,
+                    source_status=source_status,
+                    sampled=len(rows) < total,
+                )
+            total, summary = self._summary(connection, exclude_ids=excluded)
+            order = "validation_rank DESC,severity_rank DESC,updated_at DESC,id" if prioritized else "rowid"
+            sql = "SELECT record FROM credentials" + where + " ORDER BY " + order
+            if limit is not None:
+                sql += " LIMIT ?"
+                values.append(limit)
+            rows = []
+            for (raw,) in connection.execute(sql, values):
+                row = self._decode(raw)
+                rows.append({key: value for key, value in row.items() if key in _VERSION_KEYS})
+            return _success(
+                credentials=rows,
+                total=total,
+                overall_total=total,
+                summary=summary,
+                datasets=self._datasets(connection),
+                source_status="available",
+                dataset_count=connection.execute("SELECT COUNT(*) FROM credential_datasets").fetchone()[0],
+                sampled=len(rows) < total,
+            )
+
+    def iter_credentials(self, *, query=None, validation_status=None, exclude_ids=()):
+        """Yield all current records from one read snapshot; errors are never empty output."""
+        try:
+            where, values, excluded = self._filters(query, validation_status, exclude_ids)
+            with self._transaction() as (connection, directory):
+                if connection is None:
+                    document, _ = self._load_legacy(directory)
+                    for row in document["credentials"]:
+                        if (
+                            row["id"] in excluded
+                            or (
+                                validation_status is not None
+                                and row["validation_status"] != validation_status
+                            )
+                            or (
+                                query
+                                and query.casefold()
+                                not in "\n".join(row[field] for field in _LIMITS).casefold()
+                            )
+                        ):
+                            continue
+                        yield _current(row)
+                else:
+                    for (raw,) in connection.execute(
+                        "SELECT record FROM credentials" + where + " ORDER BY updated_at DESC,id",
+                        values,
+                    ):
+                        yield _current(self._decode(raw))
+        except DatabaseError as exc:
+            raise CredentialError(exc.code) from None
+        except OSError:
+            raise CredentialError("storage_unavailable") from None
 
     @staticmethod
     def _history(row: dict, author: dict) -> None:
         if row["revision"] >= 1_000_000_000:
             raise CredentialError("content_limit")
-        row["history"].append({key: copy.deepcopy(row[key]) for key in _VERSION_KEYS})
+        row["history"].append(
+            {key: copy.deepcopy(value) for key, value in row.items() if key in _VERSION_KEYS}
+        )
         if len(row["history"]) > MAX_HISTORY:
             del row["history"][:-MAX_HISTORY]
             row["history_truncated"] = True
@@ -483,40 +766,7 @@ class CredentialStore:
         row["updated_by"] = author
         row["updated_at"] = datetime.now(UTC).isoformat()
 
-    def record_credential(
-        self,
-        *,
-        host: str = "",
-        username: str = "",
-        password: str | None = None,
-        hash: str = "",
-        secret_type: str = "password",
-        source: str = "",
-        severity: str = "",
-        note: str = "",
-        validation_status: str = "unverified",
-        validation_evidence: str = "",
-        agent_id: str,
-        agent_name: str,
-    ) -> dict:
-        return self._invoke(
-            "record_credential",
-            host=host,
-            username=username,
-            password=password,
-            hash=hash,
-            secret_type=secret_type,
-            source=source,
-            severity=severity,
-            note=note,
-            validation_status=validation_status,
-            validation_evidence=validation_evidence,
-            agent_id=agent_id,
-            agent_name=agent_name,
-        )
-
-    def _record_credential(self, **fields: Any) -> dict:
-        author = _author(fields.pop("agent_id"), fields.pop("agent_name"))
+    def _new_row(self, fields: dict, author: dict) -> dict:
         password_present = fields["password"] is not None
         if not password_present:
             fields["password"] = ""
@@ -545,31 +795,69 @@ class CredentialStore:
         except CredentialError:
             raise CredentialError("invalid_arguments") from None
         row.update(history=[], history_truncated=False)
-        with self._transaction(write=True) as (document, directory, fingerprint):
-            existing = next((saved for saved in document["credentials"] if saved["id"] == row["id"]), None)
-            if existing is None:
-                if len(document["credentials"]) >= MAX_CREDENTIALS:
-                    raise CredentialError("credential_limit")
-                document["credentials"].append(row)
-            else:
-                changes = {}
-                for key in ("source", "note"):
-                    value = row[key]
-                    if value and f"\n{value}\n" not in f"\n{existing[key]}\n":
-                        changes[key] = _text("\n".join(filter(None, [existing[key], value])), _LIMITS[key])
-                provenance = row["sources"][0]
-                if provenance not in existing["sources"]:
-                    if len(existing["sources"]) >= MAX_SOURCES:
-                        raise CredentialError("content_limit")
-                    changes["sources"] = [*existing["sources"], provenance]
-                if changes:
-                    self._history(existing, author)
-                    existing.update(changes)
-                else:
-                    return _success(credential=_current(existing), created=False)
-                row = existing
-            self._save(directory, document, fingerprint)
-            return _success(credential=_current(row), created=existing is None)
+        return row
+
+    def _upsert(self, connection, row: dict, author: dict) -> tuple[dict, bool]:
+        existing = self._fetch(connection, row["id"])
+        if existing is None:
+            self._put(connection, row)
+            return row, True
+        changes = {}
+        for key in ("source", "note"):
+            value = row[key]
+            if value and f"\n{value}\n" not in f"\n{existing[key]}\n":
+                changes[key] = _text("\n".join(filter(None, [existing[key], value])), _LIMITS[key])
+        provenance = row["sources"][0]
+        if provenance not in existing["sources"]:
+            if len(existing["sources"]) >= MAX_SOURCES:
+                raise CredentialError("content_limit")
+            changes["sources"] = [*existing["sources"], provenance]
+        if changes:
+            self._history(existing, author)
+            existing.update(changes)
+            self._put(connection, existing)
+        return existing, False
+
+    def record_credential(
+        self,
+        *,
+        host: str = "",
+        username: str = "",
+        password: str | None = None,
+        hash: str = "",
+        secret_type: str = "password",
+        source: str = "",
+        severity: str = "",
+        note: str = "",
+        validation_status: str = "unverified",
+        validation_evidence: str = "",
+        agent_id: str,
+        agent_name: str,
+    ) -> dict:
+        return self._invoke(
+            "record_credential",
+            fields={
+                "host": host,
+                "username": username,
+                "password": password,
+                "hash": hash,
+                "secret_type": secret_type,
+                "source": source,
+                "severity": severity,
+                "note": note,
+                "validation_status": validation_status,
+                "validation_evidence": validation_evidence,
+            },
+            agent_id=agent_id,
+            agent_name=agent_name,
+        )
+
+    def _record_credential(self, fields: dict, agent_id: str, agent_name: str) -> dict:
+        author = _author(agent_id, agent_name)
+        row = self._new_row(fields, author)
+        with self._transaction(write=True) as (connection, _):
+            row, created = self._upsert(connection, row, author)
+            return _success(credential=_current(row), created=created)
 
     def update_credential(
         self,
@@ -597,14 +885,7 @@ class CredentialStore:
             agent_name=agent_name,
         )
 
-    def _update_credential(
-        self,
-        credential_id: str,
-        expected_revision: int,
-        agent_id: str,
-        agent_name: str,
-        **fields: Any,
-    ) -> dict:
+    def _update_credential(self, credential_id, expected_revision, agent_id, agent_name, **fields):
         _id(credential_id)
         _revision(expected_revision)
         author = _author(agent_id, agent_name)
@@ -618,8 +899,10 @@ class CredentialStore:
                 _choice(value, _SEVERITIES)
             else:
                 _text(value, _LIMITS[key])
-        with self._transaction(write=True) as (document, directory, fingerprint):
-            row = _find(document, credential_id)
+        with self._transaction(write=True) as (connection, _):
+            row = self._fetch(connection, credential_id)
+            if row is None:
+                raise CredentialError("credential_not_found")
             if row["revision"] != expected_revision:
                 raise CredentialError("revision_conflict", current_revision=row["revision"])
             status = changes.get("validation_status", row["validation_status"])
@@ -640,5 +923,107 @@ class CredentialStore:
             if any(row[key] != value for key, value in changes.items()):
                 self._history(row, author)
                 row.update(changes)
-                self._save(directory, document, fingerprint)
+                self._put(connection, row)
             return _success(credential=_current(row))
+
+    def import_rows(
+        self,
+        rows,
+        *,
+        source: str,
+        agent_id: str,
+        agent_name: str,
+        dataset_path: str = "",
+        dataset_metadata: dict | None = None,
+        cancelled=None,
+    ) -> dict:
+        return self._invoke(
+            "import_rows",
+            rows=rows,
+            source=source,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            dataset_path=dataset_path,
+            dataset_metadata=dataset_metadata,
+            cancelled=cancelled,
+        )
+
+    def _import_rows(self, rows, source, agent_id, agent_name, dataset_path, dataset_metadata, cancelled):
+        author = _author(agent_id, agent_name)
+        source = _text(source, 4096)
+        dataset_path = _text(dataset_path, 4096)
+        if cancelled is not None and not callable(cancelled):
+            raise CredentialError("invalid_arguments")
+        if dataset_metadata is not None and not isinstance(dataset_metadata, dict):
+            raise CredentialError("invalid_arguments")
+        defaults = {
+            "host": "",
+            "username": "",
+            "password": None,
+            "hash": "",
+            "secret_type": "password",
+            "source": source,
+            "severity": "",
+            "note": "",
+            "validation_status": "unverified",
+            "validation_evidence": "",
+        }
+        rows_read = inserted = 0
+        with self._transaction(write=True, cancelled=cancelled) as (connection, _):
+            for values in rows:
+                if cancelled is not None and cancelled():
+                    raise CredentialError("cancelled")
+                if not isinstance(values, dict) or set(values) - set(defaults):
+                    raise CredentialError("invalid_dataset")
+                fields = {**defaults, **values}
+                fields["source"] = fields["source"] or source
+                try:
+                    row = self._new_row(fields, author)
+                except CredentialError as exc:
+                    if exc.code == "invalid_arguments":
+                        raise CredentialError("invalid_dataset") from None
+                    raise
+                _, created = self._upsert(connection, row, author)
+                rows_read += 1
+                inserted += int(created)
+            if cancelled is not None and cancelled():
+                raise CredentialError("cancelled")
+            metadata = dataset_metadata or {}
+            digest, size = metadata.get("sha256", ""), metadata.get("size", 0)
+            if not isinstance(digest, str) or (digest and not re.fullmatch(r"[0-9a-f]{64}", digest)):
+                raise CredentialError("invalid_dataset")
+            if type(size) is not int or size < 0:
+                raise CredentialError("invalid_dataset")
+            dataset = {
+                "id": f"dataset-{uuid.uuid4().hex}",
+                "source": source,
+                "path": dataset_path,
+                "rows_read": rows_read,
+                "inserted": inserted,
+                "duplicates": rows_read - inserted,
+                "created_by": author,
+                "created_at": datetime.now(UTC).isoformat(),
+                "sha256": digest,
+                "size": size,
+            }
+            connection.execute(
+                "INSERT INTO credential_datasets (id,path,sha256,size,created_at,record) "
+                "VALUES (?,?,?,?,?,?)",
+                (
+                    dataset["id"],
+                    dataset_path,
+                    digest,
+                    size,
+                    dataset["created_at"],
+                    json.dumps(dataset, ensure_ascii=False),
+                ),
+            )
+            total, summary = self._summary(connection)
+            return _success(
+                rows_read=rows_read,
+                inserted=inserted,
+                duplicates=rows_read - inserted,
+                total=total,
+                dataset_id=dataset["id"],
+                summary=summary,
+            )
