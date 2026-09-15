@@ -110,7 +110,7 @@ function warningLabel(code: string, en: boolean) {
     credential_csv_unreadable: ["部分凭据 CSV 无法读取", "Some credential CSV files could not be read"],
     credential_register_unreadable: ["凭据登记清单无法完整读取", "The credential register could not be fully read"],
     credential_csv_limit: ["凭据 CSV 数量或大小超出读取上限", "The credential CSV count or size exceeded the reading limit"],
-    credential_records_unparsed: ["部分凭据发现的格式无法解析，请查看原始记录", "Some credential findings could not be parsed. Check the original records"],
+    credential_records_unparsed: ["部分凭据发现缺少登记或结构化凭据数据，请查看原始记录", "Some credential findings lack registered or structured credential data. Check the original records"],
     source_limit: ["来源数量或大小超出读取上限", "The source count or size exceeded the reading limit"],
   };
   return labels[code]?.[en ? 1 : 0] ?? (en ? "Some scan records could not be read" : "部分扫描记录无法读取");
@@ -217,7 +217,7 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
   return (
     <section className={styles.panel} aria-label={en ? "Credentials" : "凭据"}>
       <header className={styles.header}>
-        <div><h2><KeyRound size={16} aria-hidden />{en ? "Credentials" : "凭据"}</h2><p>{en ? "Credentials registered by agents, supplemented by saved scan records. The register retains the latest validation and its evidence." : "汇总 Agent 登记的凭据，并从已保存的扫描记录补充遗漏；登记清单保留最新验证结果及依据。"}</p></div>
+        <div><h2><KeyRound size={16} aria-hidden />{en ? "Credentials" : "凭据"}</h2><p>{en ? "Credentials from Agent registrations, explicit structured records, and identified credential CSV files. The register retains the latest validation and its evidence." : "汇总 Agent 登记、明确的结构化记录及明确标识的凭据 CSV；登记清单保留最新验证结果及依据。"}</p></div>
         <button type="button" className={styles.download} disabled={!canDownload} onClick={() => void download()}><Download size={14} aria-hidden />{downloadState === "downloading" ? (en ? "Downloading…" : "下载中…") : (en ? "Download all CSV" : "下载全部 CSV")}</button>
       </header>
       <div className={styles.filters}>
@@ -236,7 +236,7 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
         </div>
         <nav className={styles.pagination} aria-label={en ? "Credential pages" : "凭据分页"}><span>{number(offset + 1)}–{number(offset + rows.length)} / {number(total)} · {en ? "Page" : "第"} {number(filters.page + 1)} / {number(Math.max(1, Math.ceil(total / PAGE_SIZE)))}{en ? "" : " 页"}</span><div><button type="button" disabled={filters.page === 0 || result.loading} aria-label={en ? "Previous credentials page" : "上一页凭据"} onClick={() => changeFilters({ page: filters.page - 1 })}><ChevronLeft size={16} /></button><button type="button" disabled={!result.data?.has_more || result.loading} aria-label={en ? "Next credentials page" : "下一页凭据"} onClick={() => changeFilters({ page: filters.page + 1 })}><ChevronRight size={16} /></button></div></nav>
       </> : !result.error && !unreadable && <div className={styles.empty}>
-        {result.loading ? <><Spinner /><span>{en ? "Loading credentials…" : "加载凭据…"}</span></> : <><KeyRound size={24} aria-hidden /><strong>{overallTotal > 0 ? (en ? "No matching credentials" : "没有符合条件的凭据") : partial ? (en ? "No credentials in the readable records" : "当前可读取的记录中没有凭据") : result.data?.source_status === "missing" ? (en ? "No scan records to collect from yet" : "尚无可汇总的扫描记录") : (en ? "No credentials recorded" : "暂无凭据记录")}</strong><p>{overallTotal > 0 ? (en ? "Adjust your search or status filter." : "调整搜索或验证状态筛选。") : (en ? "Credentials registered by agents and saved in scan records will appear here." : "Agent 登记及扫描记录中的凭据会显示在这里。")}</p></>}
+        {result.loading ? <><Spinner /><span>{en ? "Loading credentials…" : "加载凭据…"}</span></> : <><KeyRound size={24} aria-hidden /><strong>{overallTotal > 0 ? (en ? "No matching credentials" : "没有符合条件的凭据") : partial ? (en ? "No credentials in the readable records" : "当前可读取的记录中没有凭据") : result.data?.source_status === "missing" ? (en ? "No scan records to collect from yet" : "尚无可汇总的扫描记录") : (en ? "No credentials recorded" : "暂无凭据记录")}</strong><p>{overallTotal > 0 ? (en ? "Adjust your search or status filter." : "调整搜索或验证状态筛选。") : (en ? "Agent registrations, explicit structured credential records, and identified credential CSV files appear here." : "Agent 登记、明确的结构化凭据记录及凭据 CSV 会显示在这里。")}</p></>}
       </div>}
     </section>
   );

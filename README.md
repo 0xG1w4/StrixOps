@@ -663,11 +663,19 @@ An operator-supplied workspace replaces the default workspace location. See the
   Reports receive totals/status summaries and at most 100 credential examples,
   prioritizing validated material and severity. Finding content remains part of
   the report source under its existing input-budget rules.
-- Saved finding/CSV extraction supplements the register without replacing current
-  validation. A captured CSV is skipped only when its SHA256 and size match a
+- Explicit structured credential fields, such as actual objects or lists in
+  `metadata.credentials`, and identified credential CSV files supplement the
+  register without replacing current validation. Ordinary finding/note prose,
+  URL examples, Markdown tables or code fences, and embedded JSON strings do not
+  create inventory rows. General findings, shared notes, coverage and threat
+  models still contribute their content to reports.
+  A captured CSV is skipped only when its SHA256 and size match a
   committed full import. Unimported legacy CSVs still use bounded fallback parsing;
   oversized or unreadable sources show warnings. Upgrading does not automatically
   import every row of an old large CSV. See [Shared task notes](docs/shared-notes.md).
+- Rows previously inferred only from narrative disappear when the updated
+  inventory is read again; registered data is not deleted. Existing saved reports
+  remain unchanged until regenerated from the task's **Generate report** button.
 - Reports render headings, paragraphs, numbered and nested lists with explicit
   spacing; wide tables, code blocks and supported task flowcharts scroll within
   their own regions. Existing stored Markdown and downloads are not rewritten.

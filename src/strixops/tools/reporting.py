@@ -845,7 +845,8 @@ def create_finding(
     put returned dataset IDs in metadata.credential_dataset_ids (a list of strings)
     and raw/normalized file paths in metadata.evidence_files, without copying every secret here.
     Update that record after actual authentication checks; findings do not replace
-    the shared credential registry.
+    the shared credential registry. Narrative text, Markdown tables and code blocks
+    do not populate the inventory; use the credential tools or explicit metadata.
 
     **Content formatting rules:**
     - Use markdown structure (## sections, bullet points, code blocks)

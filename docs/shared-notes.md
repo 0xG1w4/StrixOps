@@ -95,8 +95,8 @@ Markdown is rendered without executing raw HTML or automatically loading
 embedded remote images.
 
 The same notebook area includes **Test coverage**, **Threat models** and
-**Credentials**. The credential view combines explicit recorded credential
-fields, tables and labeled observations with recognized saved credential CSVs,
+**Credentials**. The credential view combines Agent registrations, explicit
+structured credential fields and recognized saved credential CSVs,
 retaining their sources and authentication status. Search, status filters and
 pagination run on the server; a page does not load the entire inventory into the
 browser. **Download CSV** streams the full available inventory using the legacy
@@ -132,12 +132,15 @@ finding's `metadata.credential_dataset_ids` and raw/normalized file paths in
 `metadata.evidence_files`. They can reference important individual examples in
 `metadata.credential_ids` without enumerating every ID in a large dataset.
 
-The UI, CSV download and reports use this register plus the existing fallback
-extraction. The register's current validation and evidence take precedence over
-older parsed observations, whose sources remain attached. CSV is generated from
+The UI, CSV download and reports use this register plus explicit structured
+credential records and recognized CSVs. The register's current validation and
+evidence take precedence over older observations, whose sources remain attached. CSV is generated from
 this shared inventory when downloaded; agents do not append to a separate CSV
-file in the sandbox. Missing registers on older runs still use saved findings,
-notes and recognized credential CSVs; unreadable registers display a warning.
+file in the sandbox. Missing registers on older runs still use actual structured
+credential fields (such as `metadata.credentials`) and recognized credential CSVs;
+unreadable registers display a warning. Narrative text, URL examples, Markdown
+tables or code blocks, and JSON strings embedded in prose never create credential
+rows. Those findings and notebook contents remain available as report context.
 Already imported CSV evidence is skipped only when the captured file's SHA256 and
 size match a committed import. A matching filename alone is insufficient. Old
 unimported CSVs retain the existing bounded fallback parser and warn when limits

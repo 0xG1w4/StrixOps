@@ -6,7 +6,7 @@ Web and Internal assessment tasks share five main tabs:
 |---|---|
 | Conversation | Read Agent activity, select an Agent and send it an operator hint. |
 | Findings | Inspect individual security findings, severity and supporting details. |
-| Notes | Read shared notes, recorded test coverage and threat models. |
+| Notes | Read shared notes, test coverage, threat models and the credential inventory. |
 | Files | Search, preview and download saved evidence and other task artifacts. |
 | Report | Read and download the complete assessment report when available. |
 
@@ -92,12 +92,27 @@ cannot create a new hint for that finished task.
 
 ## Notes
 
-Notes has three views: **Shared notes**, **Test coverage**, and **Threat models**.
+Notes has four views: **Shared notes**, **Test coverage**, **Threat models**, and
+**Credentials**.
 These are different task records under one navigation entry. Shared notes keep
 their version history and filters; coverage retains unresolved outcomes and
 evidence; threat models retain their amendments and history. A shared note in
 the findings category is still reference material, not a formal vulnerability
 report. See the [shared notes guide](shared-notes.md) for tool and storage limits.
+
+**Credentials** lists Agent registrations, explicit structured credential fields
+(such as actual objects or lists in `metadata.credentials`), and identified
+credential CSV files. Search, validation filters and pagination operate on the
+server; **Download all CSV** exports the full available inventory.
+Ordinary narrative, URL examples, Markdown tables or code fences, and JSON strings
+embedded in prose do not create credential rows. Findings, shared notes, coverage
+and threat models still provide their content to the final report.
+
+After upgrading, rows previously inferred only from prose disappear on the next
+inventory read without deleting registered data. Saved reports retain their
+existing content; use **Generate report** to regenerate one under the current
+source rules. See the [management guide](management.md) for registration, bulk
+import and report sampling details.
 
 ## Files
 
@@ -131,5 +146,5 @@ Older task URLs remain useful:
 
 The current main-tab keys are `conversation`, `findings`, `notes`, `files` and
 `report`. `agent` selects an Agent ID, with `all` selecting the overview.
-`note_view` selects `shared`, `coverage` or `threat_models`. These URL values
+`note_view` selects `shared`, `coverage`, `threat_models` or `credentials`. These URL values
 control presentation; the server validates the actual hint recipient.

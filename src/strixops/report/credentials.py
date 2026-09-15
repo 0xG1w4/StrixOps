@@ -1,18 +1,17 @@
-"""Deterministic credential inventory from recorded scan findings and notebook data.
+"""Credential inventory from explicit structured scan records.
 
 No files, tools or model calls are used here. Recorded credentials are not proof
 of successful authentication; only an explicit validation field changes status.
+Narrative strings never create credential rows, even when they contain field
+labels, URLs, Markdown tables, CSV blocks or serialized JSON.
 """
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
 import re
 from collections.abc import Iterable
-from contextlib import suppress
 from typing import Any
 
 _ALIASES = {
@@ -76,7 +75,7 @@ _ALIASES = {
     "credentialtype": "secret_type",
 }
 _SECRET_KEYS = ("password", "hash", "api_key", "token", "secret", "private_key", "encryption_key")
-_TEXT_FIELDS = {
+_NARRATIVE_FIELDS = {
     "content",
     "description",
     "evidence",
@@ -98,7 +97,7 @@ _TEXT_FIELDS = {
     "rationale",
     "addendum",
 }
-_SKIP_FIELDS = {
+_SKIP_FIELDS = _NARRATIVE_FIELDS | {
     "poc_script_code",
     "poc_description",
     "code",
@@ -130,21 +129,6 @@ _PLACEHOLDERS = {
     "无",
     "無",
 }
-_SPECULATIVE = re.compile(
-    r"\b(?:example|placeholder|sample|pseudocode|hypothetical|try|candidate|wordlist)\b|"
-    r"(?:示例|範例|例如|占位|假设|假設|尝试|嘗試|候选|候選)",
-    re.I,
-)
-_LABEL = re.compile(
-    r"(?<![\w])(?:[\"'`*]{0,2})(username|user|account|login|password|passwd|pwd|pass|"
-    r"password[_ -]?hash|hash|ntlm|nt[_ -]?hash|lm[_ -]?hash|api[_ -]?key|api[_ -]?token|"
-    r"access[_ -]?token|refresh[_ -]?token|bearer[_ -]?token|session[_ -]?token|token|"
-    r"client[_ -]?secret|secret[_ -]?key|private[_ -]?key|encryption[_ -]?key|secret|"
-    r"hostname|host|target|validation[_ -]?status|用户名|用戶名|用户|使用者|账号|帳號|密码|密碼|"
-    r"哈希|雜湊|密钥|金鑰|主机|主機|目标|目標|验证状态|驗證狀態)"
-    r"(?:[\"'`*]{0,2})\s*[:=：]\s*(?:\*\*)?",
-    re.I,
-)
 
 
 def _key(value: str) -> str:
@@ -160,53 +144,6 @@ def _scalar(value: Any) -> str:
     except UnicodeError:
         return ""
     return value
-
-
-def _literal(value: str) -> str:
-    value = value.strip()
-    if value.startswith("`"):
-        width = len(value) - len(value.lstrip("`"))
-        if len(value) >= 2 * width and value.endswith("`" * width):
-            return value[width:-width]
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "`\"'":
-        return value[1:-1]
-    return value
-
-
-def _label_matches(text: str) -> list[re.Match[str]]:
-    """Only treat labels outside a field's quoted literal as another field.
-
-    Quotes in the middle of an unquoted value are ordinary secret bytes. A
-    quoted value starts immediately after its label; escaped quotes and inline
-    backtick delimiters cannot introduce a different username or host.
-    """
-    matches: list[re.Match[str]] = []
-    protected_until = 0
-    for match in _LABEL.finditer(text):
-        if match.start() < protected_until:
-            continue
-        matches.append(match)
-        start = match.end()
-        if start >= len(text) or text[start] not in "\"'`":
-            continue
-        delimiter = text[start]
-        if delimiter == "`":
-            width = len(text[start:]) - len(text[start:].lstrip("`"))
-            delimiter *= width
-        position = start + len(delimiter)
-        protected_until = len(text)
-        while position < len(text):
-            closing = text.find(delimiter, position)
-            if closing < 0:
-                break
-            preceding = text[:closing]
-            escapes = len(preceding) - len(preceding.rstrip("\\"))
-            if delimiter[0] != "`" and escapes % 2:
-                position = closing + len(delimiter)
-                continue
-            protected_until = closing + len(delimiter)
-            break
-    return matches
 
 
 def _usable(value: str) -> bool:
@@ -262,144 +199,13 @@ def _normalized(row: dict, defaults: dict) -> Iterable[dict]:
         }
 
 
-def _markdown_cells(line: str) -> list[str]:
-    # Escaped pipes inside secrets remain literal pipes, not column separators.
-    return [cell.replace(r"\|", "|").strip() for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
-
-
-def _text_rows(text: str) -> Iterable[dict]:
-    if text.lstrip().startswith(("{", "[")):
-        try:
-            document = json.loads(text)
-        except (ValueError, RecursionError):
-            pass
-        else:
-            yield from _structured_rows(document)
-            return
-    lines = text.splitlines()
-    table: list[str] | None = None
-    fence = ""
-    fenced: list[str] = []
-    unfenced: list[str] = []
-    labels: dict[str, str] = {}
-    skipped_section = 0
-    skipped_paragraph = False
-    for raw in [*lines, ""]:
-        stripped = raw.strip()
-        heading = re.match(r"^(#{1,6})\s+(.*)$", stripped)
-        if heading and not fence:
-            if skipped_section and len(heading[1]) <= skipped_section:
-                skipped_section = 0
-            if _SPECULATIVE.search(heading[2]) or re.search(
-                r"proof.of.concept|\bpoc\b|示例代码", heading[2], re.I
-            ):
-                skipped_section = len(heading[1])
-        if skipped_section:
-            continue
-        if not stripped:
-            skipped_paragraph = False
-        if skipped_paragraph:
-            continue
-        marker = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
-        if marker:
-            if fence:
-                if marker[1][0] == fence[0]:
-                    if fence.endswith(":json"):
-                        try:
-                            value = json.loads("\n".join(fenced))
-                            yield from _structured_rows(value)
-                        except (ValueError, RecursionError):
-                            pass
-                    elif fence.endswith(":csv"):
-                        with suppress(csv.Error):
-                            yield from _csv_rows("\n".join(fenced))
-                    elif fence.rsplit(":", 1)[-1] in {"text", "plaintext", "ini", "env", "log", "output"}:
-                        yield from _text_rows("\n".join(fenced))
-                    fence, fenced = "", []
-            else:
-                fence = marker[1] + ":" + marker[2].strip().casefold()
-            if labels:
-                yield labels
-                labels = {}
-            continue
-        if fence:
-            fenced.append(raw)
-            continue
-        unfenced.append(raw)
-        if "|" in stripped:
-            cells = _markdown_cells(stripped)
-            if table and len(cells) == len(table):
-                if not all(re.fullmatch(r":?-+:?", cell) for cell in cells):
-                    yield {key: _literal(cell) for key, cell in zip(table, cells, strict=True) if key}
-                continue
-            keys = [_key(cell) for cell in cells]
-            if any(key in _SECRET_KEYS for key in keys) or "username" in keys:
-                table = keys
-                if labels:
-                    yield labels
-                    labels = {}
-                continue
-        table = None
-        # A CSV header is handled separately, without parsing unrelated prose as CSV.
-        matches = _label_matches(stripped)
-        prose = stripped[: matches[0].start()] if matches else stripped
-        if _SPECULATIVE.search(prose):
-            skipped_paragraph = not matches
-            if labels:
-                yield labels
-                labels = {}
-            continue
-        if not matches:
-            if labels:
-                yield labels
-                labels = {}
-            continue
-        current: dict[str, str] = {}
-        for index, match in enumerate(matches):
-            ending = matches[index + 1].start() if index + 1 < len(matches) else len(stripped)
-            value = stripped[match.end() : ending]
-            # Separators belong to syntax only when another field follows.
-            if index + 1 < len(matches):
-                value = value.rstrip(" ,;")
-            current[_key(match[1])] = _literal(value)
-        prefix = stripped[: matches[0].start()].strip(" -*\t")
-        if (prefix or set(current) & set(labels)) and labels:
-            yield labels
-            labels = {}
-        if prefix:
-            yield current
-        else:
-            labels.update(current)
-    # Unfenced CSV blocks are common in saved credential findings.
-    for start, raw in enumerate(unfenced):
-        try:
-            header = next(csv.reader([raw]))
-        except (csv.Error, StopIteration):
-            continue
-        keys = [_key(cell) for cell in header]
-        if len(keys) >= 2 and any(k in _SECRET_KEYS for k in keys):
-            block = []
-            for line in unfenced[start:]:
-                if not line.strip():
-                    break
-                block.append(line)
-            with suppress(csv.Error):
-                yield from _csv_rows("\n".join(block))
-            break
-
-
-def _csv_rows(text: str) -> Iterable[dict]:
-    reader = csv.reader(io.StringIO(text))
-    header = next(reader, [])
-    keys = [_key(cell.lstrip("\ufeff")) for cell in header]
-    if not any(key in _SECRET_KEYS for key in keys) and "username" not in keys:
-        return
-    for row in reader:
-        if len(row) == len(keys):
-            yield {key: value for key, value in zip(keys, row, strict=True) if key}
-
-
 def _structured_rows(value: Any, depth: int = 0, context: dict | None = None) -> Iterable[dict]:
+    """Read actual structured values, never infer records from narrative content.
+
+    Credential metadata from saved findings and declared CSV files reaches this
+    function as dictionaries/lists. Notes on those rows remain literal text;
+    they must not recursively generate additional credentials.
+    """
     if depth > 12:
         return
     context = dict(context or {})
@@ -420,13 +226,10 @@ def _structured_rows(value: Any, depth: int = 0, context: dict | None = None) ->
         if keys.intersection(_SECRET_KEYS) or "username" in keys:
             yield {**context, **value}
         for key, nested in value.items():
-            if key in _SKIP_FIELDS:
+            if key in _SKIP_FIELDS or (isinstance(key, str) and _key(key) == "note"):
                 continue
             if isinstance(nested, (dict, list)):
                 yield from _structured_rows(nested, depth + 1, context)
-            elif isinstance(nested, str) and key in _TEXT_FIELDS | {"credentials", "secrets"}:
-                for row in _text_rows(nested):
-                    yield {**context, **row}
 
 
 def collect_credentials(
@@ -438,7 +241,7 @@ def collect_credentials(
     final_fields: dict | None,
     campaign: dict | None = None,
 ) -> list[dict[str, Any]]:
-    """Collect explicit recorded values, retaining source identity and exact secrets."""
+    """Collect structured values, retaining source identity and exact secrets."""
     records: list[tuple[str, dict]] = []
     records.extend(("vulnerability", row) for row in reports if isinstance(row, dict))
     records.extend(("finding", row) for row in internal_findings if isinstance(row, dict))
@@ -576,7 +379,7 @@ def merge_credential_inventory(
 ) -> list[dict[str, Any]]:
     """Keep registered current validation authoritative while preserving other sources.
 
-    Discovery parsing is a fallback. An older finding or CSV must not undo an
+    Structured findings and credential CSVs supplement the register, but cannot undo an
     explicit later registry update, or turn it into an unknown status. Conflicting
     supplemental observations remain attributable separately from current state.
     """
