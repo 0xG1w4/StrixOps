@@ -1,4 +1,4 @@
-"""SDK-native transient model retries.
+"""SDK-native retries and eligibility for session-backed stream recovery.
 
 Context compaction and overflow recovery live in ``compaction`` and ``loop``;
 they operate on the persisted agent session.
@@ -7,10 +7,13 @@ they operate on the persisted agent session.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
+import httpx
 from agents.model_settings import ModelSettings
 from agents.retry import ModelRetryBackoffSettings, ModelRetrySettings, RetryPolicyContext, retry_policies
-from openai import APIError, APIStatusError
+from agents.tool import ApplyPatchTool, ComputerTool, FunctionTool, LocalShellTool, ShellTool
+from openai import APIConnectionError, APIError, APIStatusError
 
 from strixops.config.model_errors import upstream_policy_code
 
@@ -34,6 +37,120 @@ _PERMANENT_STREAM_CODES = frozenset(
         "context_length_exceeded",
     }
 )
+
+
+@dataclass
+class ModelStreamFailure:
+    """Per-request evidence, attached only by the model boundary, never a tool."""
+
+    completed: bool = False
+    replay_unsafe: bool = False
+    request_attempt: int = 1
+    provider_veto: bool = False
+
+
+def model_stream_failure(error: BaseException) -> ModelStreamFailure | None:
+    for candidate in _error_chain(error):
+        failure = getattr(candidate, "_strixops_model_stream_failure", None)
+        if isinstance(failure, ModelStreamFailure):
+            return failure
+    return None
+
+
+def _error_chain(error: BaseException):
+    seen: set[int] = set()
+    for _ in range(16):
+        if id(error) in seen:
+            break
+        seen.add(id(error))
+        yield error
+        error = error.__cause__ or error.__context__
+        if error is None:
+            break
+
+
+def local_tools_only(tools: list) -> bool:
+    """Hosted tools can have side effects before the interrupted response ends."""
+    for tool in tools:
+        if isinstance(tool, ShellTool):
+            if (tool.environment or {}).get("type", "local") != "local":
+                return False
+        elif not isinstance(tool, (FunctionTool, LocalShellTool, ApplyPatchTool, ComputerTool)):
+            return False
+    return True
+
+
+def can_resume_model_stream(error: Exception) -> bool:
+    """Recover a stateless model request from the durable local session.
+
+    The SDK already retries failures before output. Do not multiply its exhausted
+    budget, retry tool/storage errors, or replay a remote conversation/hosted tool.
+    """
+    failure = model_stream_failure(error)
+    if (
+        failure is None
+        or failure.completed
+        or failure.replay_unsafe
+        or failure.provider_veto
+        or failure.request_attempt > (MODEL_RETRY.max_retries or 0)
+        or upstream_policy_code(error) is not None
+    ):
+        return False
+    transient = False
+    for candidate in _error_chain(error):
+        if candidate.__class__.__name__ in {"CancelledError", "AbortError"}:
+            return False
+        status = _stream_status(getattr(candidate, "status_code", None))
+        if status is not None:
+            if status not in _TRANSIENT_STREAM_STATUSES | {408}:
+                return False
+            transient = True
+        if isinstance(candidate, APIError):
+            pending = [candidate.body]
+            seen: set[int] = set()
+            for body in pending:
+                if not isinstance(body, Mapping) or id(body) in seen:
+                    continue
+                seen.add(id(body))
+                labels = {
+                    value.lower()
+                    for key in ("code", "type")
+                    if isinstance(value := body.get(key), str) and _stream_status(value) is None
+                }
+                if labels & _PERMANENT_STREAM_CODES or any(
+                    label.startswith(("invalid_", "unsupported_")) for label in labels
+                ):
+                    return False
+                transient |= bool(labels & _TRANSIENT_STREAM_CODES)
+                for key in ("status", "status_code", "code"):
+                    value = _stream_status(body.get(key))
+                    if value is not None:
+                        if value not in _TRANSIENT_STREAM_STATUSES | {408}:
+                            return False
+                        transient = True
+                if len(pending) < 64:
+                    pending.extend(body.get(key) for key in ("error", "innererror", "inner_error"))
+        if isinstance(
+            candidate,
+            (
+                APIConnectionError,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.WriteError,
+                httpx.RemoteProtocolError,
+                httpx.TimeoutException,
+                TimeoutError,
+                ConnectionResetError,
+                ConnectionAbortedError,
+                BrokenPipeError,
+            ),
+        ):
+            transient = True
+    return transient
+
+
+def transport_recovery_delay(attempt: int) -> float:
+    return min(2.0 * 2 ** (attempt - 1), 90.0)
 
 
 def _stream_status(value: object) -> int | None:

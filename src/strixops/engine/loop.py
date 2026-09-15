@@ -1,11 +1,12 @@
 """Per-agent execution loop with lifecycle detection and recovery nudges.
 
-A turn that ends without a lifecycle tool call (``finish_scan`` for root,
-``agent_finish`` for children) does not end the agent — the loop injects a
-recovery nudge as a user message in the agent's session, and
-runs again (bounded by ``MAX_NUDGES``). Exhausted nudges or a raised
-exception terminate the agent as crashed/failed, with a notice posted to the
-parent's mailbox so waiting parents never hang.
+Transient interrupted model streams resume from the saved session, with bounded
+backoff and no replay of completed tools. A turn that ends without a lifecycle
+tool call (``finish_scan`` for root, ``agent_finish`` for children) does not end
+the agent — the loop injects a recovery nudge as a user message in the agent's
+session and runs again (bounded by ``MAX_NUDGES``). Exhausted recovery or an
+unrecoverable exception terminates the agent as crashed/failed, with a notice
+posted to the parent's mailbox so waiting parents never hang.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from strixops.engine.stream_cleanup import consume_stream
 from strixops.platform.events import EventWriter
 
 MAX_NUDGES = 5
+MAX_TRANSPORT_RECOVERIES = 5
 MAX_COMPACTIONS_PER_CYCLE = 2
 MAX_IMAGE_STRIPS_PER_CYCLE = 3
 _INPUT_REJECTION_CODES = frozenset({400, 404, 422})
@@ -137,6 +139,11 @@ async def _compact_session(
     )
 
 
+async def _wait_for_transport_retry(delay: float) -> None:
+    # An ordinary cancellable sleep keeps Stop responsive during backoff.
+    await asyncio.sleep(delay)
+
+
 async def _run_agent_cycles(
     agent: Agent[EngineContext],
     context: EngineContext,
@@ -155,10 +162,14 @@ async def _run_agent_cycles(
     compactions_used = 0
     image_strips_used = 0
     execution_attempts = 0
+    consecutive_transport_recoveries = 0
+    transport_recoveries = 0
+    completed_model_turns = 0
     context.failure_reason = ""
     context.lifecycle_completion = None
 
     while True:
+        result = None
         try:
             execution_attempts += 1
             try:
@@ -173,7 +184,7 @@ async def _run_agent_cycles(
                 agent,
                 input=input_items,
                 context=context,
-                max_turns=max_turns,
+                max_turns=max_turns - completed_model_turns,
                 run_config=run_config(sandbox),
                 session=session,
             )
@@ -190,6 +201,10 @@ async def _run_agent_cycles(
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — error ladder owns agent fate
+            if result is not None:
+                # Recovery continues this logical cycle. Count only completed
+                # turns so disconnects cannot renew its tool/model turn budget.
+                completed_model_turns += len(getattr(result, "raw_responses", []))
             if (
                 image_strips_used < MAX_IMAGE_STRIPS_PER_CYCLE
                 and getattr(exc, "status_code", None) in _INPUT_REJECTION_CODES
@@ -230,9 +245,39 @@ async def _run_agent_cycles(
                         agent_name=context.agent_name,
                     )
                     continue
+            if resilience.can_resume_model_stream(exc):
+                # A completed model turn in this cycle is real forward progress.
+                # Shared model/usage counters include other agents and cannot
+                # establish progress for this agent's recovery budget.
+                if result is not None and result.raw_responses:
+                    consecutive_transport_recoveries = 0
+                if consecutive_transport_recoveries < MAX_TRANSPORT_RECOVERIES:
+                    consecutive_transport_recoveries += 1
+                    transport_recoveries += 1
+                    delay = resilience.transport_recovery_delay(consecutive_transport_recoveries)
+                    # consume_stream has joined the old producer and its cleanup.
+                    # The SDK saved cycle input and completed tool results in the
+                    # session; omit old hints/nudges and any unfinished output.
+                    input_items = []
+                    notice = (
+                        f"[model retry] Model stream interrupted ({type(exc).__name__}); "
+                        f"resuming saved session in {delay:g}s "
+                        f"(retry {consecutive_transport_recoveries}/{MAX_TRANSPORT_RECOVERIES})"
+                    )
+                    print(notice, flush=True)
+                    events.emit(
+                        event_type="chat.message",
+                        payload={"content": notice},
+                        agent_id=context.agent_id,
+                        agent_name=context.agent_name,
+                    )
+                    await _wait_for_transport_retry(delay)
+                    continue
             last_error = format_model_error(exc)
             break
 
+        consecutive_transport_recoveries = 0
+        last_error = None
         # Retry any pending usage write; completed responses already published totals.
         if usage_sink is not None:
             with contextlib.suppress(Exception):
@@ -254,6 +299,7 @@ async def _run_agent_cycles(
         # A nudge/mailbox wake begins a new cycle, as in the reference runner.
         compactions_used = 0
         image_strips_used = 0
+        completed_model_turns = 0
 
         # Wake path: mailbox messages (operator hints, peer notes) arrived —
         # append only new messages; does NOT consume recovery budget.
@@ -269,10 +315,13 @@ async def _run_agent_cycles(
         nudge = NUDGE_TEMPLATE.format(attempt=nudges_used, max_attempts=MAX_NUDGES)
         input_items = [{"role": "user", "content": nudge}]
 
+    recovery_summary = f"{nudges_used} recovery nudges"
+    if transport_recoveries:
+        recovery_summary += f", {transport_recoveries} transport recoveries"
     crash_reason = (
         f"Agent {context.agent_name} ({context.agent_id}) ended without a lifecycle tool "
         f"after {execution_attempts} attempt{'s' if execution_attempts != 1 else ''} "
-        f"({nudges_used} recovery nudges)" + (f"; last error: {last_error}" if last_error else "")
+        f"({recovery_summary})" + (f"; last error: {last_error}" if last_error else "")
     )
     context.failure_reason = crash_reason
     print(f"[agent crashed] {crash_reason}", flush=True)

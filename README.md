@@ -752,9 +752,22 @@ Counts do not measure skill effectiveness or enumerate every automatic preload.
 | Coverage or attachments are incomplete | Inspect assessment/delivery records and retained workspace; do not infer completeness from a finished status |
 | Live updates stall behind a proxy | Check streaming support, buffering, and idle timeouts on the access layer |
 
-Retries are bounded and only apply to eligible transient failures. A generic
-streamed `500` can hide a more specific upstream rejection; errors after output
-has begun and explicit policy rejections are not automatically replayed.
+Retries are bounded and only apply to eligible transient failures. Before output,
+the SDK allows up to five retries. If a stateless model stream disconnects after
+output starts (for example, `RemoteProtocolError: incomplete chunked read`), the
+agent can resume its saved session up to five consecutive times, waiting 2, 4,
+8, 16, and 32 seconds. Completed model turns reset this consecutive-failure
+budget; recovery does not renew the execution cycle's model-turn limit. The log
+and conversation show `[model retry]` while recovery is pending; Stop also
+cancels the wait.
+
+Recovery keeps completed tool results and does not repeat old hints, nudges, or
+unfinished tool calls. Exhausting the SDK's pre-output retries does not start a
+second retry budget. Hosted tools and remote conversation state are excluded from
+session recovery. Authentication, billing, explicit policy rejections, and
+tool/storage errors do not qualify. A generic streamed `500` can hide a more
+specific upstream rejection; a persistent eligible failure still ends the agent
+after its recovery budget is exhausted.
 
 ## Development and packaging
 

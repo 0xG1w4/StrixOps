@@ -17,6 +17,8 @@ from typing import Any
 from agents import Model, ModelResponse, ModelSettings, ModelTracing, Tool
 from agents.items import TResponseInputItem
 
+from strixops.engine import resilience
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +112,14 @@ class UsageTrackingModel(Model):
         await self._inner.close()
 
     def get_retry_advice(self, request: Any) -> Any:
-        return self._inner.get_retry_advice(request)
+        advice = self._inner.get_retry_advice(request)
+        failure = resilience.model_stream_failure(request.error)
+        if failure is not None:
+            failure.request_attempt = request.attempt
+            failure.replay_unsafe |= bool(request.previous_response_id or request.conversation_id)
+            if advice is not None:
+                failure.provider_veto = advice.suggested is False or advice.replay_safety == "unsafe"
+        return advice
 
     async def get_response(
         self,
@@ -170,7 +179,30 @@ class UsageTrackingModel(Model):
             conversation_id=conversation_id,
             prompt=prompt,
         )
-        async for event in iterator:
-            if getattr(event, "type", "") == "response.completed":
-                self.accumulator.add(_usage_from_stream_event(event))
-            yield event
+        failure = resilience.ModelStreamFailure(
+            replay_unsafe=bool(previous_response_id or conversation_id)
+            or not resilience.local_tools_only(tools)
+        )
+        failed = False
+        try:
+            async for event in iterator:
+                if getattr(event, "type", "") == "response.completed":
+                    failure.completed = True
+                    self.accumulator.add(_usage_from_stream_event(event))
+                yield event
+        except BaseException as exc:
+            failed = True
+            if isinstance(exc, Exception):
+                # Request-local provenance: tool, session and event-writer errors
+                # must never be mistaken for an interrupted model response.
+                exc._strixops_model_stream_failure = failure
+            raise
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception:
+                    if not failed:
+                        raise
+                    logger.debug("Model stream cleanup failed after a request error")
