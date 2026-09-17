@@ -4,11 +4,13 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.3.5** · [Release notes](docs/v1.3.5.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Stable version **1.3.5** · [Version notes](docs/v1.3.5.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
-The stable release is **`v1.3.5`**, based on application commit `85d980b` with
-release version and documentation updates. **`main` is the development channel**;
-use the release tag for this stable snapshot. See the [release scope](docs/v1.3.5.md#release-scope)
+The maintained stable branch is **[`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release)**,
+based on application commit `85d980b` with version metadata and documentation
+updates. Application logic, prompts and skills retain that baseline. The
+`v1.3.5` tag is a fixed historical snapshot; **`main` and `v1.4.0-dev` are
+development versions**. See the [stable baseline scope](docs/v1.3.5.md#stable-baseline-scope)
 for changes intentionally excluded from this version.
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
@@ -106,7 +108,7 @@ settings remain available as advanced overrides.
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[1.3.5 release notes](docs/v1.3.5.md) for upgrade commands.
+[1.3.5 version notes](docs/v1.3.5.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -179,7 +181,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.3.5 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.3.5-release https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 ./strixops.sh install --build-images
@@ -211,9 +213,9 @@ The manager saves an **absolute runs path**, defaulting to this checkout's
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.3.5` **release tag**, leaving a detached HEAD
-at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.3.5`.
+The clone command selects the maintained `v1.3.5-release` branch. The `release`
+suffix is part of its branch name. For a fixed historical snapshot, the
+`v1.3.5` tag remains available as `refs/tags/v1.3.5`.
 
 To upgrade an existing checkout, save local changes first, including edited
 prompts and skills. Let work finish or stop it before switching source versions:
@@ -221,19 +223,21 @@ prompts and skills. Let work finish or stop it before switching source versions:
 ```bash
 cd /path/to/StrixOps
 ./strixops.sh stop
-git fetch origin tag v1.3.5
-git switch --detach refs/tags/v1.3.5
+git fetch origin
+git switch v1.3.5-release
+git pull --ff-only
 ./strixops.sh install
 ./strixops.sh start
 ./strixops.sh status
 ```
 
 For a service managed by systemd or another supervisor, stop it through that
-manager instead. Reload the browser after installation. Do not use `git pull`
-on `main` to select this stable release.
+manager instead. Reload the browser after installation. If switching or the
+fast-forward update fails because of local changes or divergent commits, save
+and reconcile them before retrying. `git pull` on `main` updates development code.
 
-GitHub's **Source code (zip/tar.gz)** downloads are source archives, not ready-to-run
-installations. Extract one and enter its directory, then run
+An archive downloaded from the [stable branch](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release)
+contains source that still needs to be built. Extract it and enter its directory, then run
 `./strixops.sh install --build-images` and `./strixops.sh start` as above. A plain
 `install` is sufficient when the required sandbox image is already available.
 
@@ -276,16 +280,14 @@ stopped using their original method before starting script management.
 
 ## Install a built wheel
 
-A wheel contains the built Console and runtime prompt/skill library. It does
-not contain the Docker sandbox image. Download `strixops-1.3.5-py3-none-any.whl`
-and `SHA256SUMS` from the [v1.3.5 release](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5)
-and verify the file's checksum before installation. The release also provides
-`strixops-1.3.5.tar.gz` as a Python source distribution. See [Packaging](#packaging)
-to build these artifacts from source; no PyPI installation is assumed.
+A wheel built from this branch contains the built Console and runtime
+prompt/skill library. Build it yourself using [Packaging](#packaging), then
+install the resulting file from `dist/` as shown below. The Docker sandbox
+image is deployed separately; no PyPI installation is assumed.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.3.5-py3-none-any.whl
+.venv/bin/python -m pip install ./dist/strixops-1.3.5-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -319,7 +321,7 @@ For example, a Base URL of `https://gateway.example/v1` produces
 `https://gateway.example/v1/responses`. Enter the API base, not the complete
 completion endpoint. Use the model ID recognized by that particular gateway.
 
-In this release, Auto chooses Responses for the recognized Astra, GPT-5.4 Pro, GPT-5.5,
+In this version, Auto chooses Responses for the recognized Astra, GPT-5.4 Pro, GPT-5.5,
 and GPT-5.6 names; other names use Chat Completions. Set deployment aliases
 explicitly. Manual API choices are honored; native-model compatibility notes
 are advisory. Unsupported option values and known unsupported effort levels
