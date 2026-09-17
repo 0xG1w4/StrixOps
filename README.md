@@ -4,7 +4,12 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Version **1.3.4** · [Release notes](docs/v1.3.4.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Version **1.3.5** · [Release notes](docs/v1.3.5.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+
+The stable release is **`v1.3.5`**, based on application commit `85d980b` with
+release version and documentation updates. **`main` is the development channel**;
+use the release tag for this stable snapshot. See the [release scope](docs/v1.3.5.md#release-scope)
+for changes intentionally excluded from this version.
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -101,7 +106,7 @@ settings remain available as advanced overrides.
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[1.3.4 release notes](docs/v1.3.4.md) for upgrade commands.
+[1.3.5 release notes](docs/v1.3.5.md) for upgrade commands.
 
 ## Architecture and task lifecycle
 
@@ -174,7 +179,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.3.4 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.3.5 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 ./strixops.sh install --build-images
@@ -206,9 +211,31 @@ The manager saves an **absolute runs path**, defaulting to this checkout's
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.3.4` **release tag**, leaving a detached HEAD
+The clone command selects the `v1.3.5` **release tag**, leaving a detached HEAD
 at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.3.4`.
+In an existing checkout, the exact reference is `refs/tags/v1.3.5`.
+
+To upgrade an existing checkout, save local changes first, including edited
+prompts and skills. Let work finish or stop it before switching source versions:
+
+```bash
+cd /path/to/StrixOps
+./strixops.sh stop
+git fetch origin tag v1.3.5
+git switch --detach refs/tags/v1.3.5
+./strixops.sh install
+./strixops.sh start
+./strixops.sh status
+```
+
+For a service managed by systemd or another supervisor, stop it through that
+manager instead. Reload the browser after installation. Do not use `git pull`
+on `main` to select this stable release.
+
+GitHub's **Source code (zip/tar.gz)** downloads are source archives, not ready-to-run
+installations. Extract one and enter its directory, then run
+`./strixops.sh install --build-images` and `./strixops.sh start` as above. A plain
+`install` is sufficient when the required sandbox image is already available.
 
 After installation, subsequent starts only require:
 
@@ -250,13 +277,15 @@ stopped using their original method before starting script management.
 ## Install a built wheel
 
 A wheel contains the built Console and runtime prompt/skill library. It does
-not contain the Docker sandbox image. Use this route when you already have a
-trusted `strixops-1.3.4-py3-none-any.whl`; it does not assume a PyPI publication or
-an uploaded GitHub Release asset. See [Packaging](#packaging) to build one.
+not contain the Docker sandbox image. Download `strixops-1.3.5-py3-none-any.whl`
+and `SHA256SUMS` from the [v1.3.5 release](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5)
+and verify the file's checksum before installation. The release also provides
+`strixops-1.3.5.tar.gz` as a Python source distribution. See [Packaging](#packaging)
+to build these artifacts from source; no PyPI installation is assumed.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.3.4-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.3.5-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -573,7 +602,7 @@ tool inventory and architecture-specific best-effort installs.
 
 Use a Docker daemon that can bind-mount the engine's workspace paths. Setting a
 remote `DOCKER_HOST` alone does not make local workspace directories available on
-that remote host. The product version `1.3.4` and sandbox tag `1.3.0` are separate
+that remote host. The product version `1.3.5` and sandbox tag `1.3.0` are separate
 version numbers.
 
 ## Configuration reference

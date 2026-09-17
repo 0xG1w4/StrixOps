@@ -4,7 +4,11 @@
 
 **简体中文** · [English](README.md)
 
-版本 **1.3.4** · [版本说明](docs/v1.3.4.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+版本 **1.3.5** · [版本说明](docs/v1.3.5.md) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+
+稳定版为 **`v1.3.5`**，以应用代码 `85d980b` 为基底，仅另行更新发布版本和文档。
+**`main` 是开发通道**；部署此稳定快照请使用发布标签。
+本次未纳入的后续改动见[发布范围](docs/v1.3.5.md#release-scope)。
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -69,7 +73,7 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 MCP 页面直接沿用 Console 的登录状态。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 仅用于外部 MCP 协议端点，代理配置仍可作为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.3.4 版本说明](docs/v1.3.4.md)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，升级命令见 [1.3.5 版本说明](docs/v1.3.5.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -136,7 +140,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.3.4 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.3.5 https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 ./strixops.sh install --build-images
@@ -159,7 +163,27 @@ cd StrixOps
 
 脚本会保存**绝对运行目录路径**，默认使用本项目下的 `strix_runs`。手动启动时也应使用绝对路径，避免控制台与引擎对相对路径的解析不同。
 
-上面的克隆命令选择 `v1.3.4` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.3.4`。
+上面的克隆命令选择 `v1.3.5` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.3.5`。
+
+升级已有项目之前，请先保存本地修改，包括编辑过的 prompt 和 skill。
+等待工作结束，或先停止工作，再切换源码版本：
+
+```bash
+cd /path/to/StrixOps
+./strixops.sh stop
+git fetch origin tag v1.3.5
+git switch --detach refs/tags/v1.3.5
+./strixops.sh install
+./strixops.sh start
+./strixops.sh status
+```
+
+由 systemd 或其他服务管理器启动的服务，请先通过原管理器停止。
+安装后刷新浏览器；在 `main` 上执行 `git pull` 不会选择这个稳定版。
+
+GitHub 的 **Source code (zip/tar.gz)** 是源码归档，不是可直接运行的安装包。
+解压并进入目录后，仍需执行 `./strixops.sh install --build-images` 和
+`./strixops.sh start`。已有所需沙箱镜像时，使用普通 `install` 即可。
 
 安装完成后，再次启动只需执行：
 
@@ -199,11 +223,15 @@ curl --fail http://127.0.0.1:8300/api/health
 
 ## 安装已构建的 wheel
 
-wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。如果你已持有可信的 `strixops-1.3.4-py3-none-any.whl`，可以采用此方式。以下步骤不假定包已发布至 PyPI，也不假定 GitHub Release 已上传安装文件。自行构建的方法见[打包](#packaging)。
+wheel 包包含已构建的控制台和运行时提示词、技能资源库，**不包含** Docker 沙箱镜像。
+从 [v1.3.5 发布页](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5) 下载
+`strixops-1.3.5-py3-none-any.whl` 和 `SHA256SUMS`，核对文件校验值后安装。
+发布页还提供 Python 源码分发包 `strixops-1.3.5.tar.gz`。
+自行构建的方法见[打包](#packaging)；以下步骤不假定包已发布至 PyPI。
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install ./strixops-1.3.4-py3-none-any.whl
+.venv/bin/python -m pip install ./strixops-1.3.5-py3-none-any.whl
 .venv/bin/strixops --version
 .venv/bin/strixops-console --runs-root "$PWD/strix_runs"
 ```
@@ -432,7 +460,7 @@ export STRIXOPS_IMAGE="strixops-sandbox:custom"
 
 仓库提供的是**沙箱 Dockerfile**，并非完整的控制台 Docker/Compose 部署方案。wheel 和前端构建都不会构建或打包沙箱镜像。实际工具清单及不同架构下的尽力安装项，请查阅 [Dockerfile](containers/Dockerfile.sandbox)。
 
-请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.3.4` 与沙箱标签 `1.3.0` 是各自独立的版本号。
+请使用能够绑定挂载引擎工作区路径的 Docker 守护进程。仅设置远程 `DOCKER_HOST`，不会让本地工作区目录自动出现在远程主机上。产品版本 `1.3.5` 与沙箱标签 `1.3.0` 是各自独立的版本号。
 
 <a id="configuration-reference"></a>
 
