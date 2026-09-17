@@ -2,9 +2,10 @@
 
 ## 1.4.0-dev.1 — Unreleased
 
-`main` is the development channel. For production, use
-[v1.3.5](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5), based on the
-stable code at `85d980b`; the following changes are not part of that release.
+`main` and `v1.4.0-dev` are development branches. For the stable version, use
+[v1.3.5-release](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), based on
+`85d980b`; the following changes are not part of that stable baseline.
+The `-release` suffix denotes a stable branch, not a published GitHub Release.
 
 - Strengthen the shared Default/Deep Web assessment workflow with business
   flows, role and state boundaries, a shared assessment plan, coverage records,
@@ -25,10 +26,13 @@ reach its output limit. These recovery changes do not establish that the issue
 is resolved. Context summaries still use the scan profile's reasoning effort.
 Dependency pins and the sandbox image tag remain unchanged.
 
-## 1.3.5 — 2026-09-17
+## 1.3.5 stable baseline — 2026-09-17
 
-- Publish the stable application snapshot at `85d980b`, with release version
-  and documentation updates. `main` remains the development channel.
+- Maintain the stable application baseline at `85d980b` on
+  [`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), with
+  version metadata and documentation updates. Application logic, prompts and
+  skills retain that baseline. The `v1.3.5` tag is a fixed historical snapshot;
+  `main` and `v1.4.0-dev` are development versions.
 - Stop owned Console services, scan engines and containers even when saved
   activity is stale; improve stale MCP capture checks during installation.
 - Preserve report drafts during finalization, expose report generation failures,
@@ -45,7 +49,7 @@ Dependency pins and the sandbox image tag remain unchanged.
   for mislabeled fences and line breaks; prevent active run attachments from
   executing as Console content.
 
-This release excludes the subsequent shared Web workflow rewrite, bulk task
+This stable baseline excludes the subsequent shared Web workflow rewrite, bulk task
 deletion, and context-exhaustion/summary-recovery changes. It does not claim to
 resolve all model context or output-limit failures.
 

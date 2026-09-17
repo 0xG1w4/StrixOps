@@ -4,12 +4,14 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Development version **1.4.0-dev.1** · [Stable release v1.3.5](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
+Development version **1.4.0-dev.1** · [Stable branch v1.3.5-release](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
-**`main` is the development channel. For production, install the
-[`v1.3.5` release tag](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5)
-using the commands below.** This README describes the development checkout;
-changes after the stable release are listed in the unreleased changelog.
+**`main` and `v1.4.0-dev` are development branches. For the stable version, use
+[`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release)
+with the commands below.** This README describes the development checkout;
+changes after the stable baseline are listed in the unreleased changelog.
+The `-release` suffix identifies stable branches; it does not mean a GitHub
+Release has been published.
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -106,7 +108,7 @@ settings remain available as advanced overrides.
 Capture uses a separate, pinned mitmproxy image. See the
 [MCP setup and operation guide](docs/mcp-traffic-workbench.md) for installation,
 browser trust, scope rules, storage, and current limits; see the
-[v1.3.5 release](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5) for production upgrade instructions.
+[v1.3.5 stable version notes](docs/v1.3.5.md) for production upgrade instructions.
 
 ## Architecture and task lifecycle
 
@@ -179,7 +181,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.3.5 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.3.5-release https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 ./strixops.sh install --build-images
@@ -211,11 +213,12 @@ The manager saves an **absolute runs path**, defaulting to this checkout's
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the `v1.3.5` **release tag**, leaving a detached HEAD
-at that release snapshot. It does not select a maintained release branch.
-In an existing checkout, the exact reference is `refs/tags/v1.3.5`.
-To evaluate development changes, use a separate checkout of `main` and review
-the known limitations in the [unreleased changelog](CHANGELOG.md) before installing.
+The clone command selects the maintained `v1.3.5-release` **stable branch**.
+For the fixed historical snapshot, use `git switch --detach refs/tags/v1.3.5`.
+To evaluate development changes, use a separate checkout of `v1.4.0-dev` or
+`main` and review the known limitations in the [unreleased changelog](CHANGELOG.md)
+before installing. See the [stable version notes](docs/v1.3.5.md) to switch an
+existing deployment to the stable branch.
 
 After installation, subsequent starts only require:
 

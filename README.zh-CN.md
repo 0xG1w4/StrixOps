@@ -4,9 +4,9 @@
 
 **简体中文** · [English](README.md)
 
-开发版本 **1.4.0-dev.1** · [稳定版 v1.3.5](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
+开发版本 **1.4.0-dev.1** · [稳定分支 v1.3.5-release](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release) · [更新日志](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
-**`main` 是开发通道。生产环境请使用下方命令安装 [`v1.3.5` 发布标签](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5)。** 本 README 描述开发版本；稳定版之后的改动列在更新日志的未发布部分。
+**`main` 和 `v1.4.0-dev` 是开发分支。稳定版本请使用下方命令安装 [`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release)。** 本 README 描述开发版本；稳定基线之后的改动列在更新日志的未发布部分。`-release` 后缀表示稳定分支，不代表已经发布 GitHub Release。
 
 StrixOps 将模型驱动的智能体、基于 Docker 的评估工具、实时任务监控、安全发现和证据管理整合到同一工作流程。你可以从浏览器或 CLI 启动评估，跟踪智能体活动，在执行中补充操作指引，并结合原始记录审阅最终报告。
 
@@ -71,7 +71,7 @@ MCP 任务拥有独立的捕获容器、短期请求容器和数据目录，默�
 
 MCP 页面直接沿用 Console 的登录状态。从远程控制台地址启动代理时，会自动选择代理地址并产生帐密，可在连接信息中显示及复制，不需要手动设置 MCP 环境变量。显式 Token 仅用于外部 MCP 协议端点，代理配置仍可作为高级覆盖选项。
 
-捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，生产升级步骤见 [v1.3.5 发布说明](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5)。
+捕获使用独立且固定版本的 mitmproxy 镜像。安装、浏览器信任、范围规则、存储及当前限制见 [MCP 操作指南](docs/mcp-traffic-workbench.md)，生产升级步骤见 [v1.3.5 稳定版说明](docs/v1.3.5.md)。
 
 <a id="architecture-and-task-lifecycle"></a>
 
@@ -138,7 +138,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.3.5 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.3.5-release https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 ./strixops.sh install --build-images
@@ -161,7 +161,7 @@ cd StrixOps
 
 脚本会保存**绝对运行目录路径**，默认使用本项目下的 `strix_runs`。手动启动时也应使用绝对路径，避免控制台与引擎对相对路径的解析不同。
 
-上面的克隆命令选择 `v1.3.5` **发布标签**，以 detached HEAD 状态打开该版本的精确快照，不是持续维护的发布分支。在已有仓库中，该标签的完整引用为 `refs/tags/v1.3.5`。如需评估开发改动，请单独检出 `main`，并在安装前阅读[未发布更新日志](CHANGELOG.md)中的已知限制。
+上面的克隆命令选择持续维护的 `v1.3.5-release` **稳定分支**。如需固定历史快照，可使用 `git switch --detach refs/tags/v1.3.5`。如需评估开发改动，请单独检出 `v1.4.0-dev` 或 `main`，并在安装前阅读[未发布更新日志](CHANGELOG.md)中的已知限制。已有部署切换稳定分支的步骤见[稳定版说明](docs/v1.3.5.md)。
 
 安装完成后，再次启动只需执行：
 
