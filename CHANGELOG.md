@@ -4,7 +4,8 @@
 
 `main` and `v1.4.0-dev` are development branches. For the stable version, use
 [v1.3.5-release](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), based on
-`85d980b`; the following changes are not part of that stable baseline.
+`85d980b`. Development work is listed below; overview selection and bulk deletion
+have also been backported to the stable branch.
 The `-release` suffix denotes a stable branch, not a published GitHub Release.
 
 - Strengthen the shared Default/Deep Web assessment workflow with business
@@ -13,7 +14,8 @@ The `-release` suffix denotes a stable branch, not a published GitHub Release.
   tool, skill, and report instructions (`b4ccb77`).
 - Add overview project filters, task selection and bulk deletion with partial
   failure feedback. Reuse single-task deletion protections for active engines,
-  cleanup and report generation (`93f503f`).
+  cleanup and report generation (`93f503f`). Also available on `v1.3.5-release`
+  through a selective backport that preserves its original scan prompts and engine.
 - Count complete request history when checking context budgets, recognize
   provider context limits, and recover through bounded compaction without
   overwriting history when summarization fails (`3846003`).
@@ -30,9 +32,17 @@ Dependency pins and the sandbox image tag remain unchanged.
 
 - Maintain the stable application baseline at `85d980b` on
   [`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), with
-  version metadata and documentation updates. Application logic, prompts and
-  skills retain that baseline. The `v1.3.5` tag is a fixed historical snapshot;
-  `main` and `v1.4.0-dev` are development versions.
+  version metadata and documentation updates. Scan engine, prompts and skills
+  retain that baseline; the Console includes the limited `93f503f` backport below.
+  Version remains 1.3.5. The `v1.3.5` tag is a fixed historical snapshot from before
+  the backport; pull `v1.3.5-release` to obtain it. `main` and `v1.4.0-dev` are
+  development versions.
+- Backport overview row selection, project filtering, select all across the
+  current filtered result's pages, and confirmed bulk task deletion from
+  `93f503f`. Filter changes clear the selection; confirmation lists the exact
+  task names, targets and count. Show success counts and individual failures,
+  while protecting active engines, report generation, queued work and pending
+  or unverifiable queue cleanup from deletion.
 - Stop owned Console services, scan engines and containers even when saved
   activity is stale; improve stale MCP capture checks during installation.
 - Preserve report drafts during finalization, expose report generation failures,
@@ -49,8 +59,8 @@ Dependency pins and the sandbox image tag remain unchanged.
   for mislabeled fences and line breaks; prevent active run attachments from
   executing as Console content.
 
-This stable baseline excludes the subsequent shared Web workflow rewrite, bulk task
-deletion, and context-exhaustion/summary-recovery changes. It does not claim to
+This stable baseline excludes the subsequent shared Web workflow rewrite and
+context-exhaustion/summary-recovery changes. It does not claim to
 resolve all model context or output-limit failures.
 
 Upgrade and exact scope: [v1.3.5 notes](docs/v1.3.5.md).
