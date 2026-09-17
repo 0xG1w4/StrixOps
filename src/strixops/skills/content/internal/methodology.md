@@ -52,7 +52,7 @@ verified prerequisites; do not bootstrap a proxy merely because code execution
 became available. Record route verification with `pivot_verified`.
 
 **Evidence is the deliverable.**
-Capture each distinct discovery using `create_internal_finding`. Store complete
+Capture each distinct discovery using `create_finding`. Store complete
 evidence in `/workspace/output/` and list relative filenames in
 `metadata.evidence_files`. Captured files are not yet proof of successful
 delivery: preserve sources until the saved copy is verified, and report any

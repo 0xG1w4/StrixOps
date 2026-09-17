@@ -238,7 +238,11 @@ def build_root_task(spec: ScanSpec) -> str:
         if spec.socks5_proxy:
             parts.append(f"Network access is provided through a SOCKS5 tunnel: {spec.socks5_proxy}")
         if spec.gsocket_key:
-            parts.append(f"Network access is provided through a GSocket tunnel with key: {spec.gsocket_key}")
+            parts.append(
+                "Operator-provided GSocket key for a claimed, unverified remote session: "
+                f"{spec.gsocket_key}. "
+                "Verify its service mode, execution host and identity before claiming access."
+            )
         if spec.crypto:
             parts.append("CRYPTO MODE: hunt for cryptocurrency-related assets, wallets, keys, and exposure.")
     else:
@@ -271,8 +275,13 @@ def build_root_task(spec: ScanSpec) -> str:
         ]
     parts += [
         "",
-        "Work autonomously. Report each validated finding via create_vulnerability_report"
-        + (" or create_internal_finding for internal findings" if spec.scan_type == SCAN_INTERNAL else "")
-        + ". Terminate the scan only by calling finish_scan.",
+        "Work autonomously within the assigned roles. Coordinate independent validation and "
+        "ensure validated vulnerabilities are filed via create_vulnerability_report; verified "
+        "known-CVE dependencies use create_dependency_report. "
+        + (
+            "Record factual internal observations via create_finding. "
+            if spec.scan_type == SCAN_INTERNAL else ""
+        )
+        + "Reconcile coverage and unresolved work before completing the scan via finish_scan.",
     ]
     return "\n".join(parts)

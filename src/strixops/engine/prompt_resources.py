@@ -55,12 +55,21 @@ class PromptResources:
         else:
             # No await in capture or publish: every child on this run's event
             # loop observes the same snapshot, even after Console edits.
+            parts = {
+                path.name: path.read_text(encoding="utf-8")
+                for path in sorted(prompts.PROMPT_PARTS_DIR.glob("*.md"))
+            }
+            # Missing in a legacy snapshot means keep its old workflow. Missing
+            # when creating a new Web snapshot is a broken installation/edit.
+            if spec is not None and spec.scan_type == "web" and not parts.get(
+                prompts.WEB_METHODOLOGY_PART, ""
+            ).strip():
+                raise ValueError(
+                    f"Required prompt part is missing or empty: {prompts.WEB_METHODOLOGY_PART}"
+                )
             resources = cls(
                 run_dir,
-                {
-                    path.name: path.read_text(encoding="utf-8")
-                    for path in sorted(prompts.PROMPT_PARTS_DIR.glob("*.md"))
-                },
+                parts,
                 skills.snapshot_skills(),
                 ScanSpec(**asdict(spec)) if spec is not None else None,
             )

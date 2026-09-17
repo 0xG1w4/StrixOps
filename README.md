@@ -426,7 +426,7 @@ does not itself establish a remote shell.
 | `--batch-name` | Optional batch display name |
 | `--resume-batch ID` | Resume supervision of an existing CLI batch; does not repeat completed targets |
 | `--scan-type web\|internal` | Select the assessment workflow |
-| `--scan-mode default\|deep` | Select testing depth; omitted means `default` (existing workflow) |
+| `--scan-mode default\|deep` | Select testing depth; both Web modes use the shared assessment workflow; omitted means `default` |
 | `--instruction-file` | Load operator instructions from Markdown |
 | `--instruction` | Inline fallback when no instruction file is supplied |
 | `--socks5` / `--gsocket` | Select internal reachability settings; do not combine them |
@@ -738,6 +738,28 @@ preview, and save there; changes affect **subsequent runs**. A running task and
 its children use its frozen resource snapshot, rather than later library edits.
 Built-in prompts live in [prompt_parts](src/strixops/agents/prompt_parts), and
 skills in [skills/content](src/strixops/skills/content).
+
+### Shared Web assessment workflow
+
+New Web runs in both **Default** and **Deep** load
+[the same baseline workflow](src/strixops/agents/prompt_parts/web_methodology.md)
+for the Root and each child: bounded reconnaissance → business workflows,
+roles/tenants and state transitions → shared threat model and test-plan note →
+applicable authentication, authorization, input and business-logic tests →
+independent validation → coverage and attack-chain review before completion.
+The Root coordinates the whole engagement; children apply the workflow only to
+their assignments and report corrections and gaps back to the shared state.
+
+Default accounts for important discovered surfaces and applicable risks. Deep
+adds relevant combinations, alternative hypotheses, chain validation and revisits
+without expanding scope or raising Agent limits. Planned/blocked work lives in
+the shared plan note; coverage uses the existing result states, including
+`needs_follow_up`. Missing access or exhausted resources may leave disclosed gaps.
+These are Agent instructions, not an automatic proof of complete coverage or a
+new runtime completion gate. Older frozen runs keep their saved prompt parts and
+skills without importing the new Web workflow; tool descriptions still come from
+the installed code. New Web runs fail explicitly if the required workflow file
+is missing or empty.
 
 Children receive their scope and assignment explicitly and may delegate within
 the configured limits. Shared coverage and threat-model tools keep revisions and

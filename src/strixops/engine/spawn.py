@@ -192,10 +192,13 @@ def _child_initial_input(
     parts.append(engagement_context(frozen_spec if frozen_spec is not None else services.spec))
     parts.append(task)
     parts.append(
-        "Stay strictly within the authorized scope above. File validated findings "
-        "with create_vulnerability_report"
-        + (" or create_internal_finding for internal discoveries" if _is_internal(services) else "")
-        + ". When your assignment is done (or blocked), call agent_finish with a "
+        "Stay strictly within the authorized scope above and follow your assigned "
+        "discovery or validation role. Discovery candidates go to your parent for "
+        "independent validation; assigned validators file dynamically verified "
+        "vulnerabilities via create_vulnerability_report. Verified known-CVE "
+        "dependencies use create_dependency_report under its evidence contract. "
+        + ("Record factual internal observations via create_finding. " if _is_internal(services) else "")
+        + "When your assignment is done (or blocked), call agent_finish with a "
         "result summary for your parent."
     )
     return [{"role": "user", "content": "\n\n".join(parts)}]

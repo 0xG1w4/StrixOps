@@ -7,7 +7,7 @@ description: Evidence-based internal findings, canonical severity, complete atta
 
 ## Record observations and verified impact separately
 
-Call `create_internal_finding` promptly for each distinct discovery. Do not defer
+Call `create_finding` promptly for each distinct discovery. Do not defer
 all reporting until the end. One extracted dataset may be one finding with a
 complete attachment; do not emit a finding for every row or repeat unchanged
 facts. Describe what was observed, where, and what has actually been verified.

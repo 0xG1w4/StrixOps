@@ -99,8 +99,13 @@ sudo responder -I <iface> -dwFv --disable-smb --disable-http
 ## Evidence and discipline
 
 - Relay proof (command output, dumped SAM entries, obtained certificate)
-belongs under `/workspace/output/`; record credentials via `create_finding`
-(`finding_type="credential"`), one per secret.
+belongs under `/workspace/output/`. Register individual credentials promptly with
+`record_credential`; for a large dataset, preserve the complete raw evidence,
+extract a normalized CSV and call `import_credentials` once. Report the discovery
+with `create_finding` (`finding_type="credential"`), referencing saved credential
+or dataset IDs and `metadata.evidence_files`. One dataset may use one finding;
+do not create a finding per secret or duplicate the dump in handoffs. Follow
+`internal/internal_reporting` for validation status and registry updates.
 - Listeners and coerced flows are transient, but anything that persists
 (certificate enrollment, shadow-credential key credential object,
 delegation ACL change) is an engagement artifact: record it with

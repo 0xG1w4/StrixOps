@@ -13,10 +13,17 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from strixops import skills as skill_registry
-from strixops.engine.scanconfig import SCAN_DEEP, ScanSpec, authorized_target_line, multi_target_instruction
+from strixops.engine.scanconfig import (
+    SCAN_DEEP,
+    SCAN_WEB,
+    ScanSpec,
+    authorized_target_line,
+    multi_target_instruction,
+)
 from strixops.report.formatting import REPORT_FORMAT_SKILL, report_format_guidance
 
 PROMPT_PARTS_DIR = Path(__file__).parent / "prompt_parts"
+WEB_METHODOLOGY_PART = "web_methodology.md"
 
 _DEFAULTS: dict[str, str] = {}
 
@@ -61,6 +68,16 @@ def _environment_part() -> str:
     if frozen is not None and "environment.md" not in frozen:
         return ""
     return _part("environment.md")
+
+
+def _web_methodology_part(spec: ScanSpec | None) -> str:
+    """New Web runs share one workflow; older snapshots retain their own text."""
+    if spec is None or spec.scan_type != SCAN_WEB:
+        return ""
+    frozen = _FROZEN_PARTS.get()
+    if frozen is not None and WEB_METHODOLOGY_PART not in frozen:
+        return ""
+    return _part(WEB_METHODOLOGY_PART)
 
 
 def list_prompt_parts() -> list[dict]:
@@ -177,6 +194,7 @@ def root_instructions(spec: ScanSpec) -> str:
         _part("root_orchestration.md"),
         engagement_context(spec),
         _part("internal_mode.md").format(extras="") if spec.scan_type == "internal" else _part("web_mode.md"),
+        _web_methodology_part(spec),
     ]
     sections += [
         _part("tooling.md"),
@@ -190,14 +208,15 @@ def root_instructions(spec: ScanSpec) -> str:
 
 def child_instructions(task: str, spec: ScanSpec | None = None, skills: list[str] | None = None) -> str:
     internal_extra = (
-        " / create_internal_finding for internal discoveries — report each distinct discovery promptly; "
-        "datasets may use complete attachments"
+        "Record factual internal discoveries promptly via create_finding; "
+        "datasets may use complete attachments."
         if spec is not None and spec.scan_type == "internal"
         else ""
     )
     sections = [
         _part("child_frame.md").format(task=task, internal_extra=internal_extra),
         engagement_context(spec),
+        _web_methodology_part(spec),
         _part("tooling.md"),
         _environment_part(),
         language_instruction(spec.report_language) if spec is not None else "",

@@ -204,7 +204,7 @@ nxc smb 10.0.0.0/24 -u administrator -H <hash> --local-auth --continue-on-succes
 - `responder_session.log`, `kerb_hashes.txt`
 - `cracked_passwords.txt`
 
-**Report each distinct credential discovery promptly via `create_internal_finding`:**
+**Report each distinct credential discovery promptly via `create_finding`:**
 - finding_type: `credential`
 - title: `[system] username`
 - content: full credential detail (hash, cracked password, source, scope)

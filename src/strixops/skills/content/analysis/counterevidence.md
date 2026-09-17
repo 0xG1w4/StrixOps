@@ -13,14 +13,37 @@ This skill governs how you close a candidate. It applies to every
 candidate you open, whether it came from a scanner, a code read, a crawl,
 or a hunch.
 
+## Evidence and Reporting Roles
+
+Evidence quality and permission to file a finding are separate. Follow the
+discovery or independent-validation role in your assignment; this skill does
+not authorize a discoverer to confirm its own candidate. Discovery agents
+preserve reproducible observations, evidence locations and coverage IDs, keep
+the candidate at `needs_follow_up` while independent review is pending, and
+hand it to the parent. The independent validator checks the evidence and
+counterevidence, reproduces the behavior, then files it or names the control
+or missing proof. If validation cannot proceed, preserve the proof gap and
+its blocker instead of claiming confirmation. The parent coordinates this
+handoff; it does not replace independent validation with its own summary.
+
+In an explicitly restricted execution mode with no parent or child-agent
+capability, follow that mode's own evidence and completion contract. Do not
+invent a validator, parent handoff or unavailable tool. This does not waive
+independent validation in a Web/Internal scan that uses the agent tree, even
+when that scan has reached its agent limit.
+
 ## Three Closure States
 
 Every candidate you open ends in exactly one of these. There is no fourth
 state, and "I moved on" is not one of them.
 
-**1. `confirmed`** — you have a working PoC or, in white-box, a complete
-source → control → sink → impact trace plus evidence the path is
-reachable. File it with `create_vulnerability_report`.
+**1. `confirmed`** — independent validation established the claimed behavior
+and impact with a working PoC against the in-scope target. The assigned
+validator files it with `create_vulnerability_report`. A discoverer's PoC
+is supporting evidence, not completion of independent validation. Web blackbox
+findings require dynamic evidence; a payload, scanner alert or proposed script
+is not an executed PoC. Verified known-CVE dependencies use the separate
+reporting contract below and do not establish runtime exploitation.
 
 **2. `ruled_out`** — you can name the **specific control** that makes the
 code safe, at a specific location, and you have checked that the control
@@ -35,7 +58,7 @@ confirm it, and you also could not name a control that rules it out. This
 is a legitimate, expected outcome. Record it with
 `record_coverage(outcome="needs_follow_up")`, carry it up in
 `agent_finish(open_items=[...])`, and reflect it in `counterevidence` /
-`confidence_rationale` if you file a related report. Do **not** convert
+`confidence_rationale` if your role permits filing a related validated report. Do **not** convert
 it to `ruled_out` to tidy up your worklist.
 
 The failure mode this exists to prevent: an agent reads code, feels
@@ -93,16 +116,20 @@ candidates.
 "this is a documented feature", "it's off by default" are not controls.
 What ships and what is reachable is what matters.
 
-**Being internal.** Internal-only, admin-only, or authenticated-only
-reduces severity — it does not make the finding unreal. Downgrade it;
-do not delete it.
+**Being internal.** Internal-only, admin-only, or authenticated-only access
+does not make a finding unreal. Reflect verified access prerequisites and
+restrictions in the relevant CVSS metrics and demonstrated impact. Do not
+automatically downgrade or discard it based on an "internal" label; an
+authenticated attacker may still cross a critical privilege or tenant boundary.
 
 ## Recording Closure
 
 Closure is only useful if it is written down. Every surface you assess
 gets a `record_coverage` entry:
 
-- `confirmed` → outcome `reported`, once the report is filed.
+- `confirmed` → outcome `reported`, only after the independent validator's
+  report is successfully filed; include its ID. Pending independent validation
+  remains `needs_follow_up`, even when the discovery agent has a PoC.
 - `ruled_out` → outcome `ruled_out`, with the named control in
   `evidence`. If you cannot name it, this is not `ruled_out`.
 - `open_proof_gap` → outcome `needs_follow_up`, with the specific gap in
@@ -144,8 +171,9 @@ endpoint is broken/unreachable for unrelated reasons".
 
 ## Before You File a Report
 
-Run this pass on every finding before calling
-`create_vulnerability_report`:
+The assigned independent validator runs this pass before calling
+`create_vulnerability_report`; discovery agents include the same checks in
+their evidence handoff without bypassing validation:
 
 1. **Argue the other side.** Spend real effort building the strongest
    case that this is *not* exploitable, or not as severe as you think.
@@ -156,30 +184,39 @@ Run this pass on every finding before calling
    If you genuinely found nothing, say what you checked — "no input
    validation, WAF, or authorization check was found on this path; tested
    both authenticated and unauthenticated" — not just "none".
-3. **Set `confidence` honestly.** A working PoC against a live target is
-   `high`. A complete static trace you could not execute is at best
-   `medium`, and `confidence_rationale` must name the gap. Do not inflate
-   confidence to make a finding look better; an accurate `medium` is far
-   more useful to the reader than a `high` that does not survive triage.
+3. **Set `confidence` honestly.** A reproducible PoC against a live target
+   can support `high`; name any remaining reliability or impact limitations.
+   A complete static trace without execution is at best `medium` confidence
+   as a source-review conclusion, not a dynamically confirmed finding. Do not
+   inflate confidence or invent executed evidence to satisfy a reporting tool.
+   When confidence is medium/low, name the gaps in `confidence_rationale`.
 4. **State what would move the severity** in `severity_change_conditions`
    — the one concrete piece of evidence that would raise or lower it
    (e.g. "confirmation that this route is exposed to unauthenticated
    internet traffic would raise this to critical").
 
-## Reporting an Unconfirmed Candidate
+## Source Review and Known-CVE Dependencies
 
-Dynamic proof is the standard. But when you have a complete
-source → control → sink → impact trace and runtime reproduction is
-genuinely out of reach (no credentials, unavailable internal services, a
-build that cannot run in the sandbox), a static-only finding is still
-reportable — at `confidence: medium` or `low`, with the missing runtime
-proof named explicitly in `confidence_rationale`.
+Only an explicitly assigned source-code review with available in-scope source
+may use a complete source → control → sink → impact trace as a source-review
+conclusion. An independent validator must review the trace and evidence of
+reachability; distinguish observed code from assumptions about its deployment.
+If runtime reproduction is unavailable, label the conclusion static-only and
+state the missing proof and confidence. This is not a confirmed runtime exploit.
+The current `create_vulnerability_report` contract requires a dynamic PoC:
+preserve static-only conclusions in shared notes and evidence, with
+`needs_follow_up` for runtime proof, and hand them to the parent. Never invent
+a PoC or submit placeholder code to force acceptance. Merely loading a source
+analysis skill does not turn a Web blackbox assignment into a source review.
 
-What is **not** acceptable is a scanner hit with no trace, a "this
-pattern is usually dangerous" claim, or a finding where you never
-identified the attacker-controlled input. Those are not proof gaps, they
-are non-findings.
+For a known-CVE dependency, independently verify the published advisory and
+the installed version at the exact manifest or inventory location, then use
+`create_dependency_report` under its own evidence contract. State deployment
+and reachability limits; matching a dependency advisory does not establish
+that its exploit works in this target. A separately reproduced exploit can
+support a dynamic report, without inventing a relationship between them.
 
-If you are unsure whether a candidate clears this bar: it clears it if
-you can name the input, the path, the missing or broken control, and the
-effect. It does not if any one of those is a guess.
+A scanner hit, a familiar dangerous pattern or an assumed attacker-controlled
+input does not establish a finding. Investigate plausible leads within the
+assignment; if necessary facts remain missing, record the concrete proof gap
+instead of treating the alert as confirmed or silently marking the area clean.

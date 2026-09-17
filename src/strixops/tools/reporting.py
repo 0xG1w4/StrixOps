@@ -153,7 +153,11 @@ async def create_vulnerability_report(
     fix_verification: str = "",
     fix_pr_body: str = "",
 ) -> str:
-    """File a validated vulnerability report. The ONLY way to record a web finding.
+    """File a dynamically validated vulnerability report.
+
+    Use create_dependency_report for verified known-CVE dependency findings
+    under its separate evidence contract. Use create_finding for factual
+    observations that are not validated vulnerability reports.
 
     Quality gates — a report that fails these will be rejected by reviewers:
       1. VALIDATION: Only report a vulnerability you have empirically verified

@@ -6,14 +6,21 @@ from strixops.report.formatting import report_format_guidance
 
 _SEVERITY_RULES_ZH = """- Use only canonical severity labels (Critical/High/Medium/Low/Info). Never use
   Elevated, Medium-High, moderate-high, 偏高, or any other non-canonical label.
-- Overall severity scoring rules:
-  - Critical: only if confirmed RCE exists.
-  - High: no confirmed RCE, but clear high-impact compromise, high-value data
-    access, privileged access, or broadly reusable secrets exist.
+- Overall severity scoring rules apply to the engagement summary, not to the
+  individual findings' recorded CVSS vectors or scores:
+  - Critical: confirmed RCE, domain-wide administration, root access or
+    equivalent control of a critical system, or verified exposure granting
+    full access to critical data.
+  - High: verified privileged or service-account access, sensitive data exposure,
+    or significant limited compromise that does not meet the Critical criteria.
   - Medium: meaningful exploitable weakness or exposure exists, but leverage/impact
     is still limited.
   - Low: minor weakness or low-impact exposure only.
-  - Info: observational or preparatory findings only."""
+  - Info: observational or preparatory findings only.
+- Apply these criteria to demonstrated capabilities and impact in this run.
+  An unverified chain, a discovered secret or a privilege label alone cannot
+  establish that control or data access. Preserve individual finding ratings;
+  do not rewrite their CVSS to match the overall engagement severity."""
 
 _ZH_SECTIONS = [
     "1. 执行摘要",

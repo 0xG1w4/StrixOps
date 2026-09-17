@@ -29,22 +29,43 @@ def finish_scan(
 ) -> str:
     """End testing and save the narrative for the final report model.
 
-    Call this exactly once, when testing is complete and every finding has
-    been filed. This is the ONLY way the scan terminates successfully. The
-    fields are source material for the client-facing report: write them richly and
+    Complete one successful call after the assessment's closing review. A
+    rejected call does not finish the scan: address its reason before retrying.
+    This is the ONLY way the root completes execution successfully; it does not
+    certify exhaustive coverage or that every planned test was possible.
+
+    Before calling, reconcile the shared assessment plan, threat model and
+    amendments, coverage records, child handoffs and filed reports. Account for
+    every important planned surface/role/state: tested, inapplicable with a
+    reason, or explicitly untested/blocked. Review credible relationships between
+    findings and record which attack chains were tested, disproved or left open.
+    Every candidate must have an independently validated filed report, specific
+    counterevidence, or a documented unresolved proof gap. A discovery awaiting
+    validation is not a confirmed finding. Verify saved evidence and credentials.
+    If important assigned work remains feasible within scope and available
+    resources, continue or delegate it instead of declaring completion. Active
+    children must settle before this call can succeed; their absence alone is
+    not proof of sufficient coverage. When access, operator constraints or
+    resource limits prevent remaining work, execution may finish with partial
+    coverage: preserve needs_follow_up records and explain the exact gaps and
+    stopping reason in methodology and limitations. Do not claim those areas
+    passed, retry blocked work indefinitely, or test merely to exhaust a budget.
+
+    The fields are source material for the client-facing report: write them richly and
     concretely in the scan's report language (default 简体中文), clustering
     related findings into themes rather than listing them one by one. Do NOT
     include remediation advice in the narrative fields (recommendations is
     the only remediation field).
 
-    Severity must be canonical and scored for THIS engagement:
-      Critical for confirmed RCE, domain-wide administration, root access
-      or equivalent control of a critical system, or verified exposure
-      granting full access to critical data · High for verified privileged
-      or service-account access, sensitive data exposure, or significant
-      limited compromise ·
-      Medium for meaningful but limited-impact weakness · Low for minor
-      exposure · Info for observational findings.
+    Score canonical overall severity for demonstrated impact in THIS engagement.
+    Use Critical for confirmed RCE, domain-wide administration, root access
+    or equivalent control of a critical system, or verified exposure granting
+    full access to critical data. Use High for verified privileged or
+    service-account access, sensitive data exposure, or significant limited
+    compromise that does not meet the Critical criteria. Use Medium for
+    meaningful but limited-impact weakness, Low for minor exposure, and Info
+    for observational findings. A discovered secret or privilege label alone
+    does not prove that access. Preserve individual findings' CVSS ratings.
 
     Args:
         executive_summary: 执行摘要 — what was tested, what was found, overall
@@ -147,8 +168,11 @@ async def agent_finish(
     Args:
         result_summary: What you were asked to do, what you did, and the
             outcome. This is the report your parent agent receives.
-        findings: Concrete findings discovered (file any formal reports first
-            with create_vulnerability_report / create_internal_finding).
+        findings: Evidence and saved record IDs from your assignment. Discovery
+            agents hand off candidates for independent validation rather than
+            filing them as confirmed. Validation agents file verified findings
+            first with the appropriate reporting tool; internal observations
+            follow their separate reporting contract.
         open_items: Untested or uncertain work, as text or a list of follow-up items.
         success: Whether you completed your assignment.
         report_to_parent: Deliver the completion report to your parent agent.

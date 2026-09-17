@@ -24,7 +24,7 @@ details.verified=true and supporting evidence.
 
 ## Evidence and findings
 
-Record internal discoveries promptly with create_internal_finding. Distinguish
+Record internal discoveries promptly with create_finding. Distinguish
 observed architecture, exposed credentials and a validated security impact. A
 credential's existence does not prove it is valid or privileged. Rate demonstrated
 impact in this deployment and preserve limitations and counterevidence. File an
