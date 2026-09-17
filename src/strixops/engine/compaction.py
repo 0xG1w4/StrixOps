@@ -10,18 +10,25 @@ pairing so the trimmed history is still valid provider input.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import math
 import os
+from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any
 
+import httpx
+from agents.exceptions import ModelBehaviorError
 from agents.model_settings import ModelSettings
 from agents.models.interface import Model, ModelTracing
+from openai import APIConnectionError, APIStatusError, APITimeoutError
 from openai import BadRequestError as OpenAIBadRequestError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from strixops.config.context import ContextSettings
+from strixops.config.model_errors import format_model_error, upstream_policy_code
 from strixops.engine.context_budget import (
     context_limit_from_error,
     context_window,
@@ -42,12 +49,43 @@ _CHECKPOINT_TAG = "<conversation-checkpoint>"
 _TOOL_OUTPUT_MAX_CHARS = 2_000
 _IMAGE_TOKEN_ESTIMATE = 4_096
 _HEAD_TRUNCATED_MARKER = "\n\n[... older conversation omitted to fit the summary request ...]\n\n"
+_SUMMARY_TOTAL_TIMEOUT = 180.0
+_SUMMARY_ATTEMPT_TIMEOUT = 60.0
+_SUMMARY_RETRY_TIMEOUT = 120.0
+_SUMMARY_RETRY_OUTPUT_LIMIT = 8_192
+_CONCISE_SUMMARY_RETRY = (
+    "\n\nThis is a bounded retry. Return a shorter, complete checkpoint using the required sections. "
+    "Prioritize distinct verified facts, exact continuation identifiers, scope, active work and cleanup. "
+    "Use concise bullets and saved-file references; omit repeated explanation and do not investigate anew. "
+    "Finish every section within the available output budget.\n"
+)
+
+
+@dataclass
+class CompactionDiagnostics:
+    """Bounded outcome details; token counts are full input estimates before/after compaction."""
+
+    status: str = "not_attempted"
+    detail: str = ""
+    retryable: bool = False
+    summary_attempts: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class _SummaryFailure(Exception):
+    def __init__(self, status: str, detail: str, *, retryable: bool) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.retryable = retryable
 
 
 class ContextBudgetExceeded(Exception):
     """Local preflight stopped a request before it reached the provider."""
 
     def __init__(self, used: int, budget: int) -> None:
+        self.used_tokens = used
+        self.budget_tokens = budget
         super().__init__(f"Estimated context input {used} tokens exceeds the safe input budget {budget}")
 
 
@@ -94,6 +132,15 @@ def input_budget(
     # An alias may advertise more output capacity than the routed model's entire
     # window. Keep usable input space instead of getting stuck at a zero budget.
     reserve = min(max(settings.compact_buffer_tokens, output_limit(model)), max(1, window // 2))
+    return max(0, window - reserve)
+
+
+def retry_input_budget(
+    model: str, settings: ContextSettings, context_window_limit: int | None = None
+) -> int:
+    """Conservative input allowance for one continuation after a soft-budget failure."""
+    window = _effective_window(model, settings, context_window_limit)
+    reserve = min(output_limit(model), max(1, window // 2)) + max(1024, window // 100)
     return max(0, window - reserve)
 
 
@@ -330,13 +377,15 @@ def _summary_output_tokens(model: str, settings: ContextSettings | None = None) 
 
 
 def _summary_input_budget(
-    model: str, settings: ContextSettings, context_window_limit: int | None = None
+    model: str, settings: ContextSettings, context_window_limit: int | None = None,
+    *, output_tokens: int | None = None,
 ) -> int:
     """Room for the variable summary material, including any earlier checkpoint."""
     overhead = count_tokens(model, _SUMMARY_INSTRUCTIONS)
     window = _effective_window(model, settings, context_window_limit)
     # Leave margin for provider framing and tokenizer differences on gateway aliases.
-    room = window - _summary_output_tokens(model, settings) - overhead - max(256, window // 20)
+    output = _summary_output_tokens(model, settings) if output_tokens is None else output_tokens
+    room = window - output - overhead - max(256, window // 20)
     return max(0, room)
 
 
@@ -373,18 +422,58 @@ def _extract_text(response: ModelResponse) -> str:
     return "".join(parts)
 
 
-async def _summarize(model: str, summary_model: Model, prompt: str, max_tokens: int) -> str | None:
+def _summary_timeout(maximum: float | None = None) -> float:
+    maximum = _SUMMARY_ATTEMPT_TIMEOUT if maximum is None else maximum
+    try:
+        configured = float(os.environ.get("LLM_TIMEOUT") or maximum)
+    except ValueError:
+        configured = maximum
+    if not math.isfinite(configured) or configured <= 0:
+        configured = maximum
+    return min(configured, maximum)
+
+
+def _summary_failure(exc: Exception) -> tuple[str, str, bool]:
+    detail = format_model_error(exc)[:1200]
+    if isinstance(exc, _SummaryFailure):
+        return exc.status, detail, exc.retryable
+    if upstream_policy_code(exc):
+        return "model_refusal", detail, False
+    if isinstance(exc, (TimeoutError, APITimeoutError, httpx.TimeoutException)):
+        return "timeout", detail, True
+    if isinstance(exc, (APIConnectionError, httpx.NetworkError, httpx.RemoteProtocolError)):
+        return "transport_error", detail, True
+    if isinstance(exc, APIStatusError):
+        code = str(getattr(exc, "code", "") or "").lower()
+        retryable = exc.status_code in {408, 429, 500, 502, 503, 504} and code not in {
+            "insufficient_quota", "billing_error", "content_filter",
+        }
+        return "transport_error" if retryable else "provider_error", detail, retryable
+    if isinstance(exc, ModelBehaviorError):
+        message = str(exc).lower()
+        if "content_filter" in message or "refus" in message:
+            return "model_refusal", detail, False
+        if "max_output_tokens" in message or "finish_reason=length" in message:
+            return "output_limit", detail, True
+        if "incomplete_output" in message or "response.incomplete" in message:
+            return "incomplete_output", detail, True
+    return "provider_error", detail, False
+
+
+async def _summarize(
+    model: str, summary_model: Model, prompt: str, max_tokens: int, *, timeout: float | None = None
+) -> str:
     # The existing model carries the platform's configured client and endpoint.
     # Match the reference summary request without constructing a new provider.
-    timeout = float(os.environ.get("LLM_TIMEOUT") or "300")
+    timeout = _summary_timeout(timeout)
     model_settings = ModelSettings(
         retry=MODEL_RETRY,
         include_usage=True,
         max_tokens=max_tokens,
-        extra_args={"timeout": timeout} if timeout > 0 else None,
+        extra_args={"timeout": timeout},
     )
-    try:
-        response = await summary_model.get_response(
+    response = await asyncio.wait_for(
+        summary_model.get_response(
             system_instructions=None,
             input=prompt,
             model_settings=model_settings,
@@ -395,16 +484,19 @@ async def _summarize(model: str, summary_model: Model, prompt: str, max_tokens: 
             previous_response_id=None,
             conversation_id=None,
             prompt=None,
-        )
-    except Exception as exc:
-        if is_context_overflow(exc):
-            raise
-        logger.exception("compaction summary call failed for model %s", model)
-        return None
+        ),
+        timeout=timeout,
+    )
+    if any(getattr(item, "status", None) == "incomplete" for item in response.output):
+        raise _SummaryFailure("incomplete_output", "Summary output is incomplete.", retryable=True)
+    if any(
+        getattr(chunk, "type", None) == "refusal"
+        for item in response.output for chunk in (getattr(item, "content", None) or [])
+    ):
+        raise _SummaryFailure("model_refusal", "Summary output was refused.", retryable=False)
     content = _extract_text(response).strip()
     if not content:
-        logger.warning("compaction summary returned no content")
-        return None
+        raise _SummaryFailure("empty_content", "Summary returned no visible text.", retryable=True)
     return content
 
 
@@ -418,27 +510,38 @@ async def maybe_compact(
     force: bool = False,
     settings: ContextSettings | None = None,
     context_window_limit: int | None = None,
+    diagnostics: CompactionDiagnostics | None = None,
 ) -> bool:
     """Compact ``session`` if it is near the model's context window.
 
     Returns ``True`` when the session was rewritten. ``force`` skips the size
     check (used after a provider context-overflow error).
     """
+    outcome = diagnostics if diagnostics is not None else CompactionDiagnostics()
+    outcome.status, outcome.detail, outcome.retryable = "not_attempted", "", False
+    outcome.summary_attempts = 0
+    outcome.input_tokens = outcome.output_tokens = None
+
+    def finish(status: str, detail: str, *, retryable: bool = False) -> bool:
+        outcome.status, outcome.detail, outcome.retryable = status, detail, retryable
+        return status == "compacted"
+
     context = settings or ContextSettings()
     if not context.auto_compact and not force:
-        return False
+        return finish("disabled", "Automatic compaction is disabled.")
 
     async with session_write_lock(session):
         items = list(await session.get_items())
     if not items:
-        return False
+        return finish("empty_session", "There are no saved session items to summarize.")
 
     budget = input_budget(model, context, context_window_limit)
     used = estimate_input_tokens(model, items, instructions, tools_text)
+    outcome.input_tokens = used
     if not force and used <= budget:
-        return False
+        return finish("not_needed", "Saved session is within the input budget.")
     if estimate_input_tokens(model, items) <= estimate_input_tokens(model, [_checkpoint_item("")]):
-        return False
+        return finish("too_small", "Saved history is smaller than an empty checkpoint wrapper.")
 
     fixed_tokens = count_tokens(model, "\n".join((instructions, tools_text)))
     keep_tokens = min(context.keep_tokens, max(0, budget - fixed_tokens - context.summary_max_tokens - 256))
@@ -449,14 +552,16 @@ async def maybe_compact(
         split = len(items)
     head, recent = items[:split], items[split:]
     previous = _previous_summary(head)
-    summary_budget = _summary_input_budget(model, context, context_window_limit)
+    summary_output = _summary_output_tokens(model, context)
+    summary_window_limit = context_window_limit
+    summary_budget = _summary_input_budget(model, context, summary_window_limit, output_tokens=summary_output)
     if not head or summary_budget <= 0:
         # Nothing to summarise, or no room for even the summary request itself.
         if head:
             logger.warning(
                 "skipping compaction for %s: no room to summarise within its context window", model
             )
-        return False
+        return finish("no_summary_room", "There is no summarizable history or room for a summary request.")
 
     # The previous checkpoint is supplied once, and shares the same bounded
     # material budget as the older turns; an oversized checkpoint cannot bypass it.
@@ -465,41 +570,67 @@ async def maybe_compact(
         if not (previous and isinstance(item, dict) and _content_text(item.get("content")) == previous)
     ])
     material = _build_summary_prompt(serialized_head, previous)[len(_SUMMARY_INSTRUCTIONS):]
+    deadline = asyncio.get_running_loop().time() + _SUMMARY_TOTAL_TIMEOUT
+    concise = False
     for attempt in range(2):
-        fitted = _fit_to_tokens(model, material, summary_budget)
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return finish("timeout", "Summary attempts exhausted their total time budget.", retryable=True)
+        retry_instruction = _CONCISE_SUMMARY_RETRY if concise else ""
+        room = _summary_input_budget(model, context, summary_window_limit, output_tokens=summary_output)
+        room -= count_tokens(model, retry_instruction)
+        fitted = _fit_to_tokens(model, material, min(summary_budget, room))
         if not fitted:
-            return False
+            return finish("no_summary_room", "The provider limit cannot fit the bounded summary request.")
+        outcome.summary_attempts += 1
         try:
+            attempt_timeout = _SUMMARY_ATTEMPT_TIMEOUT if attempt == 0 else _SUMMARY_RETRY_TIMEOUT
             summary = await _summarize(
                 model,
                 summary_model,
-                _SUMMARY_INSTRUCTIONS + fitted,
-                _summary_output_tokens(model, context),
+                _SUMMARY_INSTRUCTIONS + retry_instruction + fitted,
+                summary_output,
+                timeout=_summary_timeout(min(attempt_timeout, remaining)),
             )
         except Exception as exc:
-            if not is_context_overflow(exc):
-                raise
-            if attempt:
-                logger.warning("compaction summary still exceeds the provider context window for %s", model)
-                return False
-            limit = context_limit_from_error(exc)
-            summary_budget = min(
-                count_tokens(model, fitted) // 2,
-                _summary_input_budget(model, context, limit) if limit else summary_budget // 2,
+            overflow = is_context_overflow(exc)
+            status, detail, retryable = (
+                ("context_overflow", format_model_error(exc)[:1200], True)
+                if overflow else _summary_failure(exc)
             )
             logger.warning(
-                "retrying compaction summary for %s with material budget %d", model, summary_budget
+                "compaction summary attempt %d failed for %s: %s; %s", attempt + 1, model, status, detail
             )
+            if attempt or not retryable:
+                return finish(status, detail, retryable=retryable)
+            if overflow:
+                limit = context_limit_from_error(exc)
+                if limit is not None:
+                    summary_window_limit = min(summary_window_limit or limit, limit)
+                summary_budget = min(
+                    count_tokens(model, fitted) // 2,
+                    _summary_input_budget(model, context, summary_window_limit, output_tokens=summary_output),
+                )
+            elif status in {"output_limit", "empty_content", "incomplete_output"}:
+                summary_output = max(
+                    summary_output, min(summary_output * 2, output_limit(model), _SUMMARY_RETRY_OUTPUT_LIMIT)
+                )
+                concise = True
             continue
-        if summary is None:
-            return False
         break
 
     new_items = [_checkpoint_item(summary), *recent]
-    if estimate_input_tokens(model, new_items, instructions, tools_text) >= used:
+    outcome.output_tokens = estimate_input_tokens(model, new_items, instructions, tools_text)
+    if outcome.output_tokens >= used:
         logger.warning("compaction for %s did not reduce context size; keeping the original session", model)
-        return False
-    rewritten = await replace_session_items(session, new_items, expected_len=len(items))
+        return finish(
+            "not_smaller", "The complete checkpoint and retained tail are not smaller.", retryable=True
+        )
+    try:
+        rewritten = await replace_session_items(session, new_items, expected_len=len(items))
+    except Exception as exc:
+        finish("session_write_error", format_model_error(exc)[:1200])
+        raise
     if rewritten:
         logger.info(
             "compacted %s: %d items (~%d tok) -> %d items (summary + %d recent)",
@@ -509,4 +640,5 @@ async def maybe_compact(
             len(new_items),
             len(recent),
         )
-    return rewritten
+        return finish("compacted", "Saved session was replaced with a smaller complete checkpoint.")
+    return finish("session_changed", "Saved session changed during summarization; reload it.", retryable=True)
