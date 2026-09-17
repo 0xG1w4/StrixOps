@@ -19,10 +19,12 @@ from typing import Any
 
 from agents import Agent, RunConfig, Runner
 from agents.memory import Session
+from agents.run_config import CallModelData, ModelInputData
 
 from strixops.config.context import ContextSettings
 from strixops.config.model_errors import format_model_error
 from strixops.engine import compaction, resilience
+from strixops.engine.context_budget import context_limit_from_error
 from strixops.engine.coordinator import STATUS_CRASHED, STATUS_FAILED, AgentCoordinator
 from strixops.engine.scanconfig import EngineContext
 from strixops.engine.sessions import (
@@ -36,6 +38,7 @@ from strixops.platform.events import EventWriter
 
 MAX_NUDGES = 5
 MAX_TRANSPORT_RECOVERIES = 5
+# Consecutive compactions without a completed model turn; real progress resets it.
 MAX_COMPACTIONS_PER_CYCLE = 2
 MAX_IMAGE_STRIPS_PER_CYCLE = 3
 _INPUT_REJECTION_CODES = frozenset({400, 404, 422})
@@ -109,12 +112,51 @@ async def run_agent_loop(
             session.close()
 
 
+def _tools_text(agent: Any) -> str:
+    return "\n".join(
+        f"{getattr(tool, 'name', '')} {getattr(tool, 'description', '') or ''} "
+        f"{getattr(tool, 'params_json_schema', '') or ''}"
+        for tool in getattr(agent, "tools", []) or []
+    )
+
+
+def _context_guard(
+    settings: ContextSettings,
+    *,
+    context_window_limit: int | None,
+    has_pending_input: bool,
+):
+    first_call = True
+
+    def check(data: CallModelData[Any]) -> ModelInputData:
+        nonlocal first_call
+        # SDK 0.19 persists new run input AFTER this filter. Let new hints and
+        # nudges reach that save point before using an exception to restart.
+        # Initial task input is already seeded; later completed tool turns are
+        # also saved before this filter runs. Never rewrite SDK-owned input here.
+        skip = first_call and has_pending_input
+        first_call = False
+        model_name = getattr(getattr(data.agent, "model", None), "model", "")
+        if skip or not settings.auto_compact or not isinstance(model_name, str) or not model_name:
+            return data.model_data
+        budget = compaction.input_budget(model_name, settings, context_window_limit)
+        used = compaction.estimate_input_tokens(
+            model_name, data.model_data.input, data.model_data.instructions or "", _tools_text(data.agent)
+        )
+        if used > budget:
+            raise compaction.ContextBudgetExceeded(used, budget)
+        return data.model_data
+
+    return check
+
+
 async def _compact_session(
     agent: Any,
     session: Session,
     settings: ContextSettings,
     *,
     force: bool,
+    context_window_limit: int | None = None,
 ) -> bool:
     # Models live on the agent, wrapped for usage accounting. A bare model
     # string in RunConfig would change routing, so retain the existing client.
@@ -123,19 +165,15 @@ async def _compact_session(
     if not isinstance(model_name, str) or not model_name or not hasattr(model, "get_response"):
         return False
     instructions = getattr(agent, "instructions", "")
-    tools_text = "\n".join(
-        f"{getattr(tool, 'name', '')} {getattr(tool, 'description', '') or ''} "
-        f"{getattr(tool, 'params_json_schema', '') or ''}"
-        for tool in getattr(agent, "tools", []) or []
-    )
     return await compaction.maybe_compact(
         session,
         model=model_name,
         summary_model=model,
         instructions=instructions if isinstance(instructions, str) else "",
-        tools_text=tools_text,
+        tools_text=_tools_text(agent),
         force=force,
         settings=settings,
+        context_window_limit=context_window_limit,
     )
 
 
@@ -160,11 +198,13 @@ async def _run_agent_cycles(
     last_error: str | None = None
     nudges_used = 0
     compactions_used = 0
+    context_recovery_attempts = 0
     image_strips_used = 0
     execution_attempts = 0
     consecutive_transport_recoveries = 0
     transport_recoveries = 0
     completed_model_turns = 0
+    observed_context_limit: int | None = None
     context.failure_reason = ""
     context.lifecycle_completion = None
 
@@ -177,15 +217,24 @@ async def _run_agent_cycles(
             except Exception:
                 logger.exception("image-budget enforcement failed for %s", context.agent_id)
             try:
-                await _compact_session(agent, session, settings, force=False)
+                compact_options = (
+                    {"context_window_limit": observed_context_limit} if observed_context_limit else {}
+                )
+                await _compact_session(agent, session, settings, force=False, **compact_options)
             except Exception:
                 logger.exception("proactive compaction failed for %s", context.agent_id)
+            config = run_config(sandbox)
+            config.call_model_input_filter = _context_guard(
+                settings,
+                context_window_limit=observed_context_limit,
+                has_pending_input=bool(input_items),
+            )
             result = Runner.run_streamed(
                 agent,
                 input=input_items,
                 context=context,
                 max_turns=max_turns - completed_model_turns,
-                run_config=run_config(sandbox),
+                run_config=config,
                 session=session,
             )
             coordinator.attach_stream(context.agent_id, result)
@@ -223,14 +272,43 @@ async def _run_agent_cycles(
                     )
                     input_items = []
                     continue
-            if compactions_used < MAX_COMPACTIONS_PER_CYCLE and compaction.is_context_overflow(exc):
+            context_overflow = compaction.is_context_overflow(exc)
+            if context_overflow:
+                limit = context_limit_from_error(exc)
+                if limit is not None:
+                    observed_context_limit = min(observed_context_limit or limit, limit)
+                # Real completed turns constitute progress. Bound consecutive
+                # recovery failures without limiting compaction across a long scan.
+                if result is not None and result.raw_responses:
+                    compactions_used = 0
+            if compactions_used < MAX_COMPACTIONS_PER_CYCLE and context_overflow:
+                compactions_used += 1
+                context_recovery_attempts += 1
+                trigger = (
+                    "Input budget reached" if isinstance(exc, compaction.ContextBudgetExceeded)
+                    else "Provider context overflow"
+                )
+                notice = (
+                    f"[context recovery] {trigger}; "
+                    f"summarizing saved session (attempt {compactions_used}/{MAX_COMPACTIONS_PER_CYCLE}"
+                    f"{f', provider limit={observed_context_limit}' if observed_context_limit else ''})"
+                )
+                print(notice, flush=True)
+                events.emit(
+                    event_type="chat.message", payload={"content": notice},
+                    agent_id=context.agent_id, agent_name=context.agent_name,
+                )
                 try:
-                    compacted = await _compact_session(agent, session, settings, force=True)
+                    compact_options = (
+                        {"context_window_limit": observed_context_limit} if observed_context_limit else {}
+                    )
+                    compacted = await _compact_session(
+                        agent, session, settings, force=True, **compact_options
+                    )
                 except Exception:
                     logger.exception("overflow compaction failed for %s", context.agent_id)
                     compacted = False
                 if compacted:
-                    compactions_used += 1
                     # The SDK persisted this cycle's input and completed tools.
                     # Resume the rewritten session without replaying old input.
                     input_items = []
@@ -245,6 +323,15 @@ async def _run_agent_cycles(
                         agent_name=context.agent_name,
                     )
                     continue
+                notice = (
+                    "[context recovery failed] Could not produce a smaller checkpoint; "
+                    "saved session retained."
+                )
+                print(notice, flush=True)
+                events.emit(
+                    event_type="chat.message", payload={"content": notice},
+                    agent_id=context.agent_id, agent_name=context.agent_name,
+                )
             if resilience.can_resume_model_stream(exc):
                 # A completed model turn in this cycle is real forward progress.
                 # Shared model/usage counters include other agents and cannot
@@ -316,6 +403,8 @@ async def _run_agent_cycles(
         input_items = [{"role": "user", "content": nudge}]
 
     recovery_summary = f"{nudges_used} recovery nudges"
+    if context_recovery_attempts:
+        recovery_summary += f", {context_recovery_attempts} context recovery attempts"
     if transport_recoveries:
         recovery_summary += f", {transport_recoveries} transport recoveries"
     crash_reason = (

@@ -10,6 +10,7 @@ pairing so the trimmed history is still valid provider input.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from functools import cache
@@ -21,7 +22,12 @@ from openai import BadRequestError as OpenAIBadRequestError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from strixops.config.context import ContextSettings
-from strixops.engine.context_budget import context_window, count_tokens, output_limit
+from strixops.engine.context_budget import (
+    context_limit_from_error,
+    context_window,
+    count_tokens,
+    output_limit,
+)
 from strixops.engine.resilience import MODEL_RETRY
 from strixops.engine.sessions import replace_session_items, session_write_lock
 
@@ -34,8 +40,61 @@ logger = logging.getLogger(__name__)
 
 _CHECKPOINT_TAG = "<conversation-checkpoint>"
 _TOOL_OUTPUT_MAX_CHARS = 2_000
-_MIN_ITEMS_TO_COMPACT = 6
+_IMAGE_TOKEN_ESTIMATE = 4_096
 _HEAD_TRUNCATED_MARKER = "\n\n[... older conversation omitted to fit the summary request ...]\n\n"
+
+
+class ContextBudgetExceeded(Exception):
+    """Local preflight stopped a request before it reached the provider."""
+
+    def __init__(self, used: int, budget: int) -> None:
+        super().__init__(f"Estimated context input {used} tokens exceeds the safe input budget {budget}")
+
+
+def _request_item_tokens(model: str, item: Any) -> int:
+    # Budget full text/arguments/results, not the summary previews below. Image
+    # data URLs are decoded by vision providers, not tokenized as base64 text;
+    # counting those bytes would discard fresh screenshots before the model saw
+    # them. Use an image allowance alongside the existing image-count limit.
+    image_tokens = 0
+
+    def text_payload(value: Any) -> Any:
+        nonlocal image_tokens
+        if isinstance(value, dict):
+            if value.get("type") in {"input_image", "image_url", "output_image"}:
+                image_tokens += _IMAGE_TOKEN_ESTIMATE
+                return {"type": value["type"], "image": "[image]"}
+            return {key: text_payload(nested) for key, nested in value.items()}
+        if isinstance(value, list):
+            return [text_payload(nested) for nested in value]
+        return value
+
+    serialized = json.dumps(text_payload(item), ensure_ascii=False, default=str)
+    return count_tokens(model, serialized) + image_tokens
+
+
+def estimate_input_tokens(
+    model: str, items: list[Any], instructions: str = "", tools_text: str = ""
+) -> int:
+    return count_tokens(model, "\n".join((instructions, tools_text))) + sum(
+        _request_item_tokens(model, item) for item in items
+    )
+
+
+def _effective_window(model: str, settings: ContextSettings, context_window_limit: int | None) -> int:
+    window = context_window(model, settings)
+    return min(window, context_window_limit) if context_window_limit is not None else window
+
+
+def input_budget(
+    model: str, settings: ContextSettings, context_window_limit: int | None = None
+) -> int:
+    window = _effective_window(model, settings, context_window_limit)
+    # Output metadata is a maximum capability, not the request's max_tokens.
+    # An alias may advertise more output capacity than the routed model's entire
+    # window. Keep usable input space instead of getting stuck at a zero budget.
+    reserve = min(max(settings.compact_buffer_tokens, output_limit(model)), max(1, window // 2))
+    return max(0, window - reserve)
 
 
 # Providers that don't type overflow errors (OpenRouter maps every 400 to a
@@ -83,10 +142,16 @@ def is_context_overflow(exc: BaseException) -> bool:
     OpenRouter branch raises a plain BadRequestError, so for that we fall back to
     matching the provider message.
     """
+    if isinstance(exc, ContextBudgetExceeded):
+        return True
     context_window_exceeded, bad_request = _overflow_error_types()
     if isinstance(exc, context_window_exceeded):
         return True
     if isinstance(exc, (bad_request, OpenAIBadRequestError)):
+        # Some gateways leave str(exc) at "Error code: 400" and put the
+        # provider's context rejection exclusively in the nested error body.
+        if context_limit_from_error(exc) is not None:
+            return True
         msg = str(exc).lower()
         if any(x in msg for x in _OVERFLOW_EXCLUSIONS):
             return False
@@ -214,17 +279,21 @@ def _open_calls_at(items: list[Any]) -> list[int]:
 
 def _select_split(model: str, items: list[Any], keep_tokens: int) -> int:
     """Index where the kept-verbatim recent tail begins: walk newest→oldest to
-    ``keep_tokens``, then snap to a point with no tool call left open."""
+    ``keep_tokens``, then advance to a point with no tool call left open.
+
+    Moving backward would keep an entire oversized call/result group, defeating
+    the budget even when only the final small result fitted in the tail.
+    """
     total = 0
     split = len(items)
     for i in range(len(items) - 1, -1, -1):
-        total += count_tokens(model, _serialize_item(items[i]))
+        total += _request_item_tokens(model, items[i])
         if total > keep_tokens:
             break
         split = i
     open_calls = _open_calls_at(items)
-    while split > 0 and open_calls[split] != 0:
-        split -= 1
+    while split < len(items) and open_calls[split] != 0:
+        split += 1
     return split
 
 
@@ -241,6 +310,8 @@ def _fit_to_tokens(model: str, text: str, max_tokens: int) -> str:
     """Head+tail-truncate ``text`` to ``max_tokens``, keeping start and end."""
     if count_tokens(model, text) <= max_tokens:
         return text
+    if count_tokens(model, _HEAD_TRUNCATED_MARKER) > max_tokens:
+        return ""
     # Rough char budget (~4x tokens), then tighten by real token count.
     budget_chars = max_tokens * 4
     head_chars = budget_chars // 2
@@ -258,13 +329,14 @@ def _summary_output_tokens(model: str, settings: ContextSettings | None = None) 
     return min((settings or ContextSettings()).summary_max_tokens, output_limit(model))
 
 
-def _summary_input_budget(model: str, previous: str | None, settings: ContextSettings | None = None) -> int:
-    """Token room left for the head after instructions and the summary output."""
+def _summary_input_budget(
+    model: str, settings: ContextSettings, context_window_limit: int | None = None
+) -> int:
+    """Room for the variable summary material, including any earlier checkpoint."""
     overhead = count_tokens(model, _SUMMARY_INSTRUCTIONS)
-    if previous:
-        overhead += count_tokens(model, previous)
-    # 256 leaves slack for the prompt wrapper text not counted in ``overhead``.
-    room = context_window(model, settings) - _summary_output_tokens(model, settings) - overhead - 256
+    window = _effective_window(model, settings, context_window_limit)
+    # Leave margin for provider framing and tokenizer differences on gateway aliases.
+    room = window - _summary_output_tokens(model, settings) - overhead - max(256, window // 20)
     return max(0, room)
 
 
@@ -324,7 +396,9 @@ async def _summarize(model: str, summary_model: Model, prompt: str, max_tokens: 
             conversation_id=None,
             prompt=None,
         )
-    except Exception:
+    except Exception as exc:
+        if is_context_overflow(exc):
+            raise
         logger.exception("compaction summary call failed for model %s", model)
         return None
     content = _extract_text(response).strip()
@@ -343,6 +417,7 @@ async def maybe_compact(
     tools_text: str = "",
     force: bool = False,
     settings: ContextSettings | None = None,
+    context_window_limit: int | None = None,
 ) -> bool:
     """Compact ``session`` if it is near the model's context window.
 
@@ -355,21 +430,27 @@ async def maybe_compact(
 
     async with session_write_lock(session):
         items = list(await session.get_items())
-    if len(items) < _MIN_ITEMS_TO_COMPACT:
+    if not items:
         return False
 
-    window = context_window(model, context)
-    reserve = max(context.compact_buffer_tokens, output_limit(model))
-    budget = max(context.keep_tokens, window - reserve)
-    used = count_tokens(model, "\n".join((instructions, tools_text, _serialize_items(items))))
+    budget = input_budget(model, context, context_window_limit)
+    used = estimate_input_tokens(model, items, instructions, tools_text)
     if not force and used <= budget:
         return False
+    if estimate_input_tokens(model, items) <= estimate_input_tokens(model, [_checkpoint_item("")]):
+        return False
 
-    split = _select_split(model, items, context.keep_tokens)
+    fixed_tokens = count_tokens(model, "\n".join((instructions, tools_text)))
+    keep_tokens = min(context.keep_tokens, max(0, budget - fixed_tokens - context.summary_max_tokens - 256))
+    split = _select_split(model, items, keep_tokens)
+    if force and split == 0:
+        # A short conversation can still exceed the real routed model's limit.
+        # It may have no tail small enough to retain verbatim.
+        split = len(items)
     head, recent = items[:split], items[split:]
     previous = _previous_summary(head)
-    input_budget = _summary_input_budget(model, previous, context)
-    if not head or input_budget <= 0:
+    summary_budget = _summary_input_budget(model, context, context_window_limit)
+    if not head or summary_budget <= 0:
         # Nothing to summarise, or no room for even the summary request itself.
         if head:
             logger.warning(
@@ -377,17 +458,47 @@ async def maybe_compact(
             )
         return False
 
-    serialized_head = _fit_to_tokens(model, _serialize_items(head), input_budget)
-    summary = await _summarize(
-        model,
-        summary_model,
-        _build_summary_prompt(serialized_head, previous),
-        _summary_output_tokens(model, context),
-    )
-    if summary is None:
-        return False
+    # The previous checkpoint is supplied once, and shares the same bounded
+    # material budget as the older turns; an oversized checkpoint cannot bypass it.
+    serialized_head = _serialize_items([
+        item for item in head
+        if not (previous and isinstance(item, dict) and _content_text(item.get("content")) == previous)
+    ])
+    material = _build_summary_prompt(serialized_head, previous)[len(_SUMMARY_INSTRUCTIONS):]
+    for attempt in range(2):
+        fitted = _fit_to_tokens(model, material, summary_budget)
+        if not fitted:
+            return False
+        try:
+            summary = await _summarize(
+                model,
+                summary_model,
+                _SUMMARY_INSTRUCTIONS + fitted,
+                _summary_output_tokens(model, context),
+            )
+        except Exception as exc:
+            if not is_context_overflow(exc):
+                raise
+            if attempt:
+                logger.warning("compaction summary still exceeds the provider context window for %s", model)
+                return False
+            limit = context_limit_from_error(exc)
+            summary_budget = min(
+                count_tokens(model, fitted) // 2,
+                _summary_input_budget(model, context, limit) if limit else summary_budget // 2,
+            )
+            logger.warning(
+                "retrying compaction summary for %s with material budget %d", model, summary_budget
+            )
+            continue
+        if summary is None:
+            return False
+        break
 
     new_items = [_checkpoint_item(summary), *recent]
+    if estimate_input_tokens(model, new_items, instructions, tools_text) >= used:
+        logger.warning("compaction for %s did not reduce context size; keeping the original session", model)
+        return False
     rewritten = await replace_session_items(session, new_items, expected_len=len(items))
     if rewritten:
         logger.info(
