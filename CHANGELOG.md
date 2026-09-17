@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.4.0-dev.1 — Unreleased
+
+`main` is the development channel. For production, use
+[v1.3.5](https://github.com/0xG1w4/StrixOps/releases/tag/v1.3.5), based on the
+stable code at `85d980b`; the following changes are not part of that release.
+
+- Strengthen the shared Default/Deep Web assessment workflow with business
+  flows, role and state boundaries, a shared assessment plan, coverage records,
+  independent validation, and explicit completion cross-check instructions. Align Root/child,
+  tool, skill, and report instructions (`b4ccb77`).
+- Add overview project filters, task selection and bulk deletion with partial
+  failure feedback. Reuse single-task deletion protections for active engines,
+  cleanup and report generation (`93f503f`).
+- Count complete request history when checking context budgets, recognize
+  provider context limits, and recover through bounded compaction without
+  overwriting history when summarization fails (`3846003`).
+- Add summary failure diagnostics, bounded retries for truncated summaries,
+  and one bounded model request after an eligible soft-budget failure
+  (`65dc237`).
+
+Known limitation: GLM summary generation with `max` reasoning effort can still
+reach its output limit. These recovery changes do not establish that the issue
+is resolved. Context summaries still use the scan profile's reasoning effort.
+Dependency pins and the sandbox image tag remain unchanged.
+
+## 1.3.5 — 2026-09-17
+
+- Publish the stable application snapshot at `85d980b`, with release version
+  and documentation updates. `main` remains the development channel.
+- Stop owned Console services, scan engines and containers even when saved
+  activity is stale; improve stale MCP capture checks during installation.
+- Preserve report drafts during finalization, expose report generation failures,
+  regenerate saved-run reports in the background, and select a separate report
+  model in each model profile.
+- Include findings, shared notes, coverage, threat models and structured
+  credentials in report sources while excluding general evidence-file bodies.
+- Add an Agent-maintained credential register, complete CSV export and bulk
+  import with bounded report samples; stop inferring credentials from prose.
+- Resume eligible interrupted model streams from saved Agent sessions with
+  bounded retries. Add per-task Default/Deep selection and report-based task
+  continuation with optional new instructions.
+- Improve conversation layout, Simplified Chinese UI text, and Mermaid rendering
+  for mislabeled fences and line breaks; prevent active run attachments from
+  executing as Console content.
+
+This release excludes the subsequent shared Web workflow rewrite, bulk task
+deletion, and context-exhaustion/summary-recovery changes. It does not claim to
+resolve all model context or output-limit failures.
+
+Upgrade and exact scope: [v1.3.5 notes](docs/v1.3.5.md).
+
 ## 1.3.4 — 2026-09-13
 
 - Unify the login card with a shared brand row, new landscape observatory artwork,
