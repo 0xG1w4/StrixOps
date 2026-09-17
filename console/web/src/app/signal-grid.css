@@ -1150,6 +1150,34 @@ summary {
 .run-ledger > .run-ledger-row:first-child { border-top: 0; }
 .run-ledger-row:hover { background: color-mix(in srgb, var(--signal-raised) 34%, transparent); }
 
+.run-ledger-row.run-ledger-selectable { grid-template-columns: 28px minmax(0, 1fr) auto; }
+.run-ledger-row.run-ledger-selected { background: color-mix(in srgb, var(--signal-accent) 7%, transparent); }
+.run-ledger-checkbox { display: grid; min-height: 34px; place-items: center; cursor: pointer; }
+.run-ledger-checkbox:has(input:disabled) { cursor: not-allowed; }
+.run-ledger-checkbox input,
+.ledger-select-all input { width: 16px; height: 16px; accent-color: var(--signal-accent); cursor: inherit; }
+.run-ledger-checkbox input:focus-visible,
+.ledger-select-all input:focus-visible { outline: 2px solid var(--signal-accent); outline-offset: 3px; }
+.ledger-project-filter { width: 190px; max-width: 100%; }
+.ledger-selection-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--signal-line-soft);
+  color: var(--signal-text);
+  font-size: 11px;
+}
+.ledger-select-all { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; cursor: pointer; }
+.ledger-selection-hint { color: var(--signal-muted); font-size: 10px; }
+.ledger-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.ledger-bulk-result { align-items: flex-start; padding: 10px 12px; font-size: 12px; }
+.ledger-bulk-result details { margin-top: 6px; }
+.ledger-bulk-result summary { cursor: pointer; }
+.ledger-bulk-result ul { max-height: 180px; overflow-y: auto; padding: 8px 0 0 18px; list-style: disc; overflow-wrap: anywhere; }
+.ledger-bulk-success { border: 1px solid color-mix(in srgb, var(--signal-success) 30%, transparent); background: color-mix(in srgb, var(--signal-success) 7%, transparent); color: var(--signal-success); }
+
 .run-ledger-main {
   display: grid;
   min-width: 0;
@@ -1989,6 +2017,12 @@ summary {
   .run-ledger-severity { grid-column: 1; grid-row: 3; }
   .run-ledger-chevron { grid-column: 2; grid-row: 1 / 4; }
   .run-ledger-actions { justify-content: flex-end; }
+  .run-ledger-row.run-ledger-selectable { grid-template-columns: 24px minmax(0, 1fr); gap: 8px; }
+  .run-ledger-selectable .run-ledger-checkbox { grid-column: 1; grid-row: 1; align-self: start; }
+  .run-ledger-selectable .run-ledger-main { grid-column: 2; }
+  .run-ledger-selectable .run-ledger-actions { grid-column: 2; }
+  .ledger-selection-actions { width: 100%; margin-left: 0; }
+  .ledger-selection-actions > span { margin-right: auto; }
   .project-branch-header { min-height: 0; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 11px 10px; }
   .project-branch-toggle { gap: 7px; }
   .project-branch-marker { width: 6px; height: 34px; }

@@ -1151,14 +1151,72 @@ def stop_run(name: str) -> dict:
 
 @app.delete("/api/runs/{name}")
 def delete_run(name: str) -> dict:
+    import sqlite3
+
+    if Path(name).name != name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid run name")
     run_dir = state.run_dir(name)
     resolved = run_dir.resolve()
-    if not resolved.is_relative_to(state.runs_root.resolve()):
-        raise HTTPException(status_code=400, detail="path escapes runs root")
-    if _run_summary(run_dir)["live"]:
-        raise HTTPException(status_code=409, detail="run is live — stop it first")
+    if run_dir.is_symlink() or resolved.parent != state.runs_root.resolve():
+        raise HTTPException(status_code=400, detail="invalid run directory")
     try:
-        shutil.rmtree(resolved)
+        with report_generation.deletion_guard(run_dir):
+            summary = _run_summary(run_dir, cache=False)
+            cleanup = summary.get("cleanup") or {}
+            queue = summary.get("queue") or {}
+            if (
+                summary["live"] or _owned_engine_running(name)
+                or cleanup.get("status") == "in_progress"
+                or summary["status"] in {"queued", "starting", "waiting_capacity", "reporting"}
+            ):
+                raise HTTPException(
+                    status_code=409, detail="run is active or finalizing — stop or finish it first",
+                )
+
+            # The scheduler's durable lease may still own resources after the
+            # engine saved a terminal run status. Read it without creating or
+            # migrating the queue database during a delete request.
+            queue_path = default_queue_path()
+            queue_observed = False
+            if queue_path.is_symlink():
+                raise HTTPException(status_code=409, detail="queue activity could not be verified")
+            if queue_path.exists():
+                with contextlib.closing(sqlite3.connect(queue_path.as_uri() + "?mode=ro", uri=True)) as db:
+                    leases = db.execute(
+                        "SELECT state FROM leases WHERE run_dir IN (?,?)",
+                        (str(run_dir.absolute()), str(resolved)),
+                    ).fetchall()
+                    items = db.execute(
+                        "SELECT i.status FROM items i LEFT JOIN batches b ON b.id=i.batch_id "
+                        "WHERE i.run_dir IN (?,?) OR (i.run_name=? AND b.owner=?)",
+                        (str(run_dir.absolute()), str(resolved), name,
+                         "console:" + str(state.runs_root.resolve())),
+                    ).fetchall()
+                    queue_observed = bool(leases or items)
+                    if any(row[0] != "released" for row in leases) or any(
+                        row[0] not in {"completed", "failed", "cancelled"} for row in items
+                    ):
+                        raise HTTPException(
+                            status_code=409, detail="run still has queued work or pending cleanup",
+                        )
+            if not queue_observed and queue.get("status") in {
+                "queued", "starting", "waiting_capacity", "running", "cancelling", "blocked",
+            }:
+                raise HTTPException(status_code=409, detail="run cleanup has not been verified")
+
+            # Moving first prevents a new request from recreating the lock
+            # inside a partially removed directory. The original lease stays
+            # held until removal (or restoration after an error) is complete.
+            removing = resolved.with_name(f".delete-{uuid.uuid4().hex}")
+            resolved.rename(removing)
+            try:
+                shutil.rmtree(removing)
+            except OSError:
+                if removing.exists() and not resolved.exists():
+                    removing.rename(resolved)
+                raise
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=409, detail="queue activity could not be verified") from exc
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"delete failed: {exc}") from exc
     state.summary_cache.pop(run_dir.name, None)
