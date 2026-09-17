@@ -121,24 +121,55 @@ def _write_status(run_dir: Path, generation: dict) -> None:
 
 
 def _acquire(run_dir: Path) -> int | None:
-    if run_dir.is_symlink():
-        raise OSError("run directory is a symlink")
-    state_dir = run_dir / ".state"
-    state_dir.mkdir(exist_ok=True)
-    if state_dir.is_symlink() or not state_dir.is_dir():
-        raise OSError("state directory is not a run-owned directory")
-    descriptor = os.open(run_dir / LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    directory = os.open(run_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    state_directory = None
+    descriptor = None
     try:
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(".state", mode=0o700, dir_fd=directory)
+        state_directory = os.open(
+            ".state", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory,
+        )
+        descriptor = os.open(
+            Path(LOCK).name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=state_directory,
+        )
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise OSError("lock is not a regular file")
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Deletion holds this lease while moving the directory out of service.
+        # A caller that opened the old directory must not start a job against
+        # an unlinked lock or a replacement directory after deletion finishes.
+        for path, fd in ((run_dir, directory), (run_dir / ".state", state_directory),
+                         (run_dir / LOCK, descriptor)):
+            current = path.stat(follow_symlinks=False)
+            opened = os.fstat(fd)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise OSError("run directory changed while acquiring report lease")
     except BlockingIOError:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
         return None
     except BaseException:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
         raise
+    finally:
+        if state_directory is not None:
+            os.close(state_directory)
+        os.close(directory)
     return descriptor
+
+
+@contextlib.contextmanager
+def deletion_guard(run_dir: Path):
+    """Exclude report startup/publication for the entire run deletion."""
+    descriptor = _acquire(run_dir)
+    if descriptor is None:
+        raise HTTPException(status_code=409, detail="report generation is running — wait for it to finish")
+    try:
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def _read_generation(run_dir: Path) -> dict[str, Any]:

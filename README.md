@@ -7,11 +7,13 @@
 Stable version **1.3.5** · [Version notes](docs/v1.3.5.md) · [Changelog](CHANGELOG.md) · [Apache-2.0](LICENSE)
 
 The maintained stable branch is **[`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release)**,
-based on application commit `85d980b` with version metadata and documentation
-updates. Application logic, prompts and skills retain that baseline. The
-`v1.3.5` tag is a fixed historical snapshot; **`main` and `v1.4.0-dev` are
+based on application commit `85d980b`, with scan engine, prompts and skills
+preserved from that baseline. The Console also includes the task selection,
+project filter and bulk deletion backport from `93f503f`. Version remains 1.3.5.
+The `v1.3.5` tag is a fixed historical snapshot from before this backport;
+use the **`v1.3.5-release` branch** to obtain it. **`main` and `v1.4.0-dev` are
 development versions**. See the [stable baseline scope](docs/v1.3.5.md#stable-baseline-scope)
-for changes intentionally excluded from this version.
+for included and excluded changes.
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
 monitoring, findings, and evidence into one workflow. Start an engagement from
@@ -57,6 +59,7 @@ coverage require review; a completed task is not a guarantee that a target is se
 | Target batches | Up to 100 independent targets, with batch and host concurrency limits | Queue targets and keep a separate task, sandbox, context, evidence archive, and report for each |
 | FOFA discovery | Saved searches, sortable/filterable results, exports and selected-target handoff | Discover assets and review a target draft before creating assessments |
 | [Live Console](docs/task-page.md) | Five task tabs, Agent selection with an inline hint composer, notes, and a unified file browser | Follow execution, direct the selected Agent, and review results without duplicate panels |
+| Overview task management | Project filters, row selection, select all across filtered pages, and confirmed bulk deletion | Review the deletion scope and remove saved tasks with separate success and failure results |
 | Projects | Scope validation, task grouping, report aggregation, and skill-use analytics | Organize repeated assessments of the same environment |
 | Model profiles | Custom OpenAI-compatible or OpenRouter routes; separate Web/internal models, API types, and reasoning effort | Reuse and compare model configurations without changing engine code |
 | Prompt and skill editing | Built-in Markdown library, editor, preview, and per-run snapshots | Maintain instructions while preserving the exact resources used by an existing run |
@@ -70,6 +73,15 @@ The Console uses one local account with password login, session protection and
 mandatory first-login password change. It does not provide multiple users or
 tenant isolation. Use HTTPS or an SSH tunnel for remote access; see the
 [account guide](docs/authentication.md).
+
+In the overview, filter tasks by search, scan type or project, then select rows
+or **Select all**. Select all covers eligible tasks across every page of the
+current filtered result; changing a filter clears the selection. The confirmation
+lists the task names, targets and count before permanently deleting their saved
+reports, evidence and logs. Results separate successful deletions from individual
+failures. Active engines, report generation, queued work and pending or unverifiable
+queue cleanup block deletion; finish or stop the work and resolve cleanup before
+retrying. See the [bulk deletion guide](docs/v1.3.5.md#overview-selection-and-bulk-deletion).
 
 ## MCP traffic workbench
 
@@ -215,7 +227,8 @@ between the Console and engine, especially in a wheel installation.
 
 The clone command selects the maintained `v1.3.5-release` branch. The `release`
 suffix is part of its branch name. For a fixed historical snapshot, the
-`v1.3.5` tag remains available as `refs/tags/v1.3.5`.
+`v1.3.5` tag remains available as `refs/tags/v1.3.5`; it predates the overview
+selection and bulk deletion backport. Pull `v1.3.5-release` to obtain that feature.
 
 To upgrade an existing checkout, save local changes first, including edited
 prompts and skills. Let work finish or stop it before switching source versions:

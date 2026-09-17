@@ -2,17 +2,21 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Plus, RotateCw, Search, WifiOff, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, RotateCw, Search, Trash2, WifiOff, X } from "lucide-react";
 import {
   apiURL,
   del,
   getJSON,
+  getProjects,
   runTargetLabel,
   runTargets,
   type OkResult,
   type RunSummary,
   type RunsPage,
+  type ProjectSummary,
 } from "@/lib/api";
+import DeleteRunsDialog from "@/components/DeleteRunsDialog";
+import { describeDeletionError, type RunDeletionResult } from "@/lib/run-deletion";
 import { fmtDuration } from "@/lib/format";
 import { useI18n, type Locale } from "@/lib/i18n";
 import { PAGE_SIZE_KEY, readStorage, writeStorage } from "@/lib/storage";
@@ -191,6 +195,13 @@ export default function DashboardPage() {
 
   const [search, setSearch] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("all");
+  const [projectFilter, setProjectFilter] = React.useState("all");
+  const [projects, setProjects] = React.useState<ProjectSummary[]>([]);
+  const [selected, setSelected] = React.useState<Set<string>>(() => new Set());
+  const [deleteCandidates, setDeleteCandidates] = React.useState<RunSummary[] | null>(null);
+  const [deleteResult, setDeleteResult] = React.useState<RunDeletionResult | null>(null);
+  const selectAllRef = React.useRef<HTMLInputElement>(null);
+  const mutationRevision = React.useRef(0);
 
   /* pagination — page size persisted across visits */
   const [pageSize, setPageSize] = React.useState<number>(DEFAULT_PAGE_SIZE);
@@ -225,8 +236,11 @@ export default function DashboardPage() {
     if (inFlight.current) return;
     inFlight.current = true;
     setSyncing(true);
+    const revision = mutationRevision.current;
     try {
       const page = await getJSON<RunsPage>("/api/runs");
+      // A response started before a deletion must not restore deleted rows.
+      if (revision !== mutationRevision.current) return;
       const signature = JSON.stringify(page);
       const changed = signature !== signatureRef.current;
       signatureRef.current = signature;
@@ -245,6 +259,16 @@ export default function DashboardPage() {
       setSyncing(false);
     }
   }, []);
+
+  const loadProjects = React.useCallback(async () => {
+    try {
+      setProjects((await getProjects()).projects);
+    } catch {
+      // Run-owned project IDs remain available as filter labels when names
+      // cannot be loaded; task deletion does not depend on project metadata.
+    }
+  }, []);
+  React.useEffect(() => { void loadProjects(); }, [loadProjects]);
 
   /* -------------------------------------------- poll: 4s / 10s + visibility */
   React.useEffect(() => {
@@ -290,7 +314,10 @@ export default function DashboardPage() {
     };
   }, [load]);
 
-  const refresh = React.useCallback(() => refreshRef.current?.(), []);
+  const refresh = React.useCallback(() => {
+    refreshRef.current?.();
+    void loadProjects();
+  }, [loadProjects]);
 
   /* -------------------------------------------------------- live 1s ticker */
   const anyLive = data?.runs.some((r) => r.live) ?? false;
@@ -308,10 +335,33 @@ export default function DashboardPage() {
   }, [actionError]);
 
   /* ---------------------------------------------------------------- delete */
+  const forgetDeleted = (names: string[]) => {
+    const removed = new Set(names);
+    mutationRevision.current += 1;
+    setSelected((current) => new Set([...current].filter((name) => !removed.has(name))));
+    setData((current) => {
+      if (!current) return current;
+      const remaining = current.runs.filter((run) => !removed.has(run.name));
+      const severity: Record<string, number> = {};
+      for (const run of remaining) {
+        for (const [key, count] of Object.entries(run.severity)) {
+          severity[key] = (severity[key] ?? 0) + count;
+        }
+      }
+      return {
+        ...current,
+        runs: remaining,
+        totals: { runs: remaining.length, live: remaining.filter((run) => run.live).length, severity },
+      };
+    });
+  };
+
   const handleDelete = async (name: string) => {
+    if (deleting || deleteCandidates) return;
     setDeleting(name);
     try {
       await del<OkResult>(`/api/runs/${encodeURIComponent(name)}`);
+      forgetDeleted([name]);
       setActionError(null);
       await load();
     } catch (e) {
@@ -356,6 +406,8 @@ export default function DashboardPage() {
   const typeOf = (r: RunSummary) => (r.scan_type || "").toLowerCase();
   const filtered = sorted.filter((r) => {
     if (typeFilter !== "all" && typeOf(r) !== typeFilter) return false;
+    if (projectFilter === "unassigned" && r.project_id) return false;
+    if (projectFilter !== "all" && projectFilter !== "unassigned" && r.project_id !== projectFilter) return false;
     if (!q) return true;
     return (
       runTargets(r).some((target) => target.toLowerCase().includes(q)) ||
@@ -373,10 +425,64 @@ export default function DashboardPage() {
   );
 
   const booting = data === null && !offline;
-  const filtersActive = q !== "" || typeFilter !== "all";
+  const filtersActive = q !== "" || typeFilter !== "all" || projectFilter !== "all";
   const clearFilters = () => {
     setSearch("");
     setTypeFilter("all");
+    setProjectFilter("all");
+  };
+
+  const projectOptions = React.useMemo(() => {
+    const names = new Map(projects.map((project) => [project.id, project.name]));
+    for (const run of runs) {
+      if (run.project_id && !names.has(run.project_id)) names.set(run.project_id, run.project_id);
+    }
+    return [
+      { value: "all", label: t("dashboard.projects.all") },
+      { value: "unassigned", label: t("dashboard.projects.unassigned") },
+      ...[...names].map(([value, label]) => ({ value, label })),
+    ];
+  }, [projects, runs, t]);
+
+  // Selection spans the current filtered result, including its other pages.
+  // Newly arrived rows are never selected automatically by a previous Select all.
+  const selectable = filtered.filter((run) => !run.live && run.cleanup?.status !== "in_progress");
+  const selectedRuns = selectable.filter((run) => selected.has(run.name));
+  const selectableKey = JSON.stringify(selectable.map((run) => run.name));
+  const allSelected = selectable.length > 0 && selectedRuns.length === selectable.length;
+  const selectionLocked = deleting !== null || deleteCandidates !== null;
+  React.useEffect(() => {
+    const eligible = new Set<string>(JSON.parse(selectableKey));
+    setSelected((current) => {
+      const next = new Set([...current].filter((name) => eligible.has(name)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableKey]);
+  React.useEffect(() => {
+    setSelected(new Set());
+  }, [q, typeFilter, projectFilter]);
+  React.useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = selectedRuns.length > 0 && !allSelected;
+    }
+  }, [selectedRuns.length, allSelected]);
+
+  const toggleSelected = (name: string) => {
+    if (selectionLocked) return;
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const finishBulkDelete = (result: RunDeletionResult) => {
+    forgetDeleted(result.deleted);
+    setSelected(new Set(result.failed.map((item) => item.name)));
+    setDeleteResult(result);
+    setDeleteCandidates(null);
+    void load();
   };
 
   /* ------------------------------------------------------------- pagination */
@@ -387,7 +493,7 @@ export default function DashboardPage() {
   const pageRows = filtered.slice(pageStart, pageEnd);
   React.useEffect(() => {
     setPageNum(0); /* any filter/size change rewinds to the first page */
-  }, [q, typeFilter, pageSize]);
+  }, [q, typeFilter, projectFilter, pageSize]);
 
   /* =================================================================== jsx */
 
@@ -597,6 +703,15 @@ export default function DashboardPage() {
             </button>
           ))}
 
+          <Select
+            className="ledger-project-filter"
+            value={projectFilter}
+            onValueChange={setProjectFilter}
+            options={projectOptions}
+            aria-label={t("dashboard.projects.filter")}
+            disabled={selectionLocked}
+          />
+
           <div className="ledger-toolbar-meta">
             {data && (
               <span className="ledger-count">
@@ -610,6 +725,72 @@ export default function DashboardPage() {
             />
           </div>
         </div>
+
+        {data && sorted.length > 0 && (
+          <div className="ledger-selection-toolbar">
+            <label className="ledger-select-all">
+              <input
+                ref={selectAllRef}
+                type="checkbox"
+                checked={allSelected}
+                disabled={selectionLocked || selectable.length === 0}
+                onChange={() => setSelected(allSelected ? new Set() : new Set(selectable.map((run) => run.name)))}
+              />
+              <span>{t("dashboard.selection.all", { n: selectable.length })}</span>
+            </label>
+            <span className="ledger-selection-hint">{t("dashboard.selection.hint")}</span>
+            <div className="ledger-selection-actions">
+              <span role="status">{t("dashboard.selection.count", { n: selectedRuns.length })}</span>
+              {selectedRuns.length > 0 && (
+                <button
+                  type="button"
+                  className="button-ghost button-compact"
+                  disabled={selectionLocked}
+                  onClick={() => setSelected(new Set())}
+                >
+                  {t("dashboard.selection.clear")}
+                </button>
+              )}
+              <button
+                type="button"
+                className="button-danger button-compact"
+                disabled={selectionLocked || selectedRuns.length === 0}
+                onClick={() => setDeleteCandidates([...selectedRuns])}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                {t("dashboard.selection.delete", { n: selectedRuns.length })}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {deleteResult && (
+          <div className={cn("ledger-bulk-result ledger-alert", deleteResult.failed.length > 0 ? "alert-warning" : "ledger-bulk-success")}>
+            <div className="min-w-0 flex-1">
+              <p role="status">
+                {t("dashboard.selection.result", { deleted: deleteResult.deleted.length, failed: deleteResult.failed.length })}
+              </p>
+              {deleteResult.failed.length > 0 && (
+                <details open>
+                  <summary>{t("dashboard.selection.failures")}</summary>
+                  <ul>
+                    {deleteResult.failed.map((item) => (
+                      <li key={item.name}><strong>{item.name}</strong> — {describeDeletionError(item.error, locale)}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+            <button
+              type="button"
+              className="button-ghost button-compact shrink-0 px-2"
+              aria-label={t("dashboard.selection.dismiss")}
+              onClick={() => setDeleteResult(null)}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
+        )}
 
         {offline && data && (
           <div className="alert-warning ledger-alert">
@@ -717,8 +898,17 @@ export default function DashboardPage() {
               return (
                 <article
                   key={run.name}
-                  className="run-ledger-row"
+                  className={cn("run-ledger-row run-ledger-selectable", selected.has(run.name) && "run-ledger-selected")}
                 >
+                  <label className="run-ledger-checkbox" title={run.live || run.cleanup?.status === "in_progress" ? t("dashboard.selection.protected") : t("dashboard.selection.select", { name: run.name })}>
+                    <input
+                      type="checkbox"
+                      aria-label={t("dashboard.selection.select", { name: run.name })}
+                      checked={selected.has(run.name) && !run.live && run.cleanup?.status !== "in_progress"}
+                      disabled={selectionLocked || run.live || run.cleanup?.status === "in_progress"}
+                      onChange={() => toggleSelected(run.name)}
+                    />
+                  </label>
                   <Link
                     href={`/run?name=${encodeURIComponent(run.name)}`}
                     className="run-ledger-main"
@@ -791,7 +981,7 @@ export default function DashboardPage() {
                     >
                       {t("dashboard.open")}
                     </Link>
-                    {run.live ? (
+                    {run.live || run.cleanup?.status === "in_progress" ? (
                       <button
                         type="button"
                         className="button-danger button-compact"
@@ -811,6 +1001,7 @@ export default function DashboardPage() {
                           label={t("common.delete")}
                           confirmLabel={t("common.confirmDelete")}
                           danger
+                          disabled={selectionLocked}
                           onConfirm={() => void handleDelete(run.name)}
                         />
                       </span>
@@ -863,6 +1054,13 @@ export default function DashboardPage() {
           </div>
         )}
       </Panel>
+      {deleteCandidates && (
+        <DeleteRunsDialog
+          runs={deleteCandidates}
+          onClose={() => setDeleteCandidates(null)}
+          onDeleted={finishBulkDelete}
+        />
+      )}
     </div>
   );
 }
