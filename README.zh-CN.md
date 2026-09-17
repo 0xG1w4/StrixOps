@@ -114,7 +114,7 @@ flowchart TD
 在已安装 Git、uv、Node.js/npm 和 Docker 的终端中执行：
 
 ```bash
-git clone --branch v1.0.0 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.0.0-release https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -136,7 +136,7 @@ uv run --no-dev strixops-console --runs-root "$PWD/strix_runs"
 
 请像示例一样使用**绝对运行目录路径**。控制台使用自身的工作目录启动引擎进程；相对运行路径在控制台和引擎中可能解析为不同位置，wheel 安装方式尤其需要注意。
 
-上面的克隆命令选择持续维护的 `v1.0.0` **分支**。如果要查看最初发布时的精确快照，请使用 `git switch --detach refs/tags/v1.0.0`。发布标签创建后，该分支仍可能接收文档更新。
+上面的克隆命令选择持续维护的 `v1.0.0-release` **分支**。如果要查看最初发布时的精确快照，请使用 `git switch --detach refs/tags/v1.0.0`。发布标签创建后，该分支仍可能接收文档更新。
 
 安装完成后，再次启动只需执行：
 

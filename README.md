@@ -127,7 +127,7 @@ with working Docker access and compatible workspace bind mounts.
 Run these commands in a shell with Git, uv, Node.js/npm, and Docker available:
 
 ```bash
-git clone --branch v1.0.0 https://github.com/0xG1w4/StrixOps.git
+git clone --branch v1.0.0-release https://github.com/0xG1w4/StrixOps.git
 cd StrixOps
 
 npm --prefix console/web ci
@@ -156,7 +156,7 @@ Use an **absolute runs path**, as shown above. The Console starts engine process
 with its own working directory; a relative runs path can resolve differently
 between the Console and engine, especially in a wheel installation.
 
-The clone command selects the maintained `v1.0.0` **branch**. To inspect the exact
+The clone command selects the maintained `v1.0.0-release` **branch**. To inspect the exact
 original release snapshot instead, use `git switch --detach refs/tags/v1.0.0`.
 The branch can receive documentation updates after the release tag.
 
