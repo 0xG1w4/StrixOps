@@ -14,6 +14,21 @@ import type { BatchCreated } from "@/lib/task-batches";
 
 export const API = "";
 
+export function configurationSaveError(error: unknown, english: boolean): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("409:")) {
+    try {
+      const payload = JSON.parse(message.slice(4));
+      if (payload?.detail === "Settings changed in another window. Reload before saving again.") {
+        return english
+          ? "Settings were updated in another tab. Reload before saving."
+          : "设置已在另一个标签页更新，请重新加载后再保存。";
+      }
+    } catch { /* Preserve unrelated or unreadable conflict diagnostics. */ }
+  }
+  return message;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(`${API}${path}`, { cache: "no-store", ...init });
   if (!res.ok) {
@@ -497,6 +512,7 @@ export type ModelReasoningEffort = "default" | "none" | "minimal" | "low" | "med
 /** GET /api/settings profile entry (API key always masked server-side). */
 export interface ModelProfile {
   id: string;
+  revision: number;
   name: string;
   route_type: "custom" | "openrouter";
   llm_api_base: string;
@@ -613,7 +629,7 @@ export async function createProfile(body: ProfileCreate): Promise<ModelProfile> 
   return res.profile;
 }
 
-export async function updateProfile(id: string, body: ProfileWrite): Promise<ModelProfile> {
+export async function updateProfile(id: string, body: ProfileWrite & { expected_revision: number }): Promise<ModelProfile> {
   const res = await request<ModelProfileWrapped>(
     `/api/settings/profiles/${encodeURIComponent(id)}`,
     {
@@ -696,6 +712,7 @@ export type ProjectScopeRule =
 /** GET /api/projects entry */
 export interface ProjectSummary {
   id: string;
+  revision: number;
   name: string;
   description: string;
   color: string;
@@ -815,7 +832,7 @@ export async function createProject(body: { name: string; description?: string; 
   return res.project;
 }
 
-export async function updateProject(id: string, body: { name?: string; description?: string; color?: string }): Promise<ProjectSummary> {
+export async function updateProject(id: string, body: { name?: string; description?: string; color?: string; expected_revision: number }): Promise<ProjectSummary> {
   const res = await request<{ ok: boolean; project: ProjectSummary }>(`/api/projects/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -842,7 +859,8 @@ export async function getProjectReport(id: string): Promise<{ markdown: string }
 
 export async function updateProjectScope(
   id: string,
-  scopeRules: ProjectScopeRule[]
+  scopeRules: ProjectScopeRule[],
+  expectedRevision: number,
 ): Promise<{ project: ProjectSummary; historical_out_of_scope: string[] }> {
   const res = await putJSON<{
     ok: boolean;
@@ -850,7 +868,7 @@ export async function updateProjectScope(
     historical_out_of_scope: string[];
   }>(
     `/api/projects/${encodeURIComponent(id)}/scope`,
-    { scope_rules: scopeRules }
+    { scope_rules: scopeRules, expected_revision: expectedRevision }
   );
   return {
     project: res.project,

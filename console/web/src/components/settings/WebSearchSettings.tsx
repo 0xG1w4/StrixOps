@@ -7,7 +7,7 @@ import * as React from "react";
 import { Check, Eye, EyeOff, Search, Radio } from "lucide-react";
 import { toast } from "sonner";
 import { Panel, Spinner } from "@/components/ui";
-import { apiURL, getJSON, putJSON } from "@/lib/api";
+import { apiURL, configurationSaveError, getJSON, putJSON } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import {
   searchCost,
@@ -36,7 +36,7 @@ export function WebSearchSettings() {
   const [timeout, setTimeoutValue] = React.useState("30");
   const [timeoutTouched, setTimeoutTouched] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
-  const [saveError, setSaveError] = React.useState(false);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
   const [visible, setVisible] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [testResult, setTestResult] = React.useState<WebSearchConnectionTest | null>(null);
@@ -88,7 +88,7 @@ export function WebSearchSettings() {
   const clearTest = () => {
     setTestResult(null);
     setTestError(null);
-    setSaveError(false);
+    setSaveError(null);
   };
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -97,6 +97,7 @@ export function WebSearchSettings() {
     clearTest();
     try {
       const res = await putJSON<WebSearchIntegrationSettings>(ENDPOINT, {
+        expected_revision: settings?.revision ?? 0,
         ...(input.trim() ? { perplexity_api_key: input.trim() } : {}),
         perplexity_enabled: enabled,
         perplexity_model: model,
@@ -107,8 +108,10 @@ export function WebSearchSettings() {
       setInput("");
       setVisible(false);
       toast.success(t("common.saved"));
-    } catch {
-      if (mounted.current) setSaveError(true);
+    } catch (error) {
+      if (mounted.current) setSaveError(error instanceof Error && error.message.startsWith("409:")
+        ? configurationSaveError(error, en)
+        : t("settings.integrations.saveError"));
     } finally {
       if (mounted.current) setSaving(false);
     }
@@ -310,7 +313,7 @@ export function WebSearchSettings() {
               </button>
             </div>
           )}
-          {saveError && <p className={styles.error} role="alert">{t("settings.integrations.saveError")}</p>}
+          {saveError && <p className={styles.error} role="alert">{saveError}</p>}
           <div className={styles.testArea}>
             <div className={styles.testAction}>
               <button

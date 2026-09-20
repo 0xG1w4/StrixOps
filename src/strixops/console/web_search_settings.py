@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from strixops.config.web_search import MODELS, SearchSettings, from_env
-from strixops.console import settings_store
+from strixops.console import json_store, settings_store
 
 TEST_QUERY = "What does the HTTP 404 status code mean? Cite an official HTTP specification."
 _CODES = {
@@ -64,8 +64,14 @@ def effective_settings(data: dict | None = None) -> tuple[SearchSettings, str]:
 
 
 def public_settings(data: dict | None = None) -> dict:
+    if data is None:
+        data = settings_store.load_settings()
     settings, source = effective_settings(data)
+    integrations = data.get("integrations")
     return {
+        "revision": (
+            json_store.revision(integrations.get("revision")) if isinstance(integrations, dict) else 0
+        ),
         "perplexity_api_key_set": bool(settings.api_key),
         "perplexity_api_key_masked": settings_store.mask_key(settings.api_key),
         "perplexity_enabled": settings.enabled,

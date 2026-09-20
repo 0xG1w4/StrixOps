@@ -14,16 +14,18 @@ value written back means "unchanged".
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import secrets
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from strixops.config.model_options import validate_model_options
+from strixops.console import json_store
 
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 SCHEMA_VERSION = 1
@@ -40,14 +42,7 @@ def config_path() -> Path:
     return Path.home() / ".strixops" / "console.json"
 
 
-def load_settings() -> dict[str, Any]:
-    path = config_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
+def _normalize_settings(data: dict[str, Any]) -> dict[str, Any]:
     profiles = data.get("profiles")
     if not isinstance(profiles, list):
         profiles = []
@@ -63,6 +58,7 @@ def load_settings() -> dict[str, Any]:
         "profiles": [p for p in profiles if isinstance(p, dict)],
         "integrations": {
             "perplexity_api_key": integrations.get("perplexity_api_key") or "",
+            "revision": json_store.revision(integrations.get("revision")),
             # Keep absence distinct from an explicit override: old files use
             # environment/default settings without a read-time migration write.
             **{
@@ -74,13 +70,25 @@ def load_settings() -> dict[str, Any]:
     }
 
 
+def load_settings() -> dict[str, Any]:
+    return _normalize_settings(json_store.read(config_path()))
+
+
+@contextmanager
+def settings_transaction() -> Iterator[dict[str, Any]]:
+    """Edit normalized settings under one read/modify/write transaction."""
+    with json_store.transaction(config_path()) as stored:
+        settings = _normalize_settings(stored)
+        yield settings
+        stored.clear()
+        stored.update(settings)
+
+
 def save_settings(settings: dict[str, Any]) -> None:
-    path = config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
+    """Compatibility replacement; mutations should use settings_transaction."""
+    with json_store.transaction(config_path()) as stored:
+        stored.clear()
+        stored.update(settings)
 
 
 def mask_key(key: str) -> str:
@@ -218,6 +226,7 @@ def sanitize_profile(
 
     profile = {
         "id": str(existing.get("id") or _new_id()),
+        "revision": json_store.revision(existing.get("revision")) + 1,
         "name": name,
         "route_type": route,
         "llm_api_base": base,
@@ -235,6 +244,7 @@ def sanitize_profile(
 def public_profile(profile: dict[str, Any]) -> dict[str, Any]:
     """API-safe view: masked key, everything else verbatim."""
     out = dict(profile)
+    out["revision"] = json_store.revision(profile.get("revision"))
     out.setdefault("model_report", "")
     for slot in ("web", "internal", "report"):
         out.setdefault(f"api_mode_{slot}", "auto" if slot == "report" else "chat_completions")

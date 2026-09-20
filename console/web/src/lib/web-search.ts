@@ -1,6 +1,7 @@
 export type PerplexityModel = "sonar" | "sonar-reasoning-pro";
 
 export interface WebSearchIntegrationSettings {
+  revision: number;
   perplexity_api_key_set: boolean;
   perplexity_api_key_masked: string;
   perplexity_enabled: boolean;

@@ -9,14 +9,15 @@ and the legacy cross-run report preview.
 
 from __future__ import annotations
 
-import json
 import os
 import secrets
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from strixops.console import parser, project_assignment, project_scope
+from strixops.console import json_store, parser, project_assignment, project_scope
 
 SCHEMA_VERSION = 2
 VALID_COLORS = {"gold", "cyan", "violet", "success", "danger", "neutral"}
@@ -32,14 +33,7 @@ def projects_path() -> Path:
     return Path.home() / ".strixops" / "projects.json"
 
 
-def load_projects() -> dict[str, Any]:
-    path = projects_path()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
+def _normalize_projects(data: dict[str, Any]) -> dict[str, Any]:
     projects = data.get("projects")
     if not isinstance(projects, list):
         projects = []
@@ -62,13 +56,25 @@ def load_projects() -> dict[str, Any]:
     }
 
 
+def load_projects() -> dict[str, Any]:
+    return _normalize_projects(json_store.read(projects_path()))
+
+
+@contextmanager
+def projects_transaction() -> Iterator[dict[str, Any]]:
+    """Edit normalized projects under one read/modify/write transaction."""
+    with json_store.transaction(projects_path()) as stored:
+        data = _normalize_projects(stored)
+        yield data
+        stored.clear()
+        stored.update(data)
+
+
 def save_projects(data: dict[str, Any]) -> None:
-    path = projects_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(path)
+    """Compatibility replacement; mutations should use projects_transaction."""
+    with json_store.transaction(projects_path()) as stored:
+        stored.clear()
+        stored.update(data)
 
 
 def sanitize_project(
@@ -124,6 +130,7 @@ def sanitize_project(
 
     project = {
         "id": str(existing.get("id") or f"prj_{secrets.token_hex(4)}"),
+        "revision": json_store.revision(existing.get("revision")) + 1,
         "name": name,
         "description": description,
         "color": color,
@@ -137,6 +144,7 @@ def sanitize_project(
 
 def public_project(project: dict[str, Any]) -> dict[str, Any]:
     public = {key: value for key, value in project.items() if not str(key).startswith("_")}
+    public["revision"] = json_store.revision(project.get("revision"))
     try:
         scope = project_scope.normalize_scope(project.get("scope"))
         scope_valid = True

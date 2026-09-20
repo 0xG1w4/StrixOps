@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  configurationSaveError,
   generateProjectReport,
   getProjectFindings,
   getProjectReports,
@@ -465,7 +466,7 @@ function ProjectWorkspace() {
       )}
       {tab === "tasks" && <TaskPanel key={project.id} projectId={project.id} runs={runs} copy={copy} locale={locale} title={copy.allTasks} />}
       {tab === "findings" && <FindingsPanel findings={findings} status={secondaryStatus.findings} copy={copy} />}
-      {tab === "scope" && <ScopeEditor project={project} copy={copy} onSaved={async () => { await load(); }} />}
+      {tab === "scope" && <ScopeEditor key={project.id} project={project} copy={copy} onSaved={async () => { await load(); }} />}
       </section>
 
       {openReport && <ProjectReportReader key={project.id} projectId={project.id} initialReport={openReport} versions={reports} onClose={() => setOpenReport(null)} />}
@@ -664,20 +665,16 @@ function FindingsPanel({ findings, status, copy }: { findings: ProjectFindings |
 }
 
 function ScopeEditor({ project, copy, onSaved }: { project: ProjectSummary; copy: Copy; onSaved: (project: ProjectSummary) => void | Promise<void> }) {
-  const storedRules = project.scope_rules ?? [{ kind: "any", value: "*" } as ProjectScopeRule];
+  const { locale } = useI18n();
+  // Keep the version paired with the rules this editing session started from.
+  const [baseline, setBaseline] = React.useState(project);
+  const storedRules = baseline.scope_rules ?? [{ kind: "any", value: "*" } as ProjectScopeRule];
   const initiallyRestricted = !storedRules.some((rule) => rule.kind === "any");
   const [restricted, setRestricted] = React.useState(initiallyRestricted);
   const [rules, setRules] = React.useState<ProjectScopeRule[]>(
     initiallyRestricted ? storedRules : [{ kind: "domain", value: "", include_subdomains: false }]
   );
   const [saving, setSaving] = React.useState(false);
-
-  React.useEffect(() => {
-    const next = project.scope_rules ?? [{ kind: "any", value: "*" } as ProjectScopeRule];
-    const isRestricted = !next.some((rule) => rule.kind === "any");
-    setRestricted(isRestricted);
-    setRules(isRestricted ? next : [{ kind: "domain", value: "", include_subdomains: false }]);
-  }, [project.id, project.scope_revision, project.scope_rules]);
 
   const updateRule = (index: number, patch: Partial<ProjectScopeRule>) => {
     setRules((current) => current.map((rule, position) => position === index ? ({ ...rule, ...patch } as ProjectScopeRule) : rule));
@@ -695,7 +692,8 @@ function ScopeEditor({ project, copy, onSaved }: { project: ProjectSummary; copy
       const nextRules: ProjectScopeRule[] = restricted
         ? rules.map((rule) => ({ ...rule, value: rule.value.trim() }) as ProjectScopeRule)
         : [{ kind: "any", value: "*" as const }];
-      const result = await updateProjectScope(project.id, nextRules);
+      const result = await updateProjectScope(baseline.id, nextRules, baseline.revision ?? 0);
+      setBaseline(result.project);
       await onSaved(result.project);
       toast.success(copy.saveScope, {
         description: result.historical_out_of_scope.length
@@ -703,7 +701,7 @@ function ScopeEditor({ project, copy, onSaved }: { project: ProjectSummary; copy
           : undefined,
       });
     } catch (error) {
-      toast.error(copy.saveScope, { description: String(error) });
+      toast.error(copy.saveScope, { description: configurationSaveError(error, locale === "en") });
     } finally {
       setSaving(false);
     }
@@ -743,7 +741,7 @@ function ScopeEditor({ project, copy, onSaved }: { project: ProjectSummary; copy
             <button type="button" className="button-secondary button-compact justify-self-start" onClick={addRule}><Plus className="h-3.5 w-3.5" /> {copy.addRule}</button>
           </div>}
           <div className={styles.scopeFooter}>
-            <span className={styles.scopeRevision}>{copy.revision} · {String(project.scope_revision ?? 1).padStart(2, "0")}</span>
+            <span className={styles.scopeRevision}>{copy.revision} · {String(baseline.scope_revision ?? 1).padStart(2, "0")}</span>
             <button type="button" className="button-primary" disabled={!valid || saving} onClick={() => void save()}>{saving ? <Spinner /> : <Check className="h-4 w-4" />}{saving ? copy.saving : copy.saveScope}</button>
           </div>
           {!valid && <p className="mt-3 text-xs text-danger">{copy.ruleRequired}</p>}

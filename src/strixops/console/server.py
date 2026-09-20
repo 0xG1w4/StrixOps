@@ -70,6 +70,7 @@ from strixops.console import (
 from strixops.console.auth import AuthMiddleware, static_csp
 from strixops.console.auth import router as auth_router
 from strixops.console.batch_launch import ConsoleBatchController
+from strixops.console.json_store import StoreError, revision
 from strixops.engine.targets import MAX_TARGETS, normalize_targets
 from strixops.platform import hint_store
 from strixops.platform.runname import generate_run_name
@@ -117,6 +118,18 @@ app = FastAPI(title="StrixOps Console", version=__version__, docs_url=None, redo
 app.add_middleware(AuthMiddleware)
 app.include_router(auth_router)
 app.include_router(prompt_probe.router)
+
+
+@app.exception_handler(StoreError)
+async def unavailable_settings_store(request: Request, exc: StoreError) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Saved settings are unavailable. Existing data has been preserved.",
+            "error_code": "storage_unavailable",
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 # Independent traffic tasks share only the Console HTTP surface, not scan execution.
 from strixops.traffic.mcp_server import install as install_mcp_tasks  # noqa: E402
@@ -1227,6 +1240,7 @@ def delete_run(name: str) -> dict:
 
 
 class ProfileBody(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
     name: str = ""
     route_type: str = "custom"
     llm_api_base: str = ""
@@ -1298,62 +1312,74 @@ def _find_profile(data: dict, profile_id: str) -> dict | None:
     return None
 
 
+def _check_settings_revision(expected: int | None, record: dict) -> None:
+    """Reject stale editor snapshots while retaining legacy partial-write clients."""
+    current = revision(record.get("revision"))
+    if expected is not None and expected != current:
+        raise HTTPException(
+            status_code=409,
+            detail="Settings changed in another window. Reload before saving again.",
+            headers={"Cache-Control": "no-store"},
+        )
+
+
 @app.post("/api/settings/profiles")
 def create_profile(body: ProfileBody) -> dict:
-    data = settings_store.load_settings()
-    copy_source = None
-    if body.copy_from_profile_id:
-        copy_source = _find_profile(data, body.copy_from_profile_id)
-        if copy_source is None:
-            raise HTTPException(status_code=404, detail="unknown source profile")
-    profile, errors = settings_store.sanitize_profile(
-        body.model_dump(exclude_unset=True), copy_source=copy_source
-    )
-    if errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
-    data["profiles"].append(profile)
-    if data["active_profile_id"] is None:
-        data["active_profile_id"] = profile["id"]  # first profile auto-activates
-    settings_store.save_settings(data)
+    with settings_store.settings_transaction() as data:
+        copy_source = None
+        if body.copy_from_profile_id:
+            copy_source = _find_profile(data, body.copy_from_profile_id)
+            if copy_source is None:
+                raise HTTPException(status_code=404, detail="unknown source profile")
+        profile, errors = settings_store.sanitize_profile(
+            body.model_dump(exclude_unset=True), copy_source=copy_source
+        )
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        data["profiles"].append(profile)
+        if data["active_profile_id"] is None:
+            data["active_profile_id"] = profile["id"]  # first profile auto-activates
     return {"ok": True, "profile": settings_store.public_profile(profile)}
 
 
 @app.patch("/api/settings/profiles/{profile_id}")
 def update_profile(profile_id: str, body: ProfileBody) -> dict:
-    data = settings_store.load_settings()
-    existing = _find_profile(data, profile_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="unknown profile")
-    if body.copy_from_profile_id:
-        raise HTTPException(status_code=400, detail="copy_from_profile_id is only valid for a new profile")
-    profile, errors = settings_store.sanitize_profile(body.model_dump(exclude_unset=True), existing=existing)
-    if errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
-    data["profiles"] = [profile if p.get("id") == profile_id else p for p in data["profiles"]]
-    settings_store.save_settings(data)
+    with settings_store.settings_transaction() as data:
+        existing = _find_profile(data, profile_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="unknown profile")
+        _check_settings_revision(body.expected_revision, existing)
+        if body.copy_from_profile_id:
+            raise HTTPException(
+                status_code=400, detail="copy_from_profile_id is only valid for a new profile",
+            )
+        profile, errors = settings_store.sanitize_profile(
+            body.model_dump(exclude_unset=True), existing=existing,
+        )
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        data["profiles"] = [profile if p.get("id") == profile_id else p for p in data["profiles"]]
     return {"ok": True, "profile": settings_store.public_profile(profile)}
 
 
 @app.delete("/api/settings/profiles/{profile_id}")
 def delete_profile(profile_id: str) -> dict:
-    data = settings_store.load_settings()
-    if _find_profile(data, profile_id) is None:
-        raise HTTPException(status_code=404, detail="unknown profile")
-    data["profiles"] = [p for p in data["profiles"] if p.get("id") != profile_id]
-    if data["active_profile_id"] == profile_id:
-        data["active_profile_id"] = data["profiles"][0]["id"] if data["profiles"] else None
-    settings_store.save_settings(data)
+    with settings_store.settings_transaction() as data:
+        if _find_profile(data, profile_id) is None:
+            raise HTTPException(status_code=404, detail="unknown profile")
+        data["profiles"] = [p for p in data["profiles"] if p.get("id") != profile_id]
+        if data["active_profile_id"] == profile_id:
+            data["active_profile_id"] = data["profiles"][0]["id"] if data["profiles"] else None
     return {"ok": True}
 
 
 @app.post("/api/settings/activate")
 def activate_profile(body: dict) -> dict:
     profile_id = str((body or {}).get("profile_id") or "")
-    data = settings_store.load_settings()
-    if _find_profile(data, profile_id) is None:
-        raise HTTPException(status_code=404, detail="unknown profile")
-    data["active_profile_id"] = profile_id
-    settings_store.save_settings(data)
+    with settings_store.settings_transaction() as data:
+        if _find_profile(data, profile_id) is None:
+            raise HTTPException(status_code=404, detail="unknown profile")
+        data["active_profile_id"] = profile_id
     return {"ok": True, "active_profile_id": profile_id}
 
 
@@ -1396,6 +1422,7 @@ async def safe_integration_validation(request: Request, exc: RequestValidationEr
 
 
 class IntegrationBody(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
     # Validate key values in the endpoint so validation responses never echo
     # submitted credentials, including malformed ones.
     perplexity_api_key: Any = None
@@ -1418,24 +1445,25 @@ def get_integrations(response: Response) -> dict:
 
 @app.put("/api/settings/integrations")
 def set_integrations(body: IntegrationBody, response: Response) -> dict:
-    data = settings_store.load_settings()
-    integrations = data.setdefault("integrations", {})
-    raw_key = body.perplexity_api_key
-    if raw_key is not None:
-        if not isinstance(raw_key, str) or len(raw_key) > 8192:
-            raise HTTPException(status_code=422, detail="invalid Perplexity API key")
-        new_key = raw_key.strip()
-        if any(ord(char) < 32 or ord(char) == 127 for char in new_key):
-            raise HTTPException(status_code=422, detail="invalid Perplexity API key")
-        # Blank/masked keeps the stored key; an environment key is never copied
-        # into the settings file as a side effect of changing another setting.
-        if new_key and not settings_store.is_masked(new_key):
-            integrations["perplexity_api_key"] = new_key
-    for field in ("perplexity_enabled", "perplexity_model", "perplexity_timeout_seconds"):
-        value = getattr(body, field)
-        if value is not None:
-            integrations[field] = value
-    settings_store.save_settings(data)
+    with settings_store.settings_transaction() as data:
+        integrations = data.setdefault("integrations", {})
+        _check_settings_revision(body.expected_revision, integrations)
+        raw_key = body.perplexity_api_key
+        if raw_key is not None:
+            if not isinstance(raw_key, str) or len(raw_key) > 8192:
+                raise HTTPException(status_code=422, detail="invalid Perplexity API key")
+            new_key = raw_key.strip()
+            if any(ord(char) < 32 or ord(char) == 127 for char in new_key):
+                raise HTTPException(status_code=422, detail="invalid Perplexity API key")
+            # Blank/masked keeps the stored key; an environment key is never copied
+            # into the settings file as a side effect of changing another setting.
+            if new_key and not settings_store.is_masked(new_key):
+                integrations["perplexity_api_key"] = new_key
+        for field in ("perplexity_enabled", "perplexity_model", "perplexity_timeout_seconds"):
+            value = getattr(body, field)
+            if value is not None:
+                integrations[field] = value
+        integrations["revision"] = revision(integrations.get("revision")) + 1
     response.headers["Cache-Control"] = "no-store"
     return {"ok": True, **web_search_settings.public_settings(data)}
 
@@ -2001,6 +2029,7 @@ def update_scan_queue_settings(body: QueueSettingsBody, request: Request) -> dic
 
 
 class ProjectBody(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
     name: str = ""
     description: str = ""
     color: str = "gold"
@@ -2008,6 +2037,7 @@ class ProjectBody(BaseModel):
 
 
 class ProjectScopeBody(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
     scope_rules: list[dict[str, Any]]
 
 
@@ -2027,37 +2057,37 @@ def list_projects() -> dict:
 
 @app.post("/api/projects")
 def create_project(body: ProjectBody) -> dict:
-    data = projects_store.load_projects()
-    project, errors = projects_store.sanitize_project(body.model_dump(exclude_none=True))
-    if errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
-    data["projects"].append(project)
-    projects_store.save_projects(data)
+    with projects_store.projects_transaction() as data:
+        project, errors = projects_store.sanitize_project(body.model_dump(exclude_none=True))
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        data["projects"].append(project)
     return {"ok": True, "project": projects_store.public_project(project)}
 
 
 @app.patch("/api/projects/{project_id}")
 def update_project(project_id: str, body: ProjectBody) -> dict:
-    data = projects_store.load_projects()
-    existing = projects_store.find_project(data, project_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="unknown project")
-    project, errors = projects_store.sanitize_project(body.model_dump(exclude_none=True), existing=existing)
-    if errors:
-        raise HTTPException(status_code=400, detail="; ".join(errors))
-    data["projects"] = [project if p.get("id") == project_id else p for p in data["projects"]]
-    projects_store.save_projects(data)
+    with projects_store.projects_transaction() as data:
+        existing = projects_store.find_project(data, project_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="unknown project")
+        _check_settings_revision(body.expected_revision, existing)
+        project, errors = projects_store.sanitize_project(
+            body.model_dump(exclude_none=True, exclude_unset=True), existing=existing,
+        )
+        if errors:
+            raise HTTPException(status_code=400, detail="; ".join(errors))
+        data["projects"] = [project if p.get("id") == project_id else p for p in data["projects"]]
     return {"ok": True, "project": projects_store.public_project(project)}
 
 
 @app.delete("/api/projects/{project_id}")
 def delete_project(project_id: str) -> dict:
-    data = projects_store.load_projects()
-    if projects_store.find_project(data, project_id) is None:
-        raise HTTPException(status_code=404, detail="unknown project")
-    assigned_runs = projects_store.project_runs(project_id)
-    data["projects"] = [p for p in data["projects"] if p.get("id") != project_id]
-    projects_store.save_projects(data)
+    with projects_store.projects_transaction() as data:
+        if projects_store.find_project(data, project_id) is None:
+            raise HTTPException(status_code=404, detail="unknown project")
+        assigned_runs = projects_store.project_runs(project_id)
+        data["projects"] = [p for p in data["projects"] if p.get("id") != project_id]
     cleared = 0
     for run_dir in assigned_runs:
         try:
@@ -2096,52 +2126,56 @@ def validate_project_target(project_id: str, body: ProjectTargetBody) -> dict:
 
 @app.put("/api/projects/{project_id}/scope")
 def update_project_scope(project_id: str, body: ProjectScopeBody) -> dict:
-    data = projects_store.load_projects()
-    project = projects_store.find_project(data, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="unknown project")
+    with projects_store.projects_transaction() as data:
+        project = projects_store.find_project(data, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="unknown project")
+        _check_settings_revision(body.expected_revision, project)
 
-    mode = "unrestricted" if projects_store._is_any_rules(body.scope_rules) else "restricted"
-    raw_scope = {"schema_version": 1, "mode": mode, "entries": body.scope_rules}
-    try:
-        normalized = project_scope.normalize_scope(raw_scope)
-    except project_scope.ScopeValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    active_conflicts: list[str] = []
-    historical_conflicts: list[str] = []
-    for run_dir in projects_store.project_runs(project_id):
-        summary = _run_summary(run_dir, cache=False)
+        mode = "unrestricted" if projects_store._is_any_rules(body.scope_rules) else "restricted"
+        raw_scope = {"schema_version": 1, "mode": mode, "entries": body.scope_rules}
         try:
-            _assert_run_scope(normalized, summary)
-            allowed = True
-        except (project_scope.ScopeError, ValueError):
-            allowed = False
-        if allowed:
-            continue
-        if summary.get("live"):
-            active_conflicts.append(run_dir.name)
-        else:
-            historical_conflicts.append(run_dir.name)
+            normalized = project_scope.normalize_scope(raw_scope)
+        except project_scope.ScopeValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    if active_conflicts:
-        names = ", ".join(active_conflicts[:5])
-        suffix = "…" if len(active_conflicts) > 5 else ""
-        raise HTTPException(
-            status_code=409,
-            detail=f"scope excludes active tasks: {names}{suffix}",
-        )
+        active_conflicts: list[str] = []
+        historical_conflicts: list[str] = []
+        for run_dir in projects_store.project_runs(project_id):
+            summary = _run_summary(run_dir, cache=False)
+            try:
+                _assert_run_scope(normalized, summary)
+                allowed = True
+            except (project_scope.ScopeError, ValueError):
+                allowed = False
+            if allowed:
+                continue
+            if summary.get("live"):
+                active_conflicts.append(run_dir.name)
+            else:
+                historical_conflicts.append(run_dir.name)
 
-    previous = projects_store.scope_for_project(project)
-    if previous != normalized:
-        project["scope_revision"] = int(project.get("scope_revision") or 1) + 1
-    project["scope"] = normalized
-    project["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    projects_store.save_projects(data)
+        if active_conflicts:
+            names = ", ".join(active_conflicts[:5])
+            suffix = "…" if len(active_conflicts) > 5 else ""
+            raise HTTPException(
+                status_code=409,
+                detail=f"scope excludes active tasks: {names}{suffix}",
+            )
+
+        previous = projects_store.scope_for_project(project)
+        if previous != normalized:
+            project["scope_revision"] = int(project.get("scope_revision") or 1) + 1
+        project["scope"] = normalized
+        project["revision"] = revision(project.get("revision")) + 1
+        project["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     summary = next(
         (item for item in projects_store.project_summaries()["projects"] if item.get("id") == project_id),
         projects_store.public_project(project),
     )
+    # Aggregate statistics may observe a later edit. Return this commit's fields
+    # and revision together so the editor never pairs old rules with a new token.
+    summary.update(projects_store.public_project(project))
     return {
         "ok": True,
         "project": summary,

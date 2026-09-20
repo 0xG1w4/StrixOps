@@ -6,6 +6,7 @@ import { Check, Copy, KeyRound, Languages, Moon, Pencil, Plus, Sun, Zap } from "
 import {
   activateProfile,
   createProfile,
+  configurationSaveError,
   deleteProfile,
   getJSON,
   getSettings,
@@ -116,7 +117,7 @@ const EMPTY_DRAFT: Draft = {
 
 function profileDraft(profile: ModelProfile): Partial<Draft> {
   return {
-    id: profile.id, name: profile.name, route_type: profile.route_type,
+    id: profile.id, revision: profile.revision ?? 0, name: profile.name, route_type: profile.route_type,
     llm_api_base: profile.llm_api_base, llm_api_key: profile.llm_api_key,
     keyVisible: false, saved_key_available: profile.llm_api_key_set,
     model_web: profile.model_web, model_internal: profile.model_internal,
@@ -257,7 +258,7 @@ export default function SettingsPage() {
     };
     try {
       if (draft.id) {
-        await updateProfile(draft.id, body);
+        await updateProfile(draft.id, { ...body, expected_revision: draft.revision ?? 0 });
         flash(t("settings.notice.updated", { name: body.name }));
       } else {
         const created = await createProfile({ ...body, copy_from_profile_id: draft.copy_from_profile_id });
@@ -271,7 +272,7 @@ export default function SettingsPage() {
       setDraft(null);
       await reload();
     } catch (e) {
-      setDraftErrors([e instanceof Error ? e.message : String(e)]);
+      setDraftErrors([configurationSaveError(e, locale === "en")]);
     } finally {
       setSaving(false);
     }

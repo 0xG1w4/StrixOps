@@ -2,10 +2,13 @@
 
 ## 1.3.5 stable baseline — 2026-09-17
 
+- Serialize Console settings and project updates across threads and processes,
+  publish private JSON files atomically, and preserve unreadable or invalid
+  existing stores. Editors now reject stale revisions while retaining drafts.
 - Maintain the stable application baseline at `85d980b` on
   [`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), with
   version metadata and documentation updates. Scan engine, prompts and skills
-  retain that baseline; the Console includes the limited `93f503f` backport below.
+  retain that baseline; the Console includes the targeted fixes listed below.
   Version remains 1.3.5. The `v1.3.5` tag is a fixed historical snapshot from before
   the backport; pull `v1.3.5-release` to obtain it. `main` and `v1.4.0-dev` are
   development versions.

@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowRight, Check, FolderKanban, Pencil, Plus, RotateCw, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { createProject, deleteProject, getProjects, updateProject, type ProjectSummary } from "@/lib/api";
+import { configurationSaveError, createProject, deleteProject, getProjects, updateProject, type ProjectSummary } from "@/lib/api";
 import { EmptyState, Panel, Spinner } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -333,8 +333,9 @@ function ProjectModal({ mode, project, onClose, onSaved }: {
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const isEdit = mode === "edit";
+  const [revision] = React.useState(project?.revision ?? 0);
   const [name, setName] = React.useState(project?.name ?? "");
   const [description, setDescription] = React.useState(project?.description ?? "");
   const [color, setColor] = React.useState(project?.color ?? "gold");
@@ -355,14 +356,14 @@ function ProjectModal({ mode, project, onClose, onSaved }: {
     setError("");
     try {
       if (isEdit && project) {
-        await updateProject(project.id, { name: name.trim(), description: description.trim(), color });
+        await updateProject(project.id, { name: name.trim(), description: description.trim(), color, expected_revision: revision });
       } else {
         await createProject({ name: name.trim(), description: description.trim(), color });
       }
       toast.success(t("common.saved"));
       onSaved();
     } catch (caught) {
-      setError(String(caught));
+      setError(configurationSaveError(caught, locale === "en"));
     } finally {
       setBusy(false);
     }

@@ -82,7 +82,8 @@ GEMINI.md
 /design/
 
 # Local validation code, fixtures, and verification records
-/tests/
+/tests/*
+!/tests/regression/
 /src/strixops/testing/
 /docs/*-validation.md
 

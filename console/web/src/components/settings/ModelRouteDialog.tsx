@@ -12,6 +12,7 @@ import styles from "./ModelRouteDialog.module.css";
 export const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 export type RouteType = "custom" | "openrouter";
 export interface ModelRouteDraft {
+  revision?: number;
   id: string | null;
   copy_from_profile_id?: string;
   name: string;
