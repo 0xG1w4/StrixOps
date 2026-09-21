@@ -28,6 +28,15 @@ const DOM_WINDOW = 600;
 const POLL_INTERVAL_MS = 5000;
 const HINTS_POLL_MS = 4000;
 
+function compactContextCapacity(tokens: number): string {
+  // Preserve familiar 128K/256K/1M labels for binary windows as well as
+  // decimal provider limits. Percentages always use the original value.
+  const unit = tokens % 1000 === 0 ? 1000 : tokens % 1024 === 0 ? 1024 : 1000;
+  const divisor = tokens >= unit * unit ? unit * unit : tokens >= unit ? unit : 1;
+  const suffix = divisor === unit * unit ? "M" : divisor === unit ? "K" : "";
+  return `${new Intl.NumberFormat("en", { maximumFractionDigits: 1, useGrouping: false }).format(tokens / divisor)}${suffix}`;
+}
+
 const TERMINAL_STATUSES = new Set([
   "completed",
   "failed",
@@ -940,18 +949,22 @@ export default function ConversationView({
   const contextUsage = run?.agent_context?.[contextAgentId];
   const contextCapacity = run?.model_context;
   const contextName = run?.agents?.[contextAgentId]?.name || contextUsage?.agent_name || contextAgentId;
-  const contextPercent = contextUsage && contextCapacity && contextUsage.model
-    && contextUsage.model === contextCapacity.model
-    && Number.isFinite(contextUsage.input_tokens) && contextUsage.input_tokens >= 0
+  const contextInput = contextUsage && Number.isFinite(contextUsage.input_tokens) && contextUsage.input_tokens >= 0
+    ? contextUsage.input_tokens : null;
+  const contextLimit = contextCapacity && (!contextUsage || contextUsage.model === contextCapacity.model)
     && Number.isFinite(contextCapacity.capacity_tokens) && contextCapacity.capacity_tokens > 0
-    ? contextUsage.input_tokens / contextCapacity.capacity_tokens * 100 : null;
+    ? contextCapacity.capacity_tokens : null;
+  const contextPercent = contextInput !== null && contextLimit !== null ? contextInput / contextLimit * 100 : null;
+  const contextTokens = `${contextInput ?? "—"} / ${contextLimit === null ? "—" : compactContextCapacity(contextLimit)}`;
   const contextReference = contextCapacity?.capacity_source === "model_catalog"
     || contextCapacity?.capacity_source === "configured_fallback";
   const contextApproximate = contextUsage?.source === "estimate" || contextReference;
   const contextPercentage = contextPercent === null ? "—"
     : `${contextApproximate ? "≈" : ""}${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(contextPercent)}%`;
   const contextTitle = contextPercent === null
-    ? t("conversation.context.unknown", { name: contextName })
+    ? contextInput === null
+      ? t("conversation.context.unknown", { name: contextName })
+      : t("conversation.context.capacityUnknown", { name: contextName, used: contextInput })
     : t("conversation.context.hint", {
         name: contextName, percent: contextPercentage,
         used: new Intl.NumberFormat(locale).format(contextUsage!.input_tokens),
@@ -1193,9 +1206,9 @@ export default function ConversationView({
                 })
               : t("conversation.footer.recorded", { n: filtered.length })}
         </span>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           {filtered.length > DOM_WINDOW && (
-            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-fg-faint">
+            <span className="hidden font-mono text-[10px] uppercase tracking-[0.14em] text-fg-faint sm:inline">
               {t("conversation.footer.window", { n: visible.length })}
             </span>
           )}
@@ -1204,9 +1217,26 @@ export default function ConversationView({
             title={contextTitle}
             aria-label={contextTitle}
             aria-live="off"
-            className={`whitespace-nowrap font-mono tabular-nums ${contextPercent !== null && contextPercent > 100 ? "text-danger" : "text-fg-muted"}`}
+            className={`flex items-center gap-2 whitespace-nowrap font-mono text-[10px] tabular-nums sm:text-[11px] ${contextPercent !== null && contextPercent > 100 ? "text-danger" : "text-fg-muted"}`}
           >
-            {contextPercentage}
+            <span data-context-tokens>{contextTokens}</span>
+            {contextPercent !== null && (
+              <span
+                role="progressbar"
+                aria-label={contextTitle}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.min(100, contextPercent)}
+                aria-valuetext={`${contextTokens} · ${contextPercentage}`}
+                className="h-1 w-8 overflow-hidden rounded-full bg-line/15 sm:w-12"
+              >
+                <span
+                  className={`block h-full rounded-full transition-[width] duration-200 ${contextPercent > 100 ? "bg-danger" : "bg-accent"}`}
+                  style={{ width: `${Math.min(100, contextPercent)}%` }}
+                />
+              </span>
+            )}
+            <span data-context-percent>{contextPercentage}</span>
           </output>
         </div>
       </div>

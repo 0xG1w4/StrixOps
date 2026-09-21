@@ -7,9 +7,10 @@
   Root, children and conversation summaries share the run's resolved budget.
   When metadata is missing, run one bounded startup probe sequence; keep accepted
   input sizes separate from a maximum explicitly reported by the provider.
-  Show a compact context percentage in the conversation footer, following the
-  selected agent (root in the combined view). Estimate before sending and prefer
-  provider input usage on completion; cumulative billing tokens remain separate.
+  Show input/capacity tokens, a small progress bar and context percentage in the
+  conversation footer, following the selected agent (root in the combined view).
+  Estimate before sending and prefer provider input usage on completion;
+  cumulative billing tokens remain separate.
 - Serialize Console settings and project updates across threads and processes,
   publish private JSON files atomically, and preserve unreadable or invalid
   existing stores. Editors now reject stale revisions while retaining drafts.
