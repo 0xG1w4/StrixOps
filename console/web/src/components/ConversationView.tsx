@@ -933,6 +933,34 @@ export default function ConversationView({
     [run]
   );
   const filterEntry = agentFilter && run?.agents ? run.agents[agentFilter] : undefined;
+  // The combined transcript follows root's context; an explicit selection
+  // always uses that agent's own measurement, including an unknown one.
+  const rootId = run?.agents?.root ? "root" : agents.find(([, agent]) => agent.parent_id === null)?.[0] ?? "root";
+  const contextAgentId = agentFilter || rootId;
+  const contextUsage = run?.agent_context?.[contextAgentId];
+  const contextCapacity = run?.model_context;
+  const contextName = run?.agents?.[contextAgentId]?.name || contextUsage?.agent_name || contextAgentId;
+  const contextPercent = contextUsage && contextCapacity && contextUsage.model
+    && contextUsage.model === contextCapacity.model
+    && Number.isFinite(contextUsage.input_tokens) && contextUsage.input_tokens >= 0
+    && Number.isFinite(contextCapacity.capacity_tokens) && contextCapacity.capacity_tokens > 0
+    ? contextUsage.input_tokens / contextCapacity.capacity_tokens * 100 : null;
+  const contextReference = contextCapacity?.capacity_source === "model_catalog"
+    || contextCapacity?.capacity_source === "configured_fallback";
+  const contextApproximate = contextUsage?.source === "estimate" || contextReference;
+  const contextPercentage = contextPercent === null ? "—"
+    : `${contextApproximate ? "≈" : ""}${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(contextPercent)}%`;
+  const contextTitle = contextPercent === null
+    ? t("conversation.context.unknown", { name: contextName })
+    : t("conversation.context.hint", {
+        name: contextName, percent: contextPercentage,
+        used: new Intl.NumberFormat(locale).format(contextUsage!.input_tokens),
+        capacity: new Intl.NumberFormat(locale).format(contextCapacity!.capacity_tokens),
+        source: [
+          t(contextUsage?.source === "estimate" ? "conversation.context.estimate" : "conversation.context.reported"),
+          contextReference ? t("conversation.context.reference") : "",
+        ].filter(Boolean).join(" · "),
+      });
   const hintMessages = React.useMemo<Message[]>(
     () =>
       hints.map((hint) => ({
@@ -1150,8 +1178,8 @@ export default function ConversationView({
       </div>
 
       {/* footer strip */}
-      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-t border-line/6 bg-surface/96 px-4 py-2 text-[11px] text-fg-muted">
-        <span className="truncate">
+      <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-line/6 bg-surface/96 px-4 py-2 text-[11px] text-fg-muted">
+        <span className="min-w-0 flex-1 truncate">
           {closedStatus
             ? t("conversation.footer.closed", {
                 status: statusLabel(closedStatus),
@@ -1165,11 +1193,22 @@ export default function ConversationView({
                 })
               : t("conversation.footer.recorded", { n: filtered.length })}
         </span>
-        {filtered.length > DOM_WINDOW && (
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-fg-faint">
-            {t("conversation.footer.window", { n: visible.length })}
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-3">
+          {filtered.length > DOM_WINDOW && (
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-fg-faint">
+              {t("conversation.footer.window", { n: visible.length })}
+            </span>
+          )}
+          <output
+            data-context-agent={contextAgentId}
+            title={contextTitle}
+            aria-label={contextTitle}
+            aria-live="off"
+            className={`whitespace-nowrap font-mono tabular-nums ${contextPercent !== null && contextPercent > 100 ? "text-danger" : "text-fg-muted"}`}
+          >
+            {contextPercentage}
+          </output>
+        </div>
       </div>
       <HintComposer name={name} run={run} selectedAgentId={agentFilter} focusVersion={focusVersion} />
         </div>
