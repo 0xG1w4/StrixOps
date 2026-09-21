@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from agents.memory import Session
 
     from strixops.config.context import ContextSettings
+    from strixops.engine.model_capacity import ModelCapacity
 
 SCAN_WEB = "web"
 SCAN_INTERNAL = "internal"
@@ -197,6 +198,7 @@ class EngineServices:
     session_for: Callable[[str], Session] | None = None
     context_settings: ContextSettings | None = None
     web_search_state: object | None = None  # shared optional-search circuit and usage diagnostics
+    model_capacity: ModelCapacity | None = None
 
 
 @dataclass(frozen=True)

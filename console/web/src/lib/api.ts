@@ -151,6 +151,35 @@ export interface RunSummary {
   crypto?: boolean;
   /** Model id the run used (engine scan_config or console launch sidecar). */
   model?: string;
+  /** Capacity resolved at task startup; not the agent's current context usage. */
+  model_context?: {
+    model: string;
+    capacity_tokens: number;
+    output_limit_tokens: number;
+    capacity_source: "provider_metadata" | "model_catalog" | "configured_fallback" | "provider_error";
+    output_source: "provider_metadata" | "model_catalog" | "configured_fallback" | "provider_error";
+    lookup_status: string;
+    compact_trigger_tokens: number;
+    auto_compact: boolean;
+    resolved_at: string;
+    probe?: {
+      status: "skipped_metadata" | "disabled" | "completed" | "limit_reported" | "budget_exhausted" | "timeout" | "failed" | "unverified";
+      requests: number;
+      largest_accepted_input_tokens: number | null;
+      smallest_rejected_input_tokens: number | null;
+      output_budget_tokens: number;
+      planned_input_tokens: number;
+    };
+  };
+  /** Per-agent input for its current/latest request, never accumulated across requests. */
+  agent_context?: Record<string, {
+    agent_name: string;
+    model: string;
+    input_tokens: number;
+    source: "estimate" | "provider_usage";
+    phase: "request" | "response";
+    updated_at: string;
+  }>;
   /** Execution mode; undefined when unrecorded (runs older than the field). */
   dry_run?: boolean;
   /** Run-level token accounting (present once the first model turn lands). */

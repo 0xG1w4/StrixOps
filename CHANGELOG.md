@@ -2,13 +2,21 @@
 
 ## 1.3.5 stable baseline — 2026-09-17
 
+- Resolve the selected scan model's context capacity at task startup from its
+  API model metadata, then the bundled catalog or an explicitly labeled fallback.
+  Root, children and conversation summaries share the run's resolved budget.
+  When metadata is missing, run one bounded startup probe sequence; keep accepted
+  input sizes separate from a maximum explicitly reported by the provider.
+  Show capacity, source, compaction threshold and each agent's latest request
+  context in task details. Estimate before sending and prefer provider input
+  usage on completion; cumulative billing tokens remain separate.
 - Serialize Console settings and project updates across threads and processes,
   publish private JSON files atomically, and preserve unreadable or invalid
   existing stores. Editors now reject stale revisions while retaining drafts.
 - Maintain the stable application baseline at `85d980b` on
   [`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), with
-  version metadata and documentation updates. Scan engine, prompts and skills
-  retain that baseline; the Console includes the targeted fixes listed below.
+  version metadata and documentation updates. Prompts and skills retain that
+  baseline; the engine and Console include the targeted fixes listed here.
   Version remains 1.3.5. The `v1.3.5` tag is a fixed historical snapshot from before
   the backport; pull `v1.3.5-release` to obtain it. `main` and `v1.4.0-dev` are
   development versions.

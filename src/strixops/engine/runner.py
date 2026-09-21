@@ -19,14 +19,19 @@ import dataclasses
 import io
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from strixops.agents.factory import ROOT_AGENT_NAME, build_root_agent
 from strixops.config.context import ContextSettings
 from strixops.config.settings import EngineSettings
+from strixops.engine.compaction import compaction_budget
+from strixops.engine.context_probe import probe_model_capacity
 from strixops.engine.coordinator import STATUS_COMPLETED, STATUS_FAILED, AgentCoordinator
 from strixops.engine.loop import DEFAULT_MAX_TURNS, run_agent_loop
+from strixops.engine.model_capacity import resolve_model_capacity
 from strixops.engine.scanconfig import EngineContext, EngineServices, ScanSpec, build_root_task
 from strixops.engine.sessions import open_agent_session
 from strixops.engine.spawn import make_spawn_child
@@ -110,6 +115,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
     gateway = None
     report_model = None
     report_http_client = None
+    model_capacity = None
     sandbox = None
     hints_task: asyncio.Task | None = None
     hints_poller = None
@@ -280,6 +286,29 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
                 run_state.mark_failed("preflight-failed")
                 return EXIT_FAILED
 
+            # Resolve the selected route once, before any sandbox or agent starts.
+            # Keep the result local to this run: the same model ID can have a
+            # different serving limit behind another endpoint.
+            _stdout_log("Resolving model context capacity before agent startup…")
+            model_capacity = await resolve_model_capacity(settings, context_settings)
+            model_capacity = await probe_model_capacity(
+                settings, context_settings, model_capacity,
+                on_usage=lambda totals: usage_accumulator.add(SimpleNamespace(**totals)),
+            )
+            model_context = {
+                **model_capacity.to_dict(),
+                "compact_trigger_tokens": compaction_budget(model_capacity, context_settings),
+                "auto_compact": context_settings.auto_compact,
+                "resolved_at": datetime.now(UTC).isoformat(),
+            }
+            run_state.run_record["model_context"] = model_context
+            run_state.save()
+            events.emit(event_type="model.context.resolved", payload=model_context)
+            _stdout_log(
+                f"Model context: {model_capacity.capacity_tokens:,} tokens "
+                f"(source={model_capacity.capacity_source}, lookup={model_capacity.lookup_status})"
+            )
+
             from strixops.config.provider import make_platform_model
             from strixops.runtime.sandbox import create_sandbox_session
 
@@ -341,6 +370,7 @@ async def run_scan(spec: ScanSpec, settings: EngineSettings) -> int:
             root_input=root_input,
             session_for=session_for,
             context_settings=context_settings,
+            model_capacity=model_capacity,
         )
         services.spawn_child = make_spawn_child(services)
 

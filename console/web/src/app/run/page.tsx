@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { Chip, ConfirmButton, EmptyState, StatusPill } from "@/components/ui";
 import ConversationView from "@/components/ConversationView";
+import AgentContextPanel from "@/components/AgentContextPanel";
 import FilesPanel from "@/components/FilesPanel";
 import FindingsPanel from "@/components/FindingsPanel";
 import NotebookPanel from "@/components/NotebookPanel";
@@ -585,7 +586,7 @@ function Cockpit() {
         )}
 
         {/* timeline tiles */}
-        <div className="mt-3 grid gap-2 md:grid-cols-5">
+        <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
           <div className="info-tile">
             <div className="info-label">{t("run.started")}</div>
             <div className="info-value text-sm">{fmtTime(run.start_time, locale)}</div>
@@ -619,6 +620,28 @@ function Cockpit() {
                 <span className="text-fg-faint">—</span>
               )}
             </div>
+          </div>
+          <div className="info-tile">
+            <div className="info-label">{t("run.context")}</div>
+            <div className="info-value text-sm" title={t("run.context.hint")}>
+              {run.model_context ? (
+                t("run.context.capacity", { n: fmtTokens(run.model_context.capacity_tokens) })
+              ) : (
+                <span className="text-fg-faint">{t("run.context.unrecorded")}</span>
+              )}
+            </div>
+            {run.model_context && (
+              <div className="mt-1 space-y-1 text-[10px] leading-relaxed text-fg-muted">
+                <div className={run.model_context.capacity_source === "configured_fallback" ? "text-warning" : undefined}>
+                  {t(`run.context.source.${run.model_context.capacity_source}`)}
+                </div>
+                <div>
+                  {run.model_context.auto_compact
+                    ? t("run.context.trigger", { n: fmtTokens(run.model_context.compact_trigger_tokens) })
+                    : t("run.context.disabled")}
+                </div>
+              </div>
+            )}
           </div>
           <div className="info-tile">
             <div className="info-label">{t("run.findings")}</div>
@@ -676,6 +699,8 @@ function Cockpit() {
           </div>
         )}
       </div>
+
+      <AgentContextPanel run={run} />
 
       <ProxyStatusPanel key={name} runName={name} live={live} enabled={run.scan_type === "web" && !run.dry_run} />
 

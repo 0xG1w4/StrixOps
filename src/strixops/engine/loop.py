@@ -17,13 +17,15 @@ import logging
 import os
 from typing import Any
 
-from agents import Agent, RunConfig, Runner
+from agents import Agent, Model, RunConfig, Runner
 from agents.memory import Session
 
 from strixops.config.context import ContextSettings
 from strixops.config.model_errors import format_model_error
 from strixops.engine import compaction, resilience
+from strixops.engine.context_usage import ContextUsageModel
 from strixops.engine.coordinator import STATUS_CRASHED, STATUS_FAILED, AgentCoordinator
+from strixops.engine.model_capacity import ModelCapacity
 from strixops.engine.scanconfig import EngineContext
 from strixops.engine.sessions import (
     enforce_image_budget,
@@ -115,6 +117,7 @@ async def _compact_session(
     settings: ContextSettings,
     *,
     force: bool,
+    capacity: ModelCapacity | None = None,
 ) -> bool:
     # Models live on the agent, wrapped for usage accounting. A bare model
     # string in RunConfig would change routing, so retain the existing client.
@@ -136,12 +139,31 @@ async def _compact_session(
         tools_text=tools_text,
         force=force,
         settings=settings,
+        **({"capacity": capacity} if capacity is not None else {}),
     )
 
 
 async def _wait_for_transport_retry(delay: float) -> None:
     # An ordinary cancellable sleep keeps Stop responsive during backoff.
     await asyncio.sleep(delay)
+
+
+def _context_tracked_agent(agent: Any, context: EngineContext, capacity: ModelCapacity | None) -> Any:
+    model = getattr(agent, "model", None)
+    record = getattr(context.run_state, "record_context_usage", None)
+    if (
+        capacity is None or capacity.model != getattr(model, "model", None)
+        or not callable(record) or not isinstance(agent, Agent) or not isinstance(model, Model)
+    ):
+        return agent
+    return agent.clone(
+        model=ContextUsageModel(
+            model, agent_id=context.agent_id, agent_name=context.agent_name,
+            on_update=lambda snapshot: record(context.agent_id, snapshot),
+        ),
+        # Agent.clone can reset implicit defaults when changing model objects.
+        model_settings=agent.model_settings,
+    )
 
 
 async def _run_agent_cycles(
@@ -156,6 +178,9 @@ async def _run_agent_cycles(
     usage_sink: Any,
 ) -> dict | None:
     settings = getattr(context.services, "context_settings", None) or ContextSettings()
+    capacity = getattr(context.services, "model_capacity", None)
+    compact_options = {"capacity": capacity} if capacity is not None else {}
+    request_agent = _context_tracked_agent(agent, context, capacity)
     input_items: list[Any] = []
     last_error: str | None = None
     nudges_used = 0
@@ -177,11 +202,11 @@ async def _run_agent_cycles(
             except Exception:
                 logger.exception("image-budget enforcement failed for %s", context.agent_id)
             try:
-                await _compact_session(agent, session, settings, force=False)
+                await _compact_session(agent, session, settings, force=False, **compact_options)
             except Exception:
                 logger.exception("proactive compaction failed for %s", context.agent_id)
             result = Runner.run_streamed(
-                agent,
+                request_agent,
                 input=input_items,
                 context=context,
                 max_turns=max_turns - completed_model_turns,
@@ -225,7 +250,9 @@ async def _run_agent_cycles(
                     continue
             if compactions_used < MAX_COMPACTIONS_PER_CYCLE and compaction.is_context_overflow(exc):
                 try:
-                    compacted = await _compact_session(agent, session, settings, force=True)
+                    compacted = await _compact_session(
+                        agent, session, settings, force=True, **compact_options
+                    )
                 except Exception:
                     logger.exception("overflow compaction failed for %s", context.agent_id)
                     compacted = False

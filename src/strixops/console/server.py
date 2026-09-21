@@ -297,6 +297,64 @@ def _build_summary(run_dir: Path) -> dict[str, Any]:
     llm_usage = record.get("llm_usage")
     if isinstance(llm_usage, dict):
         summary["llm_usage"] = llm_usage
+    model_context = record.get("model_context")
+    if isinstance(model_context, dict):
+        sources = {"provider_metadata", "provider_error", "model_catalog", "configured_fallback"}
+        numeric = ("capacity_tokens", "output_limit_tokens", "compact_trigger_tokens")
+        text_fields = ("model", "lookup_status", "resolved_at")
+        if (
+            all(type(model_context.get(key)) is int for key in numeric)
+            and model_context["capacity_tokens"] > 0
+            and model_context["output_limit_tokens"] > 0
+            and 0 <= model_context["compact_trigger_tokens"] < model_context["capacity_tokens"]
+            and all(isinstance(model_context.get(key), str) for key in text_fields)
+            and all(
+                isinstance(model_context.get(key), str) and model_context[key] in sources
+                for key in ("capacity_source", "output_source")
+            )
+            and type(model_context.get("auto_compact")) is bool
+        ):
+            # Only publish the immutable startup result, never a provider body
+            # or a fresh lookup using the operator's current model settings.
+            summary["model_context"] = {
+                key: model_context[key]
+                for key in (*numeric, *text_fields, "capacity_source", "output_source", "auto_compact")
+            }
+            probe = model_context.get("probe")
+            if isinstance(probe, dict) and probe.get("status") in (
+                "skipped_metadata", "disabled", "completed", "limit_reported", "budget_exhausted",
+                "timeout", "failed", "unverified",
+            ):
+                counts = ("requests", "output_budget_tokens", "planned_input_tokens")
+                bounds = ("largest_accepted_input_tokens", "smallest_rejected_input_tokens")
+                if (
+                    all(type(probe.get(key)) is int and probe[key] >= 0 for key in counts)
+                    and all(
+                        probe.get(key) is None or type(probe[key]) is int and probe[key] > 0
+                        for key in bounds
+                    )
+                ):
+                    summary["model_context"]["probe"] = {
+                        key: probe.get(key) for key in ("status", *counts, *bounds)
+                    }
+    agent_context = record.get("agent_context")
+    if isinstance(agent_context, dict):
+        measurements = {}
+        text_fields = ("agent_name", "model", "updated_at")
+        for agent_id, measurement in agent_context.items():
+            if (
+                not isinstance(agent_id, str) or not agent_id or not isinstance(measurement, dict)
+                or type(measurement.get("input_tokens")) is not int or measurement["input_tokens"] < 0
+                or any(not isinstance(measurement.get(key), str) for key in text_fields)
+                or measurement.get("source") not in ("estimate", "provider_usage")
+                or measurement.get("phase") not in ("request", "response")
+            ):
+                continue
+            measurements[agent_id] = {
+                key: measurement[key] for key in (*text_fields, "input_tokens", "source", "phase")
+            }
+        if measurements:
+            summary["agent_context"] = measurements
     queue = record.get("queue")
     if isinstance(queue, dict):
         summary["queue"] = {

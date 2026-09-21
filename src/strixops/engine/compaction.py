@@ -22,6 +22,7 @@ from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from strixops.config.context import ContextSettings
 from strixops.engine.context_budget import context_window, count_tokens, output_limit
+from strixops.engine.model_capacity import ModelCapacity
 from strixops.engine.resilience import MODEL_RETRY
 from strixops.engine.sessions import replace_session_items, session_write_lock
 
@@ -212,19 +213,28 @@ def _open_calls_at(items: list[Any]) -> list[int]:
     return balance
 
 
-def _select_split(model: str, items: list[Any], keep_tokens: int) -> int:
+def _select_split(model: str, items: list[Any], keep_tokens: int, *, bounded: bool = False) -> int:
     """Index where the kept-verbatim recent tail begins: walk newest→oldest to
     ``keep_tokens``, then snap to a point with no tool call left open."""
     total = 0
     split = len(items)
     for i in range(len(items) - 1, -1, -1):
-        total += count_tokens(model, _serialize_item(items[i]))
+        if bounded:
+            total = count_tokens(model, _serialize_items(items[i:]))
+        else:
+            total += count_tokens(model, _serialize_item(items[i]))
         if total > keep_tokens:
             break
         split = i
     open_calls = _open_calls_at(items)
-    while split > 0 and open_calls[split] != 0:
-        split -= 1
+    if bounded:
+        # A complete tool group can exceed a small routed model's entire
+        # allowance. Summarize that group instead of expanding the recent tail.
+        while split < len(items) and open_calls[split] != 0:
+            split += 1
+    else:
+        while split > 0 and open_calls[split] != 0:
+            split -= 1
     return split
 
 
@@ -253,18 +263,53 @@ def _fit_to_tokens(model: str, text: str, max_tokens: int) -> str:
     return candidate
 
 
-def _summary_output_tokens(model: str, settings: ContextSettings | None = None) -> int:
+def compaction_budget(capacity: ModelCapacity, settings: ContextSettings) -> int:
+    """Runtime compaction threshold, also published in the run's diagnostics.
+
+    Reserve the larger configured buffer/output capacity, capped at half the
+    window so a small model still has input space. Recent-history preferences
+    never increase the routed model's input allowance.
+    """
+    window = capacity.capacity_tokens
+    reserve = min(
+        max(settings.compact_buffer_tokens, capacity.output_limit_tokens), max(1, window // 2)
+    )
+    return max(0, window - reserve)
+
+
+def _matching_capacity(model: str, capacity: ModelCapacity | None) -> ModelCapacity | None:
+    # A dedicated report model must never inherit the scan model's limits.
+    return capacity if capacity is not None and capacity.model == model else None
+
+
+def _summary_output_tokens(
+    model: str, settings: ContextSettings | None = None, *, capacity: ModelCapacity | None = None
+) -> int:
     """Summary output allowance, capped at the model's own output limit."""
-    return min((settings or ContextSettings()).summary_max_tokens, output_limit(model))
+    context = settings or ContextSettings()
+    capacity = _matching_capacity(model, capacity)
+    if capacity is not None:
+        # Keep room for summary instructions and source material even when the
+        # provider's output capability is larger than this route's context.
+        return min(
+            context.summary_max_tokens, capacity.output_limit_tokens,
+            max(1, capacity.capacity_tokens // 4),
+        )
+    return min(context.summary_max_tokens, output_limit(model))
 
 
-def _summary_input_budget(model: str, previous: str | None, settings: ContextSettings | None = None) -> int:
+def _summary_input_budget(
+    model: str, previous: str | None, settings: ContextSettings | None = None,
+    *, capacity: ModelCapacity | None = None,
+) -> int:
     """Token room left for the head after instructions and the summary output."""
     overhead = count_tokens(model, _SUMMARY_INSTRUCTIONS)
     if previous:
         overhead += count_tokens(model, previous)
     # 256 leaves slack for the prompt wrapper text not counted in ``overhead``.
-    room = context_window(model, settings) - _summary_output_tokens(model, settings) - overhead - 256
+    capacity = _matching_capacity(model, capacity)
+    window = capacity.capacity_tokens if capacity is not None else context_window(model, settings)
+    room = window - _summary_output_tokens(model, settings, capacity=capacity) - overhead - 256
     return max(0, room)
 
 
@@ -343,6 +388,7 @@ async def maybe_compact(
     tools_text: str = "",
     force: bool = False,
     settings: ContextSettings | None = None,
+    capacity: ModelCapacity | None = None,
 ) -> bool:
     """Compact ``session`` if it is near the model's context window.
 
@@ -350,6 +396,7 @@ async def maybe_compact(
     check (used after a provider context-overflow error).
     """
     context = settings or ContextSettings()
+    capacity = _matching_capacity(model, capacity)
     if not context.auto_compact and not force:
         return False
 
@@ -358,17 +405,30 @@ async def maybe_compact(
     if len(items) < _MIN_ITEMS_TO_COMPACT:
         return False
 
-    window = context_window(model, context)
-    reserve = max(context.compact_buffer_tokens, output_limit(model))
-    budget = max(context.keep_tokens, window - reserve)
+    if capacity is not None:
+        budget = compaction_budget(capacity, context)
+    else:
+        window = context_window(model, context)
+        reserve = max(context.compact_buffer_tokens, output_limit(model))
+        budget = max(context.keep_tokens, window - reserve)
     used = count_tokens(model, "\n".join((instructions, tools_text, _serialize_items(items))))
     if not force and used <= budget:
         return False
 
-    split = _select_split(model, items, context.keep_tokens)
+    keep_tokens = context.keep_tokens
+    summary_tokens = _summary_output_tokens(model, context, capacity=capacity)
+    if capacity is not None:
+        fixed_tokens = count_tokens(model, "\n".join((instructions, tools_text)))
+        checkpoint_overhead = count_tokens(model, _serialize_item(_checkpoint_item(""))) + 256
+        available = max(0, budget - fixed_tokens - checkpoint_overhead)
+        summary_tokens = min(summary_tokens, available)
+        if summary_tokens <= 0:
+            return False
+        keep_tokens = min(keep_tokens, available - summary_tokens)
+    split = _select_split(model, items, keep_tokens, bounded=capacity is not None)
     head, recent = items[:split], items[split:]
     previous = _previous_summary(head)
-    input_budget = _summary_input_budget(model, previous, context)
+    input_budget = _summary_input_budget(model, previous, context, capacity=capacity)
     if not head or input_budget <= 0:
         # Nothing to summarise, or no room for even the summary request itself.
         if head:
@@ -378,11 +438,14 @@ async def maybe_compact(
         return False
 
     serialized_head = _fit_to_tokens(model, _serialize_items(head), input_budget)
+    if capacity is not None and count_tokens(model, serialized_head) > input_budget:
+        # Even the truncation marker may not fit a very small provider window.
+        return False
     summary = await _summarize(
         model,
         summary_model,
         _build_summary_prompt(serialized_head, previous),
-        _summary_output_tokens(model, context),
+        summary_tokens,
     )
     if summary is None:
         return False

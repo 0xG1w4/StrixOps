@@ -142,12 +142,43 @@ class RunState:
         event types are ignored gracefully by both the platform parser and
         the console parser.
         """
-        self.run_record["llm_usage"] = dict(totals)
-        artifacts.write_run_record(self.run_dir, self.run_record)
-        self.events.emit(
-            event_type="usage.updated",
-            payload={"agent_id": agent_id, **totals},
-        )
+        with self._lock:
+            self.run_record["llm_usage"] = dict(totals)
+            artifacts.write_run_record(self.run_dir, self.run_record)
+            self.events.emit(
+                event_type="usage.updated",
+                payload={"agent_id": agent_id, **totals},
+            )
+
+    def record_context_usage(self, agent_id: str, snapshot: dict[str, Any]) -> None:
+        """Replace one agent's latest request measurement, never accumulate it.
+
+        Only numeric usage and provenance are retained; request contents and
+        credentials must not enter run diagnostics. Use the same lock as run
+        saves and billing updates so concurrent agents cannot lose each other.
+        """
+        text_fields = ("agent_name", "model", "updated_at")
+        if (
+            not isinstance(agent_id, str) or not agent_id
+            or type(snapshot.get("input_tokens")) is not int or snapshot["input_tokens"] < 0
+            or any(not isinstance(snapshot.get(key), str) for key in text_fields)
+            or snapshot.get("source") not in ("estimate", "provider_usage")
+            or snapshot.get("phase") not in ("request", "response")
+        ):
+            return
+        safe = {
+            key: snapshot[key]
+            for key in (*text_fields, "input_tokens", "source", "phase")
+        }
+        with self._lock:
+            self.run_record.setdefault("agent_context", {})[agent_id] = safe
+            artifacts.write_run_record(self.run_dir, self.run_record)
+            self.events.emit(
+                event_type="context.usage.updated",
+                payload=dict(safe),
+                agent_id=agent_id,
+                agent_name=safe["agent_name"],
+            )
 
     def update_final_fields(
         self,
