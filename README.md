@@ -11,8 +11,9 @@ based on application commit `85d980b`, with scan engine, prompts and skills
 preserved from that baseline. The Console also includes the task selection,
 project filter and bulk deletion backport from `93f503f`. Version remains 1.3.5.
 The `v1.3.5` tag is a fixed historical snapshot from before this backport;
-use the **`v1.3.5-release` branch** to obtain it. **`main` and `v1.4.0-dev` are
-development versions**. See the [stable baseline scope](docs/v1.3.5.md#stable-baseline-scope)
+use **`main` or `v1.3.5-release`** for the current maintained version. The default
+branch **`main` is synchronized with `v1.3.5-release`**; the `v1.4.0-dev` branch
+has been retired. See the [stable baseline scope](docs/v1.3.5.md#stable-baseline-scope)
 for included and excluded changes.
 
 StrixOps brings model-driven agents, Docker-based assessment tools, live task
@@ -247,7 +248,8 @@ git pull --ff-only
 For a service managed by systemd or another supervisor, stop it through that
 manager instead. Reload the browser after installation. If switching or the
 fast-forward update fails because of local changes or divergent commits, save
-and reconcile them before retrying. `git pull` on `main` updates development code.
+and reconcile them before retrying. Existing installations on `main` can use
+`git pull --ff-only` to receive the same 1.3.5 stable version.
 
 An archive downloaded from the [stable branch](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release)
 contains source that still needs to be built. Extract it and enter its directory, then run

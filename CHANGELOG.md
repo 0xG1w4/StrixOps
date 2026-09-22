@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.5 maintained branches — 2026-09-23
+
+- Synchronize the default `main` branch with the current `v1.3.5-release`
+  contents and retire `v1.4.0-dev`. Preserve both branches' prior history so
+  existing `main` and stable installations can update with a fast-forward pull.
+- Accept internal CIDR targets containing host bits, such as `192.168.5.0/20`.
+  Restricted projects still require the entire normalized network to fit their
+  configured scope; invalid addresses and prefixes remain rejected.
+
 ## 1.3.5 stable baseline — 2026-09-17
 
 - Withdraw the Web Default Standard preload introduced in `a0e9779`; restore
@@ -25,8 +34,7 @@
   corrected tool references and skill revisions; the engine
   and Console include the targeted fixes listed here.
   Version remains 1.3.5. The `v1.3.5` tag is a fixed historical snapshot from before
-  the backport; pull `v1.3.5-release` to obtain it. `main` and `v1.4.0-dev` are
-  development versions.
+  the backport; pull `main` or `v1.3.5-release` to obtain the maintained version.
 - Backport overview row selection, project filtering, select all across the
   current filtered result's pages, and confirmed bulk task deletion from
   `93f503f`. Filter changes clear the selection; confirmation lists the exact
