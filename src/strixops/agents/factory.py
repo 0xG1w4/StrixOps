@@ -43,6 +43,7 @@ from strixops.tools.credentials import (
     record_credential,
     update_credential,
 )
+from strixops.tools.hosts import import_hosts, list_hosts, record_host, record_host_relation
 from strixops.tools.internal_campaign import get_internal_campaign, record_internal_event
 from strixops.tools.lifecycle import agent_finish, finish_scan
 from strixops.tools.notes import create_note, delete_note, get_note, list_notes, update_note
@@ -106,6 +107,10 @@ def base_tools() -> list[Any]:
         update_credential,
         list_credentials,
         get_credential,
+        record_host,
+        import_hosts,
+        list_hosts,
+        record_host_relation,
         load_skill,
         list_skills,
         record_coverage,

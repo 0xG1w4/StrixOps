@@ -56,6 +56,7 @@ from strixops.console import (
     project_reports,
     project_scope,
     project_skills,
+    project_topology,
     projects_store,
     prompt_probe,
     proxy_status,
@@ -2269,6 +2270,63 @@ def project_findings_endpoint(project_id: str) -> dict:
     if projects_store.find_project(data, project_id) is None:
         raise HTTPException(status_code=404, detail="unknown project")
     return projects_store.project_findings(project_id)
+
+
+def _topology_project_runs(project_id: str) -> list[Path]:
+    if projects_store.find_project(projects_store.load_projects(), project_id) is None:
+        raise HTTPException(status_code=404, detail="unknown project")
+    return projects_store.project_runs(project_id)
+
+
+@app.get("/api/projects/{project_id}/topology")
+def read_project_topology_endpoint(project_id: str) -> Response:
+    try:
+        payload = project_topology.read_topology(
+            project_id, _topology_project_runs(project_id), open_file=_open_run_file,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/projects/{project_id}/topology")
+def generate_project_topology_endpoint(project_id: str) -> Response:
+    try:
+        payload = project_topology.generate_topology(
+            project_id, _topology_project_runs(project_id), open_file=_open_run_file,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/projects/{project_id}/topology/status")
+def project_topology_status_endpoint(
+    project_id: str, source_fingerprint: Annotated[str, Query(max_length=64)] = "",
+) -> Response:
+    payload = project_topology.topology_status(
+        _topology_project_runs(project_id), source_fingerprint, open_file=_open_run_file,
+    )
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
+class TopologyCredentialBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    node_id: str = Field(min_length=1, max_length=128)
+    credential_id: str = Field(min_length=1, max_length=128)
+    source_run: str = Field(min_length=1, max_length=256)
+    version: int = Field(ge=1)
+
+
+@app.post("/api/projects/{project_id}/topology/credentials")
+def reveal_project_topology_credential(project_id: str, body: TopologyCredentialBody) -> Response:
+    try:
+        payload = project_topology.reveal_credential(
+            project_id, _topology_project_runs(project_id), open_file=_open_run_file, **body.model_dump(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/projects/{project_id}/report")
