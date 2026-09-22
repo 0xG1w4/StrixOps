@@ -396,9 +396,11 @@ def _normalize_internal_target(value: str) -> tuple[TargetKind, str]:
         raise TargetValidationError("internal target must be a hostname, IP address, or CIDR")
     if "/" in value:
         try:
-            network = _parse_network(value, label="internal target")
-        except ScopeValidationError as exc:
-            raise TargetValidationError(str(exc)) from exc
+            # Accept host/prefix input; restricted projects still check that
+            # the entire canonical network is contained by an allowed rule.
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError as exc:
+            raise TargetValidationError("internal target is not a valid IPv4 or IPv6 CIDR") from exc
         return KIND_CIDR, str(network)
     try:
         return KIND_IP, str(ipaddress.ip_address(value))
