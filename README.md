@@ -373,7 +373,9 @@ creates a persistent batch of independent runs. Set concurrent targets for the b
 Settings also provides a host-wide active-target limit. Both default to two.
 
 **Testing depth** has two choices for both Web and internal tasks. **Default**
-preserves the existing assessment workflow. **Deep** additionally loads the deep
+preloads the Standard playbook for Web root and child agents, covering business
+flows, role boundaries and systematic testing within each agent's assignment.
+Internal Default keeps its internal methodology. **Deep** loads the deep
 testing playbook for the root and every child agent: broader reconnaissance,
 closer investigation of promising leads, related attack paths, and validation.
 Deep can take longer and use more model tokens; it keeps the selected model,
@@ -470,7 +472,7 @@ does not itself establish a remote shell.
 | `--batch-name` | Optional batch display name |
 | `--resume-batch ID` | Resume supervision of an existing CLI batch; does not repeat completed targets |
 | `--scan-type web\|internal` | Select the assessment workflow |
-| `--scan-mode default\|deep` | Select testing depth; omitted means `default` (existing workflow) |
+| `--scan-mode default\|deep` | Select testing depth; `default` uses Standard for Web and the internal methodology for internal scans |
 | `--instruction-file` | Load operator instructions from Markdown |
 | `--instruction` | Inline fallback when no instruction file is supplied |
 | `--socks5` / `--gsocket` | Select internal reachability settings; do not combine them |

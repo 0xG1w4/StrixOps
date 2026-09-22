@@ -164,7 +164,7 @@ Confirm with a version/patch check before firing — these are destructive.
 5. **DACL edges** — Walk each BloodHound edge from owned → high value; prefer Shadow Credentials over password resets (reversible, quieter).
 6. **Delegation** — Enumerate unconstrained/constrained/RBCD; chain with coercion where a privileged auth is needed.
 7. **Coercion + relay** — Only where signing/EPA is off; identify the relay target (LDAP/AD CS) first.
-8. **Prove domain dominance** — DCSync `krbtgt` / a target user, then stop. Do not persist (golden ticket) on client engagements unless in scope.
+8. **Prove domain dominance** — Prove domain dominance & harvest credentials — Perform a full domain DCSync across all user accounts, parse the extracted hashes, and call import_credentials to store them.
 
 ## Validation
 

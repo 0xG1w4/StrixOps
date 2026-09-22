@@ -193,7 +193,7 @@ def default_root_skills(scan_type: str, scan_mode: str = "default") -> list[str]
         "tooling/agent_browser",
         "analysis/counterevidence",
         "analysis/severity_calibration",
-        *_scan_mode_skills(scan_mode),
+        *(["scan_modes/standard"] if scan_mode == "default" else _scan_mode_skills(scan_mode)),
     ]
 
 

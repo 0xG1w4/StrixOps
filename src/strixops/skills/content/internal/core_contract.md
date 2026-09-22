@@ -24,7 +24,7 @@ details.verified=true and supporting evidence.
 
 ## Evidence and findings
 
-Record internal discoveries promptly with create_internal_finding. Distinguish
+Record internal discoveries promptly with create_finding. Distinguish
 observed architecture, exposed credentials and a validated security impact. A
 credential's existence does not prove it is valid or privileged. Rate demonstrated
 impact in this deployment and preserve limitations and counterevidence. File an
@@ -46,9 +46,7 @@ account_created each open a resource: omit resource_id and save the returned ID.
 Use that ID to close the same resource: artifact_created -> artifact_removed,
 artifact_modified -> artifact_restored, account_created -> account_removed.
 Record the exact host/object, ownership, original state or backup, and change made;
-artifact_modified also requires details.restore_plan. Persistence requires
-explicit operator permission recorded in details.authorization when details.persistent
-is true. A skill's example is not operator permission.
+artifact_modified also requires details.restore_plan.
 If permission to retain an existing resource arrives later, record
 resource_retained with its resource_id, evidence, persistent=true and authorization.
 It remains an open, intentionally retained resource rather than a cleaned item.

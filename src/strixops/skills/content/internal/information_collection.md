@@ -7,7 +7,7 @@ description: High-value sensitive data collection targets for compromised hosts 
 
 This is a **starting checklist** of known high-value targets. You MUST also actively explore the target environment for sensitive files, credentials, and secrets not listed here. Every host, application, and infrastructure is different — adapt and dig deeper based on what you find.
 
-Report each distinct discovery promptly with `create_internal_finding`, following
+Report each distinct discovery promptly with `create_finding`, following
 `internal/internal_reporting`. Verify the remote execution host/session before
 using these on-host checks; a SOCKS5 proxy alone does not provide a shell. Keep
 complete extracted datasets in evidence attachments and distinguish observations

@@ -7,6 +7,18 @@ description: Balanced security assessment with systematic methodology and full a
 
 Balanced security assessment with structured methodology. Thorough coverage without exhaustive depth.
 
+## Application in StrixOps
+
+This playbook is preloaded for Web Default assessments. Its full-surface coverage
+is an engagement-level goal: the root coordinates and delegates testing rather
+than probing itself. Each child applies only the phases and checks relevant to
+its assigned surface and discovery or validation role; reuse shared reconnaissance
+and do not restart a full assessment for every assignment.
+
+Keep the existing scope, operator constraints, agent/resource limits and lifecycle
+rules. Extend useful attack paths within the assignment, or hand off the next
+step to the parent. Record blocked and untested areas rather than claiming coverage.
+
 ## Approach
 
 Systematic testing across the full attack surface. Understand the application before exploiting it.
@@ -44,7 +56,9 @@ Before testing for vulnerabilities, understand the application:
 
 ## Phase 3: Systematic Testing
 
-Test each attack surface methodically. Spawn focused subagents for different areas.
+Test each attack surface methodically. The root delegates different areas to
+focused subagents. Children delegate only when useful to their assignment and
+within existing limits; completing a narrow assignment does not require spawning.
 
 **Input Validation**
 - Injection testing on all input fields (SQL, XSS, command, template)
@@ -73,7 +87,10 @@ Test each attack surface methodically. Spawn focused subagents for different are
 
 ## Phase 4: Exploitation
 
-- Every finding requires a working proof-of-concept
+- Confirm dynamic vulnerabilities with a working proof-of-concept. Discovery agents hand candidates and evidence to the parent; an independent validation agent reproduces and files confirmed vulnerabilities via `create_vulnerability_report`.
+- Follow the reporting tool's evidence requirements for each record type. Verified dependency CVEs use `create_dependency_report` with advisory and installed-version evidence; they do not require a dynamic exploit.
+- Record factual observations promptly with `create_finding`. Register individual credentials with `record_credential` or complete CSV datasets with `import_credentials`; do not wait for a working exploit or successful login to preserve observed material.
+- Keep static traces, unverified access and unresolved candidates explicitly labeled, with missing proof and follow-up work recorded; never present them as reproduced exploitation.
 - Demonstrate actual impact, not theoretical risk
 - Chain vulnerabilities to show maximum severity
 - Document full attack path from entry to impact
@@ -88,11 +105,16 @@ Test each attack surface methodically. Spawn focused subagents for different are
 
 ## Chaining
 
-Always ask: "If I can do X, what does that enable next?" Keep pivoting until reaching maximum privilege or data exposure.
+Always ask: "If I can do X, what does that enable next?" Pursue the strongest
+demonstrable impact within the authorized scope, operator constraints and available
+resources. Hand off paths beyond the current assignment and document specific
+blockers or remaining coverage when further validation is not possible.
 
 Prefer complete end-to-end paths (entry point → pivot → privileged action/data) over isolated findings. Use the application as a real user would—exploit must survive actual workflow and state transitions.
 
-When you discover a useful pivot (info leak, weak boundary, partial access), immediately pursue the next step rather than stopping at the first win.
+When you discover a useful pivot (info leak, weak boundary, partial access),
+pursue the next in-scope step or hand it to the parent for focused follow-up rather
+than dropping it after the first win.
 
 ## Mindset
 

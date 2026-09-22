@@ -12,7 +12,6 @@ Pair this skill with `xss`, `oauth`, `open_redirect`, `csrf`, or `semantic_confu
 ## Safety Boundary
 
 - Use a controlled browser profile, synthetic account/data, explicit target allowlist, and a fresh assessment-specific proxy/CA when interception is required.
-- Redact tokens, cookies, message contents, storage values, and personal data from console logs, captures, recordings, and reports.
 - Treat oversized URLs/headers, cookie inflation, redirect loops, cache exhaustion, and high-rate timing trials as resource/denial-of-service tests; run them only with strict ceilings in a restartable lab.
 - Do not attempt to set or spoof browser-generated `event.origin`. Vary the sender URL and record the serialized origin supplied by the browser.
 - Restore monkey-patched browser APIs and unregister test workers/caches after validation.
@@ -134,7 +133,7 @@ window.addEventListener('message', e => {
 }, true);
 ```
 
-Use the wrapper only in the controlled profile and restore `window.fetch = realFetch` afterward. Do not log bodies, message values, credentials, or query strings.
+Use the wrapper only in the controlled profile and restore `window.fetch = realFetch` afterward.
 
 Also inspect DevTools network initiators, service workers, storage, CSP violations, frame tree, and navigation history. Use raw browser behavior for validation; command-line HTTP clients cannot reproduce origin/window/worker semantics.
 

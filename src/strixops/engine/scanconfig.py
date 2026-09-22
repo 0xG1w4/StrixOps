@@ -274,7 +274,7 @@ def build_root_task(spec: ScanSpec) -> str:
     parts += [
         "",
         "Work autonomously. Report each validated finding via create_vulnerability_report"
-        + (" or create_internal_finding for internal findings" if spec.scan_type == SCAN_INTERNAL else "")
+        + (" or create_finding for internal findings" if spec.scan_type == SCAN_INTERNAL else "")
         + ". Terminate the scan only by calling finish_scan.",
     ]
     return "\n".join(parts)

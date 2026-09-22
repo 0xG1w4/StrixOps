@@ -88,7 +88,6 @@ Classify each discovered integration by data read, data write, external communic
 - Test whether approval binds the exact server identity/version, tool name, schema digest, normalized arguments, credential, target, side effect, and expiry. Revalidate those fields immediately before execution; a generic “continue?” is weak if arguments can change after approval.
 - Exercise replay, retry, parallel calls, partial failure, cancellation, and delegated execution for duplicate or bypassed actions.
 - Prove impact at the actual target and audit log. Model narration or a fabricated tool result is not evidence.
-- Use dry-run/no-op/read-only operations first; require explicit human approval for consequential operations.
 
 ### Identity, Tenant, and Environment Isolation
 

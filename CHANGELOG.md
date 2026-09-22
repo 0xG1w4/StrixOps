@@ -2,6 +2,12 @@
 
 ## 1.3.5 stable baseline — 2026-09-17
 
+- Preload the Standard testing playbook for Web Default root and child agents,
+  with assignment-specific coverage, independent validation and separate evidence
+  rules for vulnerabilities, dependency CVEs, observations and credentials.
+  Internal and Deep mode selection and runtime limits are unchanged.
+- Correct internal discovery tool references in prompts, skills and completion
+  descriptions to the registered `create_finding` tool.
 - Resolve the selected scan model's context capacity at task startup from its
   API model metadata, then the bundled catalog or an explicitly labeled fallback.
   Root, children and conversation summaries share the run's resolved budget.
@@ -16,8 +22,9 @@
   existing stores. Editors now reject stale revisions while retaining drafts.
 - Maintain the stable application baseline at `85d980b` on
   [`v1.3.5-release`](https://github.com/0xG1w4/StrixOps/tree/v1.3.5-release), with
-  version metadata and documentation updates. Prompts and skills retain that
-  baseline; the engine and Console include the targeted fixes listed here.
+  version metadata and documentation updates. Targeted prompt changes include
+  corrected tool references and the Web Default Standard playbook; the engine
+  and Console include the targeted fixes listed here.
   Version remains 1.3.5. The `v1.3.5` tag is a fixed historical snapshot from before
   the backport; pull `v1.3.5-release` to obtain it. `main` and `v1.4.0-dev` are
   development versions.

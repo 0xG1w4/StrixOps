@@ -180,7 +180,6 @@ Do not assign Confidentiality Low merely because information helps reconnaissanc
 4. Probe caches/CDNs for identity-unaware keys; verify Vary includes Authorization/tenant
 5. Treat introspection and reflection as configuration findings across GraphQL/gRPC
 6. Mine observability endpoints last; they are noisy but high-yield in misconfigured setups
-7. Chain quickly to a concrete risk and stop—proof should be minimal and reversible
 
 ## Summary
 

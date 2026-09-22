@@ -148,7 +148,7 @@ async def agent_finish(
         result_summary: What you were asked to do, what you did, and the
             outcome. This is the report your parent agent receives.
         findings: Concrete findings discovered (file any formal reports first
-            with create_vulnerability_report / create_internal_finding).
+            with create_vulnerability_report / create_finding).
         open_items: Untested or uncertain work, as text or a list of follow-up items.
         success: Whether you completed your assignment.
         report_to_parent: Deliver the completion report to your parent agent.

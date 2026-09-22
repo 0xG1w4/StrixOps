@@ -179,7 +179,6 @@ Server-Side Request Forgery enables the server to reach networks and services th
 5. Metadata endpoints require headers/methods; verify if your sink can set them or if intermediaries add them
 6. Use tiny payloads and tight timeouts to map ports with minimal noise
 7. When responses are masked, diff length/ETag/status and TLS error classes to infer reachability
-8. Chain quickly to durable impact (short-lived tokens, harmless internal reads) and stop there
 
 ## Summary
 

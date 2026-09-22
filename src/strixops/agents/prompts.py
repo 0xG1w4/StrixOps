@@ -190,7 +190,7 @@ def root_instructions(spec: ScanSpec) -> str:
 
 def child_instructions(task: str, spec: ScanSpec | None = None, skills: list[str] | None = None) -> str:
     internal_extra = (
-        " / create_internal_finding for internal discoveries — report each distinct discovery promptly; "
+        " / create_finding for internal discoveries — report each distinct discovery promptly; "
         "datasets may use complete attachments"
         if spec is not None and spec.scan_type == "internal"
         else ""

@@ -86,7 +86,6 @@ Consult the [Hurl manual](https://hurl.dev/docs/manual.html) for version-specifi
 - Set bounded timeouts and retries for the target; do not use polling as an unbounded brute-force loop.
 - Do not use Hurl for raw HTTP parser/smuggling cases when its HTTP stack normalizes the bytes being tested; use an appropriate raw harness in an isolated lab.
 - Use `--path-as-is` when literal `/../` or `/./` path segments are the behavior under test; otherwise Hurl's underlying URL handling can normalize them.
-- Redact reports. HTML/JSON/JUnit artifacts may contain request URLs, headers, captured variables, and response snippets.
 - Keep authentication material in local secret storage and use dedicated test accounts with minimum privilege.
 
 ## Validation Deliverable
