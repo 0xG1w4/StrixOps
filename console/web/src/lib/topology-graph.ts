@@ -4,12 +4,12 @@ export type GroupingBasis = "recorded_subnet" | "scan_range" | "address_group" |
 export type Point = { x: number; y: number };
 export type Rect = Point & { width: number; height: number };
 export type Camera = Point & { zoom: number };
-export type TopologyGroup = { id: string; cidr: string; context: string; bases: GroupingBasis[]; nodes: TopologyNode[] };
+export type TopologyGroup = { id: string; cidr: string; context: string; contexts: string[]; bases: GroupingBasis[]; nodes: TopologyNode[] };
 export type PlacedGroup = TopologyGroup & Rect;
 export type GraphPositions = { groups: Record<string, Point>; nodes: Record<string, Point> };
 export type EdgeBundle = { id: string; source: string; target: string; edges: TopologyEdge[] };
 export const HOST_WIDTH = 132;
-export const HOST_HEIGHT = 98;
+export const HOST_HEIGHT = 116;
 export const GROUP_HEADER = 96;
 export const GROUP_PADDING = 28;
 export const CELL_WIDTH = 168;
@@ -64,7 +64,7 @@ function canonicalCidr(value: string, address?: string): string | null {
 export function getNodeGrouping(node: TopologyNode): { key: string; cidr: string; basis: GroupingBasis; context: string } {
   const legacyContext = node.network_context && node.sources.length > 0 && node.sources.every((source) => source.run !== node.network_context) ? node.network_context : "";
   const context = node.group_context ?? legacyContext;
-  if (node.group_basis === "unassigned" && !node.group_cidr) return { key: JSON.stringify([context, ""]), cidr: "", basis: "unassigned", context };
+  if (node.group_basis === "unassigned" && !node.group_cidr) return { key: JSON.stringify(["", ""]), cidr: "", basis: "unassigned", context };
   const address = node.ip || node.address;
   const provided = node.group_cidr ? canonicalCidr(node.group_cidr, address) : null;
   let cidr = provided ?? "", basis: GroupingBasis = provided ? (node.group_basis ?? "address_group") : "unassigned";
@@ -76,7 +76,9 @@ export function getNodeGrouping(node: TopologyNode): { key: string; cidr: string
       cidr = `${formatIp(ip.value >> shift << shift, ip.bits)}/${prefix}`; basis = "address_group";
     }
   }
-  return { key: JSON.stringify([context, cidr]), cidr, basis, context };
+  // Context identifies observations; the canvas groups their display by CIDR.
+  // Node IDs and context metadata stay intact even when address ranges overlap.
+  return { key: JSON.stringify(["", cidr]), cidr, basis, context };
 }
 
 export function compareAddresses(a: string, b: string): number {
@@ -89,11 +91,19 @@ export function groupTopologyNodes(nodes: TopologyNode[]): TopologyGroup[] {
   const groups = new Map<string, TopologyGroup>();
   for (const node of nodes) {
     const group = getNodeGrouping(node), existing = groups.get(group.key);
-    if (existing) { existing.nodes.push(node); if (!existing.bases.includes(group.basis)) existing.bases.push(group.basis); }
-    else groups.set(group.key, { id: group.key, cidr: group.cidr, context: group.context, bases: [group.basis], nodes: [node] });
+    if (existing) {
+      existing.nodes.push(node);
+      if (!existing.bases.includes(group.basis)) existing.bases.push(group.basis);
+      if (!existing.contexts.includes(group.context)) existing.contexts.push(group.context);
+    } else groups.set(group.key, { id: group.key, cidr: group.cidr, context: group.context, contexts: [group.context], bases: [group.basis], nodes: [node] });
   }
-  return [...groups.values()].sort((a, b) => Number(!a.cidr) - Number(!b.cidr) || a.context.localeCompare(b.context) || compareAddresses(a.cidr, b.cidr)).map((group) => ({
-    ...group, bases: group.bases.sort(), nodes: group.nodes.sort((a, b) => compareAddresses(a.ip || a.address, b.ip || b.address) || a.id.localeCompare(b.id)),
+  return [...groups.values()].sort((a, b) => Number(!a.cidr) - Number(!b.cidr) || compareAddresses(a.cidr, b.cidr)
+    || Number(a.cidr.split("/")[1]) - Number(b.cidr.split("/")[1]) || a.cidr.localeCompare(b.cidr, "en")).map((group) => ({
+    ...group,
+    context: group.contexts.length === 1 ? group.contexts[0] : "",
+    contexts: group.contexts.sort((a, b) => a.localeCompare(b, "en")),
+    bases: group.bases.sort(),
+    nodes: group.nodes.sort((a, b) => compareAddresses(a.ip || a.address, b.ip || b.address) || a.id.localeCompare(b.id, "en")),
   }));
 }
 

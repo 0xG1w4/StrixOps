@@ -43,7 +43,7 @@
 .marker_normal { fill: var(--signal-muted); }
 .marker_hot { fill: var(--signal-accent); }
 .marker_pending { fill: var(--signal-warning); }
-.host { position: absolute; z-index: 2; display: flex; flex-direction: column; align-items: center; width: 132px; height: 98px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--signal-text); text-align: center; touch-action: none; }
+.host { position: absolute; z-index: 2; display: flex; flex-direction: column; align-items: center; width: 132px; height: 116px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--signal-text); text-align: center; touch-action: none; }
 .hostIcon { position: relative; display: grid; flex-shrink: 0; place-items: center; width: 50px; height: 50px; margin: 0 auto 8px; border: 1px solid var(--signal-line); border-radius: 12px; background: var(--signal-surface); color: var(--signal-muted); box-shadow: 0 2px 3px color-mix(in srgb, var(--signal-strong) 4%, transparent); }
 .host[data-risk="critical"] .hostIcon, .host[data-risk="high"] .hostIcon { color: var(--signal-danger); }
 .host[data-risk="medium"] .hostIcon { color: var(--signal-warning); }
@@ -52,6 +52,7 @@
 .host[data-dimmed="true"] { opacity: .26; }
 .host > strong { display: block; max-width: 100%; overflow: hidden; color: var(--signal-strong); font: 500 14px/1.45 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
 .host > code { display: block; max-width: 100%; overflow: hidden; color: var(--signal-muted); font: 13px/1.5 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.hostContext { display: block; max-width: 100%; overflow: hidden; color: var(--signal-muted); font: 10px/1.5 var(--font-sans); text-overflow: ellipsis; white-space: nowrap; }
 .riskBadge { position: absolute; right: -6px; top: -6px; display: grid; min-width: 18px; height: 18px; padding-inline: 3px; place-items: center; border: 1px solid var(--signal-surface); border-radius: 5px; background: var(--signal-danger); color: #fff; font: 500 10px/1 var(--font-mono); }
 .host[data-risk="medium"] .riskBadge { background: var(--signal-warning); }
 .host[data-risk="low"] .riskBadge, .host[data-risk="info"] .riskBadge { background: var(--signal-muted); }

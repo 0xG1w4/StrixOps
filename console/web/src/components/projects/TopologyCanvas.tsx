@@ -7,8 +7,8 @@ import { bundleEdges, defaultNodePosition, fitCamera, getNodeGrouping, graphBoun
 import styles from "./TopologyCanvas.module.css";
 
 const COPY = {
-  "zh-CN": { canvas: "交互式网络拓扑", fit: "适应全图", reset: "重新布局", expand: "展开全部", collapse: "收合全部", expandGroup: "展开", collapseGroup: "收合", zoomIn: "放大", zoomOut: "缩小", fullscreen: "全屏画布", exitFullscreen: "退出全屏", minimap: "缩图导航：点击定位；方向键移动视图", drag: "拖动平移 · 滚轮缩放", touch: "拖动平移 · 双指缩放", hosts: "主机", groups: "网络分组", relations: "条主机关联", inside: "条组内关系", matched: "个匹配", none: "没有匹配的主机", unassigned: "未归属", defaultContext: "默认网络环境", recorded_subnet: "已记录网段", scan_range: "扫描范围", address_group: "地址分组", unassignedBasis: "未归属", mixed: "混合分组依据", verified: "已验证关系", unverified: "含未验证关系", credentials: "凭据", vulns: "漏洞", findings: "发现", overview: "缩放以查看主机", keyboard: "方向键平移，+ / − 缩放，0 适应全图", known: "仅显示已记录的主机关联", ports: "展开区块以查看具体主机", stored: "布局保存在此浏览器", danger: "高风险", all: "全部主机" },
-  en: { canvas: "Interactive network topology", fit: "Fit to view", reset: "Reset layout", expand: "Expand all", collapse: "Collapse all", expandGroup: "Expand", collapseGroup: "Collapse", zoomIn: "Zoom in", zoomOut: "Zoom out", fullscreen: "Fullscreen canvas", exitFullscreen: "Exit fullscreen", minimap: "Minimap: click to navigate; arrow keys move the view", drag: "Drag to pan · Scroll to zoom", touch: "Drag to pan · Pinch to zoom", hosts: "hosts", groups: "network groups", relations: "host relationships", inside: "internal relationships", matched: "matches", none: "No matching hosts", unassigned: "Unassigned", defaultContext: "Default network context", recorded_subnet: "Recorded subnet", scan_range: "Scan range", address_group: "Address group", unassignedBasis: "Unassigned", mixed: "Mixed grouping evidence", verified: "Verified relationship", unverified: "Includes unverified relationships", credentials: "Credentials", vulns: "Vulnerabilities", findings: "Findings", overview: "Zoom in to see hosts", keyboard: "Arrow keys to pan, + / − to zoom, 0 to fit", known: "Only recorded host relationships are shown", ports: "Expand groups to inspect individual hosts", stored: "Layout saved in this browser", danger: "High risk", all: "All hosts" },
+  "zh-CN": { canvas: "交互式网络拓扑", fit: "适应全图", reset: "重新布局", expand: "展开全部", collapse: "收合全部", expandGroup: "展开", collapseGroup: "收合", zoomIn: "放大", zoomOut: "缩小", fullscreen: "全屏画布", exitFullscreen: "退出全屏", minimap: "缩图导航：点击定位；方向键移动视图", drag: "拖动平移 · 滚轮缩放", touch: "拖动平移 · 双指缩放", hosts: "主机", groups: "网络分组", relations: "条主机关联", inside: "条组内关系", matched: "个匹配", none: "没有匹配的主机", unassigned: "未归属", defaultContext: "未指定网络环境", recorded_subnet: "已记录网段", scan_range: "扫描范围", address_group: "地址分组", unassignedBasis: "未归属", mixed: "混合分组依据", verified: "已验证关系", unverified: "含未验证关系", credentials: "凭据", vulns: "漏洞", findings: "发现", overview: "缩放以查看主机", keyboard: "方向键平移，+ / − 缩放，0 适应全图", known: "仅显示已记录的主机关联", ports: "展开区块以查看具体主机", stored: "布局保存在此浏览器", danger: "高风险", all: "全部主机" },
+  en: { canvas: "Interactive network topology", fit: "Fit to view", reset: "Reset layout", expand: "Expand all", collapse: "Collapse all", expandGroup: "Expand", collapseGroup: "Collapse", zoomIn: "Zoom in", zoomOut: "Zoom out", fullscreen: "Fullscreen canvas", exitFullscreen: "Exit fullscreen", minimap: "Minimap: click to navigate; arrow keys move the view", drag: "Drag to pan · Scroll to zoom", touch: "Drag to pan · Pinch to zoom", hosts: "hosts", groups: "network groups", relations: "host relationships", inside: "internal relationships", matched: "matches", none: "No matching hosts", unassigned: "Unassigned", defaultContext: "Network context unspecified", recorded_subnet: "Recorded subnet", scan_range: "Scan range", address_group: "Address group", unassignedBasis: "Unassigned", mixed: "Mixed grouping evidence", verified: "Verified relationship", unverified: "Includes unverified relationships", credentials: "Credentials", vulns: "Vulnerabilities", findings: "Findings", overview: "Zoom in to see hosts", keyboard: "Arrow keys to pan, + / − to zoom, 0 to fit", known: "Only recorded host relationships are shown", ports: "Expand groups to inspect individual hosts", stored: "Layout saved in this browser", danger: "High risk", all: "All hosts" },
 } as const;
 
 type Props = {
@@ -151,16 +151,30 @@ export default function TopologyCanvas({ projectId, nodes, edges, locale, select
     if (!size.width || initialized.current === storageKey) return;
     initialized.current = storageKey;
     const saved = readView(storageKey), expandedLayout = placeGroups(groups, new Set(), {}, size.width < 600);
+    const savedGroups = { ...saved?.positions.groups }, savedCollapsed = new Set(saved?.collapsed);
+    let regrouped = false;
+    for (const group of groups) {
+      const previousIds = group.contexts.map((context) => JSON.stringify([context, group.cidr]))
+        .filter((id) => id !== group.id && savedGroups[id]);
+      if (!previousIds.length) continue;
+      regrouped = true;
+      const previous = savedGroups[group.id] ? [group.id, ...previousIds] : previousIds;
+      // Preserve one prior anchor, then resolve combined node positions below.
+      // Keep a combined group open if any of its former groups was open.
+      savedGroups[group.id] ??= savedGroups[previous[0]];
+      if (previous.every((id) => savedCollapsed.has(id))) savedCollapsed.add(group.id);
+      else savedCollapsed.delete(group.id);
+    }
     const expandedFit = fitCamera(graphBounds(expandedLayout), size.width, size.height);
-    const initialCollapsed = saved ? new Set(saved.collapsed) : new Set(groups.filter((group) => size.width < 600 || expandedFit.zoom < .6 || nodes.length > 150 || group.nodes.length > 60).map((group) => group.id));
-    const layout = settleGroupOverlaps(placeGroups(groups, initialCollapsed, saved?.positions.groups ?? {}, size.width < 600));
+    const initialCollapsed = saved ? new Set(groups.filter((group) => savedCollapsed.has(group.id)).map((group) => group.id)) : new Set(groups.filter((group) => size.width < 600 || expandedFit.zoom < .6 || nodes.length > 150 || group.nodes.length > 60).map((group) => group.id));
+    const layout = settleGroupOverlaps(placeGroups(groups, initialCollapsed, savedGroups, size.width < 600));
     setCollapsed(initialCollapsed); setPositions({ groups: Object.fromEntries(layout.map((group) => [group.id, { x: group.x, y: group.y }])), nodes: retainNodePositions(groups, saved?.positions.nodes ?? {}) });
     const bounds = graphBounds(layout), initialCamera = fitCamera(bounds, size.width, size.height);
-    if (!saved && initialCamera.zoom < .65) {
+    if ((!saved || regrouped) && initialCamera.zoom < .65) {
       initialCamera.zoom = Math.min(.8, (size.width - 32) / 360);
       initialCamera.x = 16 - bounds.x * initialCamera.zoom; initialCamera.y = 52 - bounds.y * initialCamera.zoom;
     }
-    setCamera(saved?.camera ?? initialCamera); setReady(true);
+    setCamera(saved && !regrouped ? saved.camera : initialCamera); setReady(true);
   }, [storageKey, size, groups, nodes.length]);
   React.useEffect(() => {
     if (!ready || initialized.current !== storageKey) return;
@@ -321,9 +335,10 @@ export default function TopologyCanvas({ projectId, nodes, edges, locale, select
       <div className={styles.world} style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`, visibility: ready ? "visible" : "hidden" }}>
         {placed.filter((group) => intersects(group, viewport)).map((group) => {
           const closed = collapsed.has(group.id), dim = focusIds && !group.nodes.some((node) => focusIds.has(node.id));
-          return <section key={group.id} className={styles.group} data-topology-group={group.id} data-cidr={group.cidr} data-collapsed={closed} data-basis={group.bases.length === 1 ? group.bases[0] : "mixed"} data-dimmed={dim || undefined} style={{ left: group.x, top: group.y, width: group.width, height: group.height }} aria-label={`${group.cidr || copy.unassigned} · ${group.nodes.length} ${copy.hosts}`}>
+          const contexts = group.contexts.map((context) => context || copy.defaultContext).join(" / ");
+          return <section key={group.id} className={styles.group} data-topology-group={group.id} data-cidr={group.cidr} data-context-count={group.contexts.length} data-collapsed={closed} data-basis={group.bases.length === 1 ? group.bases[0] : "mixed"} data-dimmed={dim || undefined} style={{ left: group.x, top: group.y, width: group.width, height: group.height }} aria-label={`${group.cidr || copy.unassigned} · ${group.nodes.length} ${copy.hosts} · ${contexts}`}>
             <div className={styles.groupHead} data-group-drag={group.id}>
-              <Grip size={14} aria-hidden /><div><strong title={group.cidr || copy.unassigned}>{group.cidr || copy.unassigned}</strong><span title={group.context || copy.defaultContext}>{group.context || copy.defaultContext}</span></div>
+              <Grip size={14} aria-hidden /><div><strong title={group.cidr || copy.unassigned}>{group.cidr || copy.unassigned}</strong><span title={contexts}>{contexts}</span></div>
               <button type="button" data-canvas-control data-toggle-group={group.id} onClick={() => toggleGroup(group)} aria-label={`${closed ? copy.expandGroup : copy.collapseGroup} ${group.cidr || copy.unassigned}`} aria-expanded={!closed}>{closed ? <ChevronDown size={17} /> : <ChevronUp size={17} />}</button>
             </div>
             <div className={styles.groupMeta}><span title={group.bases.map(basisLabel).join(" / ")}>{group.bases.length === 1 ? basisLabel(group.bases[0]) : copy.mixed}</span><span>{group.nodes.length} {copy.hosts}</span></div>
@@ -345,9 +360,11 @@ export default function TopologyCanvas({ projectId, nodes, edges, locale, select
         </svg>
         {!overview && placed.filter((group) => !collapsed.has(group.id)).flatMap((group) => group.nodes.filter((node) => intersects(nodeRects.get(node.id)!, viewport) || node.id === selectedId).map((node) => {
           const rect = nodeRects.get(node.id)!, risk = node.severity.toLowerCase(), isServer = !/workstation|desktop|laptop/i.test(node.role), HostIcon = isServer ? Server : Monitor;
-          return <button type="button" key={node.id} className={styles.host} data-topology-node={node.id} data-risk={risk} data-dimmed={!!focusIds && !focusIds.has(node.id) || undefined} data-neighbor={!!selectedId && selectedId !== node.id && focusIds?.has(node.id) || undefined} aria-pressed={selectedId === node.id} aria-label={`${node.hostname || node.ip || node.address} · ${node.ip || node.address} · ${node.vulnerabilities.length} ${copy.vulns} · ${node.findings.length} ${copy.findings} · ${node.credentials.length} ${copy.credentials}`} style={{ left: rect.x, top: rect.y }} onClick={(event) => { if (!suppressClick.current) { setHovered(null); onSelect(node, event.currentTarget); } }} onPointerEnter={() => { if (!dragging) setHovered(node.id); }} onPointerLeave={() => setHovered(null)} onFocus={() => setHovered(node.id)} onBlur={() => setHovered(null)}>
+          const context = getNodeGrouping(node).context || copy.defaultContext;
+          return <button type="button" key={node.id} className={styles.host} data-topology-node={node.id} data-risk={risk} data-dimmed={!!focusIds && !focusIds.has(node.id) || undefined} data-neighbor={!!selectedId && selectedId !== node.id && focusIds?.has(node.id) || undefined} aria-pressed={selectedId === node.id} aria-label={`${node.hostname || node.ip || node.address} · ${node.ip || node.address} · ${context} · ${node.vulnerabilities.length} ${copy.vulns} · ${node.findings.length} ${copy.findings} · ${node.credentials.length} ${copy.credentials}`} style={{ left: rect.x, top: rect.y }} onClick={(event) => { if (!suppressClick.current) { setHovered(null); onSelect(node, event.currentTarget); } }} onPointerEnter={() => { if (!dragging) setHovered(node.id); }} onPointerLeave={() => setHovered(null)} onFocus={() => setHovered(node.id)} onBlur={() => setHovered(null)}>
             <span className={styles.hostIcon}><HostIcon size={25} aria-hidden />{node.vulnerabilities.length > 0 && <span className={styles.riskBadge}>{node.vulnerabilities.length}</span>}{node.credentials.length > 0 && <span className={styles.keyBadge}><KeyRound size={12} aria-hidden /></span>}<i data-reachable={node.status === "reachable"} /></span>
             <strong>{node.hostname || node.ip || node.address}</strong><code>{node.ip || node.address}</code>
+            {group.contexts.length > 1 && <small className={styles.hostContext} title={context}>{context}</small>}
           </button>;
         }))}
       </div>
@@ -360,7 +377,7 @@ export default function TopologyCanvas({ projectId, nodes, edges, locale, select
         {bundles.map((bundle) => { const source = groupMap.get(groupForNode.get(bundle.edges[0].source)!)!, target = groupMap.get(groupForNode.get(bundle.edges[0].target)!)!; if (source.id === target.id) return null; return <path key={bundle.id} className={styles.miniEdge} d={`M${(source.x + source.width / 2) * miniScale + miniX},${(source.y + source.height / 2) * miniScale + miniY} L${(target.x + target.width / 2) * miniScale + miniX},${(target.y + target.height / 2) * miniScale + miniY}`} />; })}
         <rect className={styles.miniCamera} x={-camera.x / camera.zoom * miniScale + miniX} y={-camera.y / camera.zoom * miniScale + miniY} width={size.width / camera.zoom * miniScale} height={size.height / camera.zoom * miniScale} />
       </svg>
-      {hoverNode && hoverRect && !dragging && <div className={styles.tooltip} role="tooltip" style={{ left: clamp((hoverRect.x + HOST_WIDTH / 2) * camera.zoom + camera.x, 120, Math.max(120, size.width - 120)), top: clamp(hoverRect.y * camera.zoom + camera.y - 12, 118, size.height - 95) }}><strong>{hoverNode.hostname || hoverNode.address}</strong><code>{hoverNode.ip || hoverNode.address}</code><span><ShieldAlert size={12} />{hoverNode.vulnerabilities.length} {copy.vulns} · {hoverNode.findings.length} {copy.findings}</span><span><KeyRound size={12} />{hoverNode.credentials.length} {copy.credentials}</span></div>}
+      {hoverNode && hoverRect && !dragging && <div className={styles.tooltip} role="tooltip" style={{ left: clamp((hoverRect.x + HOST_WIDTH / 2) * camera.zoom + camera.x, 120, Math.max(120, size.width - 120)), top: clamp(hoverRect.y * camera.zoom + camera.y - 12, 118, size.height - 95) }}><strong>{hoverNode.hostname || hoverNode.address}</strong><code>{hoverNode.ip || hoverNode.address}</code><span>{getNodeGrouping(hoverNode).context || copy.defaultContext}</span><span><ShieldAlert size={12} />{hoverNode.vulnerabilities.length} {copy.vulns} · {hoverNode.findings.length} {copy.findings}</span><span><KeyRound size={12} />{hoverNode.credentials.length} {copy.credentials}</span></div>}
     </div>
     <div className={styles.footer}><span><i className={styles.solid} />{copy.verified}</span><span><i className={styles.dashed} />{copy.unverified}</span><span className={styles.hint}>{copy.drag}</span><span className={styles.touchHint}>{copy.touch}</span></div>
   </div>;

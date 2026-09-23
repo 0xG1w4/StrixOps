@@ -23,7 +23,7 @@ const COPY = {
     hosts: "主机", subnets: "网络分组", relations: "关系", tasks: "内网任务", withCredentials: "含凭据的主机",
     search: "搜索主机名称、IP、网段或网络环境", allGroups: "全部网络分组", unknownSubnet: "未归属", unknownContext: "未指定网络环境",
     allRisk: "全部风险", highRisk: "高风险", credentialsOnly: "有凭据", filters: "高亮主机", noMatch: "没有匹配的主机，仍保留完整拓扑。", reset: "清除高亮",
-    observed: "已识别", reachable: "已确认可达", unnamed: "未记录主机名称", membership: "地址分组与扫描范围不等于已确认网段；连线来自主机关系记录",
+    observed: "已识别", reachable: "已确认可达", unnamed: "未记录主机名称", membership: "按 CIDR 汇总显示，不同环境的主机记录保持独立。地址分组与扫描范围不等于已确认网段；连线来自主机关系记录。",
     verified: "已记录验证", unverified: "未验证关系", edgeHint: "验证状态来自任务记录；查看来源证据确认细节。",
     matched: "匹配主机", fullscreen: "全屏画布", exitFullscreen: "退出全屏", groupBasis: "分组依据", groupCidr: "CIDR 分组",
     recorded_subnet: "已记录网段", scan_range: "扫描范围", address_group: "地址分组", unassigned: "未归属", mixed: "多种分组依据",
@@ -53,7 +53,7 @@ const COPY = {
     hosts: "Hosts", subnets: "Network groups", relations: "Relationships", tasks: "Internal tasks", withCredentials: "Hosts with credentials",
     search: "Search hostname, IP, subnet, or network context", allGroups: "All network groups", unknownSubnet: "Unassigned", unknownContext: "Network context unspecified",
     allRisk: "All risk levels", highRisk: "High risk", credentialsOnly: "With credentials", filters: "Highlight hosts", noMatch: "No matching hosts. The full topology remains visible.", reset: "Clear highlights",
-    observed: "Identified", reachable: "Reachability confirmed", unnamed: "Hostname not recorded", membership: "Address groups and scan ranges are not confirmed subnets; edges reflect recorded host relationships",
+    observed: "Identified", reachable: "Reachability confirmed", unnamed: "Hostname not recorded", membership: "Grouped by CIDR; host records from different contexts remain separate. Address groups and scan ranges are not confirmed subnets; edges reflect recorded host relationships.",
     verified: "Recorded as verified", unverified: "Unverified relationship", edgeHint: "Verification comes from task records. Inspect source evidence for details.",
     matched: "Matching hosts", fullscreen: "Fullscreen canvas", exitFullscreen: "Exit fullscreen", groupBasis: "Group basis", groupCidr: "CIDR group",
     recorded_subnet: "Recorded subnet", scan_range: "Scan range", address_group: "Address group", unassigned: "Unassigned", mixed: "Multiple grouping sources",
@@ -293,7 +293,7 @@ export default function ProjectTopology({ projectId }: { projectId: string }) {
           : <>
             <div className={styles.toolbar} role="group" aria-label={copy.filters}>
               <label className={styles.search}><Search size={15} aria-hidden="true" /><input ref={searchInput} type="search" aria-label={copy.search} placeholder={copy.search} value={query} onChange={event => setQuery(event.target.value)} /></label>
-              <select aria-label={copy.subnets} value={group} onChange={event => setGroup(event.target.value)}><option value="">{copy.allGroups}</option>{groups.map(entry => <option key={entry.id} value={entry.id}>{entry.cidr || copy.unknownSubnet}{entry.context ? ` · ${entry.context}` : ""} ({entry.nodes.length})</option>)}</select>
+              <select aria-label={copy.subnets} value={group} onChange={event => setGroup(event.target.value)}><option value="">{copy.allGroups}</option>{groups.map(entry => <option key={entry.id} value={entry.id}>{entry.cidr || copy.unknownSubnet} ({entry.nodes.length})</option>)}</select>
               <select aria-label={copy.allRisk} value={risk} onChange={event => setRisk(event.target.value)}><option value="all">{copy.allRisk}</option><option value="high">{copy.highRisk}</option></select>
               <button type="button" className={styles.filter} aria-pressed={credentialOnly} onClick={() => setCredentialOnly(!credentialOnly)}><KeyRound size={14} aria-hidden="true" />{copy.credentialsOnly}</button>
             </div>
@@ -336,7 +336,7 @@ function HostDetails({ node, snapshot, projectId, locale, copy, onSelect, onClos
         {node.group_conflict && <p className={styles.note}>{copy.subnetConflict}</p>}
         <dl className={styles.properties}>{[[copy.groupCidr, grouping.cidr || copy.unknownSubnet], [copy.groupBasis, basisLabel(grouping.basis, copy)], [copy.context, grouping.context || copy.unknownContext], [copy.os, node.os], [copy.role, node.role], [copy.firstSeen, timestamp(node.first_seen, locale)], [copy.lastSeen, timestamp(node.last_seen, locale)]].filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
         <h3 className={styles.sectionTitle}>{copy.related} · {edges.length}</h3>
-        {edges.length ? edges.map(edge => { const other = nodeIndex.get(edge.source === node.id ? edge.target : edge.source); return <div className={styles.relatedRow} key={edge.id}><span>{edge.source === node.id ? <ArrowRight size={14} /> : <ArrowRight size={14} className={styles.incoming} />}</span><button type="button" className={styles.textButton} disabled={!other} onClick={() => other && onSelect(other.id)}>{other ? nodeName(other) : copy.unknown}<small>{other?.ip || other?.address}</small></button><span>{relationLabel(edge.relation_type, locale)}</span></div>; }) : <p className={styles.note}>{copy.noRelations}</p>}
+        {edges.length ? edges.map(edge => { const other = nodeIndex.get(edge.source === node.id ? edge.target : edge.source); return <div className={styles.relatedRow} key={edge.id}><span>{edge.source === node.id ? <ArrowRight size={14} /> : <ArrowRight size={14} className={styles.incoming} />}</span><button type="button" className={styles.textButton} disabled={!other} onClick={() => other && onSelect(other.id)}>{other ? nodeName(other) : copy.unknown}<small>{other?.ip || other?.address}</small>{other && <small>{getNodeGrouping(other).context || copy.unknownContext}</small>}</button><span>{relationLabel(edge.relation_type, locale)}</span></div>; }) : <p className={styles.note}>{copy.noRelations}</p>}
       </>}
       {(tab === "vulnerabilities" || tab === "findings") && <RecordList records={node[tab]} empty={tab === "vulnerabilities" ? copy.noVulns : copy.noFindings} sourceKind={tab === "vulnerabilities" ? copy.vulnerabilityRecord : copy.findingRecord} copy={copy} />}
       {tab === "credentials" && <><p className={styles.note}>{copy.secretHint}</p>{node.credentials.length ? node.credentials.map(credential => <Credential key={`${credential.source_run}:${credential.id}`} credential={credential} projectId={projectId} nodeId={node.id} version={snapshot.version} copy={copy} />) : <p className={styles.note}>{copy.noCredentials}</p>}</>}
@@ -352,7 +352,7 @@ function HostDetails({ node, snapshot, projectId, locale, copy, onSelect, onClos
 function RelationshipRecord({ edge, nodes, locale, copy, onSelect }: { edge: TopologyEdge; nodes: Map<string, TopologyNode>; locale: string; copy: Copy; onSelect: (id: string) => void }) {
   return <article className={styles.record}>
     <div className={styles.recordHeader}><span className={styles.relationship} data-verified={edge.verified}>{edge.verified ? <Check size={13} /> : <CircleAlert size={13} />}{edge.verified ? copy.verified : copy.unverified}</span><code>{relationLabel(edge.relation_type, locale)}</code></div>
-    <div className={styles.edgeEndpoints}>{[[copy.from, edge.source], [copy.to, edge.target]].map(([label, id]) => { const node = nodes.get(id); return <div key={label}><small>{label}</small><button type="button" className={styles.textButton} disabled={!node} onClick={() => node && onSelect(node.id)}>{node ? nodeName(node) : id}<small>{node?.ip || node?.address}</small></button></div>; })}</div>
+    <div className={styles.edgeEndpoints}>{[[copy.from, edge.source], [copy.to, edge.target]].map(([label, id]) => { const node = nodes.get(id); return <div key={label}><small>{label}</small><button type="button" className={styles.textButton} disabled={!node} onClick={() => node && onSelect(node.id)}>{node ? nodeName(node) : id}<small>{node?.ip || node?.address}</small>{node && <small>{getNodeGrouping(node).context || copy.unknownContext}</small>}</button></div>; })}</div>
     <p>{edge.evidence || copy.noSources}</p><SourceNote name={edge.source_run} kind={copy.relationshipRecord} copy={copy} />
   </article>;
 }
