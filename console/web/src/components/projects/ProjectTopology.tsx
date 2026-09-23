@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { ArrowRight, Check, CircleAlert, Eye, EyeOff, KeyRound, Maximize2, Minimize2, Network, RefreshCw, Search, Server, X } from "lucide-react";
 import { Spinner } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
@@ -34,7 +33,8 @@ const COPY = {
     details: "主机详情", close: "关闭详情", vulnerabilities: "漏洞", findings: "发现", credentials: "凭据", sources: "来源与关系",
     noVulns: "此主机没有关联的漏洞记录。", noFindings: "此主机没有关联的发现记录。", noCredentials: "此主机没有明确关联的凭据。",
     noSources: "未记录来源证据。", noRelations: "此主机尚无主机间关系记录。", context: "网络环境", subnet: "网段", role: "角色", os: "操作系统",
-    firstSeen: "首次发现", lastSeen: "最近发现", backfilled: "从历史资料回补", related: "关联主机", evidence: "来源证据", openTask: "打开来源任务",
+    firstSeen: "首次发现", lastSeen: "最近发现", backfilled: "从历史资料回补", related: "关联主机", evidence: "来源证据", sourceTask: "来源任务",
+    sourceContent: "来源内容", hostRecord: "主机发现记录", vulnerabilityRecord: "漏洞记录", findingRecord: "内网发现记录", credentialRecord: "凭据记录", relationshipRecord: "主机关联记录", evidenceRecord: "任务证据记录", validationEvidence: "验证依据",
     username: "账号", password: "密码", emptyPassword: "空密码", hash: "哈希", validation: "验证状态", show: "显示秘密", hide: "隐藏秘密", revealing: "正在读取…",
     revealFailed: "无法读取凭据。来源可能已更改，请检查更新并重新生成。", noSecret: "没有可显示的密码或哈希。", secretHint: "仅在点击显示时读取当前来源的秘密；关闭详情后会清除。",
     unknown: "未记录", confirmed: "已验证", untested: "未验证", invalid: "无效", failed: "验证失败", valid: "有效", partialStatus: "部分验证", source: "来源", agent: "Agent",
@@ -63,7 +63,8 @@ const COPY = {
     details: "Host details", close: "Close details", vulnerabilities: "Vulnerabilities", findings: "Findings", credentials: "Credentials", sources: "Sources & relationships",
     noVulns: "No vulnerability records are linked to this host.", noFindings: "No finding records are linked to this host.", noCredentials: "No credentials are explicitly linked to this host.",
     noSources: "No source evidence recorded.", noRelations: "No host-to-host relationships recorded for this host.", context: "Network context", subnet: "Subnet", role: "Role", os: "Operating system",
-    firstSeen: "First seen", lastSeen: "Last seen", backfilled: "Recovered from historical records", related: "Related hosts", evidence: "Source evidence", openTask: "Open source task",
+    firstSeen: "First seen", lastSeen: "Last seen", backfilled: "Recovered from historical records", related: "Related hosts", evidence: "Source evidence", sourceTask: "Source task",
+    sourceContent: "Source content", hostRecord: "Host discovery record", vulnerabilityRecord: "Vulnerability record", findingRecord: "Internal finding", credentialRecord: "Credential record", relationshipRecord: "Host relationship record", evidenceRecord: "Task evidence", validationEvidence: "Validation evidence",
     username: "Username", password: "Password", emptyPassword: "Empty password", hash: "Hash", validation: "Validation", show: "Show secrets", hide: "Hide secrets", revealing: "Retrieving…",
     revealFailed: "Could not read this credential. Its source may have changed. Check for updates and regenerate.", noSecret: "No password or hash is available.", secretHint: "Secrets are read from the current source only when revealed, and cleared when details close.",
     unknown: "Not recorded", confirmed: "Verified", untested: "Unverified", invalid: "Invalid", failed: "Validation failed", valid: "Valid", partialStatus: "Partially verified", source: "Source", agent: "Agent",
@@ -78,7 +79,6 @@ const EMPTY_NODES: TopologyNode[] = [];
 const EMPTY_EDGES: TopologyEdge[] = [];
 const nodeName = (node: TopologyNode) => node.hostname || node.ip || node.address;
 const field = (record: TopologyRecord, name: string) => typeof record[name] === "string" ? record[name] as string : "";
-const taskHref = (name: string) => `/run?name=${encodeURIComponent(name)}`;
 function timestamp(value: string, locale: string): string {
   const date = new Date(value);
   return value && Number.isFinite(date.getTime()) ? date.toLocaleString(locale) : "—";
@@ -116,6 +116,18 @@ function relationLabel(value: string, locale: string) {
     reachable_from: ["访问路径", "Reachability"], observed_from: ["发现路径", "Discovery path"],
   };
   return labels[value]?.[locale === "zh-CN" ? 0 : 1] ?? value;
+}
+
+function sourceLabel(value: string, copy: Copy): string {
+  const source = value.trim();
+  if (/^(?:vuln(?:erabilit(?:y|ies))?)(?:[:/._-]|$)/i.test(source)) return copy.vulnerabilityRecord;
+  if (/^(?:internal[_ -]?findings?|findings?)(?:[:/._-]|$)/i.test(source)) return copy.findingRecord;
+  if (/^credentials?(?:[:/._-]|$)/i.test(source)) return copy.credentialRecord;
+  if (/^(?:host[_ -]?inventory|inventory|record_hosts?|host[_ -]?(?:discovered|observed|observation))(?:[:/._-]|$)/i.test(source)) return copy.hostRecord;
+  if (/^(?:record_host_relation|host[_ -]?relation(?:ship)?)(?:[:/._-]|$)/i.test(source)) return copy.relationshipRecord;
+  // File paths and source identifiers are provenance, not useful document titles.
+  if (!source || /[/\\]|\.(?:md|jsonl?|csv|xml|txt|log|ya?ml|nmap|gnmap|pcap(?:ng)?|pdf|html?|sqlite|db|zip|dat|bin)(?:[?#:].*)?$|(?:^|\s)(?:run\?|https?:)|^[a-z0-9]+(?:_[a-z0-9]+)+$/i.test(source)) return copy.evidenceRecord;
+  return source;
 }
 
 export default function ProjectTopology({ projectId }: { projectId: string }) {
@@ -267,7 +279,7 @@ export default function ProjectTopology({ projectId }: { projectId: string }) {
     {data?.source_status === "missing" && (data.eligible_runs > 0 || snapshot) && <div className={styles.notice}>{copy.missing}</div>}
     {(data?.source_status === "partial" || snapshot?.partial) && <div className={styles.notice}><CircleAlert size={14} aria-hidden="true" />{copy.partial}</div>}
     {!!data?.warnings.length && <details className={styles.warnings}><summary>{copy.warnings} · {data.warnings.length}</summary><ul>{data.warnings.map((warning, index) => <li key={`${warning.code}:${warning.run}:${index}`}>
-      <span>{warningLabel(warning.code, locale, copy.sourceWarning)}</span>{warning.run && <Link href={taskHref(warning.run)}>{warning.run}</Link>}
+      <span>{warningLabel(warning.code, locale, copy.sourceWarning)}</span>{warning.run && <span className={styles.warningSource}>{copy.sourceTask} · {warning.run}</span>}
     </li>)}</ul></details>}
     {snapshot && !snapshot.grouping_version && nodes.length > 0 && <p className={styles.upgradeNote}>{copy.groupUpgrade}</p>}
     {!data && busy && <div className={styles.empty} role="status"><Spinner /><p>{copy.loading}</p></div>}
@@ -326,12 +338,12 @@ function HostDetails({ node, snapshot, projectId, locale, copy, onSelect, onClos
         <h3 className={styles.sectionTitle}>{copy.related} · {edges.length}</h3>
         {edges.length ? edges.map(edge => { const other = nodeIndex.get(edge.source === node.id ? edge.target : edge.source); return <div className={styles.relatedRow} key={edge.id}><span>{edge.source === node.id ? <ArrowRight size={14} /> : <ArrowRight size={14} className={styles.incoming} />}</span><button type="button" className={styles.textButton} disabled={!other} onClick={() => other && onSelect(other.id)}>{other ? nodeName(other) : copy.unknown}<small>{other?.ip || other?.address}</small></button><span>{relationLabel(edge.relation_type, locale)}</span></div>; }) : <p className={styles.note}>{copy.noRelations}</p>}
       </>}
-      {(tab === "vulnerabilities" || tab === "findings") && <RecordList records={node[tab]} empty={tab === "vulnerabilities" ? copy.noVulns : copy.noFindings} copy={copy} />}
+      {(tab === "vulnerabilities" || tab === "findings") && <RecordList records={node[tab]} empty={tab === "vulnerabilities" ? copy.noVulns : copy.noFindings} sourceKind={tab === "vulnerabilities" ? copy.vulnerabilityRecord : copy.findingRecord} copy={copy} />}
       {tab === "credentials" && <><p className={styles.note}>{copy.secretHint}</p>{node.credentials.length ? node.credentials.map(credential => <Credential key={`${credential.source_run}:${credential.id}`} credential={credential} projectId={projectId} nodeId={node.id} version={snapshot.version} copy={copy} />) : <p className={styles.note}>{copy.noCredentials}</p>}</>}
       {tab === "sources" && <>
         <h3 className={styles.sectionTitle}>{copy.related} · {edges.length}</h3><p className={styles.note}>{copy.edgeHint}</p>
         {edges.length ? edges.map(edge => <RelationshipRecord key={edge.id} edge={edge} nodes={nodeIndex} locale={locale} copy={copy} onSelect={onSelect} />) : <p className={styles.note}>{copy.noRelations}</p>}
-        <h3 className={styles.sectionTitle}>{copy.evidence} · {node.sources.length}</h3>{node.sources.length ? node.sources.map((source, index) => <article className={styles.record} key={`${source.run}:${source.source}:${index}`}><div className={styles.recordHeader}><code>{source.source || copy.unknown}</code>{source.observed_at && <time>{timestamp(source.observed_at, locale)}</time>}</div><p>{source.evidence || copy.noSources}</p>{source.agent_id && <p className={styles.note}>{copy.agent} · {source.agent_id}</p>}{source.run && <SourceLink name={source.run} copy={copy} />}</article>) : <p className={styles.note}>{copy.noSources}</p>}
+        <h3 className={styles.sectionTitle}>{copy.evidence} · {node.sources.length}</h3>{node.sources.length ? node.sources.map((source, index) => <article className={styles.record} key={`${source.run}:${source.source}:${index}`}><div className={styles.recordHeader}><span>{sourceLabel(source.source, copy)}</span>{source.observed_at && <time>{timestamp(source.observed_at, locale)}</time>}</div><p>{source.evidence || copy.noSources}</p>{source.agent_id && <p className={styles.note}>{copy.agent} · {source.agent_id}</p>}{source.run && <SourceNote name={source.run} copy={copy} />}</article>) : <p className={styles.note}>{copy.noSources}</p>}
       </>}
     </div>
   </>;
@@ -341,7 +353,7 @@ function RelationshipRecord({ edge, nodes, locale, copy, onSelect }: { edge: Top
   return <article className={styles.record}>
     <div className={styles.recordHeader}><span className={styles.relationship} data-verified={edge.verified}>{edge.verified ? <Check size={13} /> : <CircleAlert size={13} />}{edge.verified ? copy.verified : copy.unverified}</span><code>{relationLabel(edge.relation_type, locale)}</code></div>
     <div className={styles.edgeEndpoints}>{[[copy.from, edge.source], [copy.to, edge.target]].map(([label, id]) => { const node = nodes.get(id); return <div key={label}><small>{label}</small><button type="button" className={styles.textButton} disabled={!node} onClick={() => node && onSelect(node.id)}>{node ? nodeName(node) : id}<small>{node?.ip || node?.address}</small></button></div>; })}</div>
-    <p>{edge.evidence || copy.noSources}</p>{edge.source_run && <SourceLink name={edge.source_run} copy={copy} />}
+    <p>{edge.evidence || copy.noSources}</p><SourceNote name={edge.source_run} kind={copy.relationshipRecord} copy={copy} />
   </article>;
 }
 
@@ -349,17 +361,20 @@ function RelationshipDetails({ edges, nodes, locale, copy, onSelect, onClose }: 
   return <><header className={styles.drawerHeader}><div><span className={styles.kicker}>{copy.relationshipDetails}</span><h3 className={styles.drawerTitle}>{copy.relationships} · {edges.length}</h3></div><button type="button" className={styles.iconButton} aria-label={copy.close} onClick={onClose}><X size={18} /></button></header><div className={styles.drawerBody}><p className={styles.note}>{copy.relationBundleHint}</p>{edges.map(edge => <RelationshipRecord key={edge.id} edge={edge} nodes={nodes} locale={locale} copy={copy} onSelect={onSelect} />)}</div></>;
 }
 
-function SourceLink({ name, copy }: { name: string; copy: Copy }) {
-  return <Link className={styles.sourceLink} href={taskHref(name)} title={copy.openTask}><ArrowRight size={13} aria-hidden="true" /><span>{name}</span></Link>;
+function SourceNote({ name, kind, copy }: { name: string; kind?: string; copy: Copy }) {
+  return <dl className={styles.sourceNote}>
+    {kind && <div><dt>{copy.sourceContent}</dt><dd>{kind}</dd></div>}
+    {name && <div><dt>{copy.sourceTask}</dt><dd>{name}</dd></div>}
+  </dl>;
 }
 
-function RecordList({ records, empty, copy }: { records: TopologyRecord[]; empty: string; copy: Copy }) {
+function RecordList({ records, empty, sourceKind, copy }: { records: TopologyRecord[]; empty: string; sourceKind: string; copy: Copy }) {
   if (!records.length) return <p className={styles.note}>{empty}</p>;
   return <>{records.map((record, index) => <article className={styles.record} key={`${field(record, "source_run")}:${field(record, "id")}:${index}`}>
     <div className={styles.recordHeader}><RiskBadge severity={field(record, "severity") || "info"} copy={copy} /><code>{field(record, "id")}</code></div>
     <h3>{field(record, "title") || field(record, "id") || copy.unknown}</h3>
     {(field(record, "description") || field(record, "content")) && <p>{field(record, "description") || field(record, "content")}</p>}
-    {field(record, "source_run") && <SourceLink name={field(record, "source_run")} copy={copy} />}
+    <SourceNote name={field(record, "source_run")} kind={sourceKind} copy={copy} />
   </article>)}</>;
 }
 
@@ -388,9 +403,9 @@ function Credential({ credential, projectId, nodeId, version, copy }: { credenti
       {credential.has_password && <div><dt>{copy.password}</dt><dd className={styles.secret}>{secret ? secret.password === "" ? copy.emptyPassword : secret.password : "••••••••"}</dd></div>}
       {credential.has_hash && <div><dt>{copy.hash}</dt><dd className={styles.secret}>{secret ? secret.hash || "—" : "••••••••"}</dd></div>}
     </dl>
-    {credential.validation_evidence && <p>{credential.validation_evidence}</p>}
+    {credential.validation_evidence && <div className={styles.validationEvidence}><span>{copy.validationEvidence}</span><p>{credential.validation_evidence}</p></div>}
     {credential.has_password || credential.has_hash ? <button type="button" className={styles.secondary} disabled={loading} aria-pressed={!!secret} onClick={() => void reveal()}>{loading ? <Spinner /> : secret ? <EyeOff size={14} /> : <Eye size={14} />}{loading ? copy.revealing : secret ? copy.hide : copy.show}</button> : <p className={styles.note}>{copy.noSecret}</p>}
     {error && <p role="alert" className={styles.secretError}>{copy.revealFailed}</p>}
-    {credential.source_run && <SourceLink name={credential.source_run} copy={copy} />}
+    <SourceNote name={credential.source_run} kind={copy.credentialRecord} copy={copy} />
   </article>;
 }

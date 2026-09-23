@@ -38,7 +38,7 @@
 .warnings summary { cursor: pointer; }
 .warnings ul { padding-left: 18px; }
 .warnings li { padding: 5px 0; overflow-wrap: anywhere; }
-.warnings a { display: block; color: var(--signal-accent); }
+.warningSource { display: block; color: var(--signal-muted); font: 11px/1.6 var(--font-mono); }
 .upgradeNote { margin: 12px 20px; color: var(--signal-muted); font-size: 12px; line-height: 1.7; }
 .summaryBar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; padding: 12px 20px; }
 .stats { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 18px; font-size: 11px; color: var(--signal-muted); }
@@ -84,10 +84,13 @@
 .record h3 { margin: 12px 0; color: var(--signal-strong); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .record p { margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.8; }
 .record > .secondary { margin-top: 13px; }
-.sourceLink { display: flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; margin-top: 14px; color: var(--signal-accent); font: 11px/1.5 var(--font-mono); }
-.sourceLink > svg { flex: 0 0 auto; }
-.sourceLink > span { min-width: 0; overflow-wrap: anywhere; }
-.sourceLink:hover { text-decoration: underline; }
+.sourceNote { display: grid; gap: 6px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--signal-line-soft); font-size: 11px; line-height: 1.6; }
+.sourceNote > div { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; }
+.sourceNote dt { color: var(--signal-muted); }
+.sourceNote dd { min-width: 0; margin: 0; color: var(--signal-text); overflow-wrap: anywhere; }
+.validationEvidence { margin-top: 14px; }
+.validationEvidence > span { color: var(--signal-muted); font-size: 11px; }
+.validationEvidence p { margin-top: 5px; }
 .relationship { display: inline-flex; align-items: center; gap: 5px; color: var(--signal-muted); }
 .relationship[data-verified="true"] { color: var(--signal-success); }
 .textButton { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; margin-top: 9px; padding: 4px 0; border: none; background: transparent; color: var(--signal-accent); font: 12px/1.5 var(--font-mono); text-align: left; overflow-wrap: anywhere; cursor: pointer; }
