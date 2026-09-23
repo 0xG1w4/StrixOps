@@ -2352,17 +2352,11 @@ def list_project_reports_endpoint(project_id: str) -> dict:
     if project is None:
         raise HTTPException(status_code=404, detail="unknown project")
     run_dirs = projects_store.project_runs(project_id)
-    reports = project_reports.list_project_reports(
-        project_id,
-        run_dirs=run_dirs,
-        project=project,
-    )
-    status = project_reports.project_report_status(
+    return project_reports.list_project_reports_with_status(
         project_id,
         run_dirs,
         project=project,
     )
-    return {"reports": reports, "stale": bool(status.get("stale")), "status": status}
 
 
 @app.post("/api/projects/{project_id}/reports")

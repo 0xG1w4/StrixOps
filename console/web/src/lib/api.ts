@@ -29,12 +29,37 @@ export function configurationSaveError(error: unknown, english: boolean): string
   return message;
 }
 
+async function responseText(res: Response, signal?: AbortSignal | null): Promise<string> {
+  if (!signal || !res.body) return res.text();
+  // authFetch owns cancellation until response headers arrive. Keep the body
+  // cancellable as well, including a CDN response that stalls after its headers.
+  const reader = res.body.getReader();
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      parts.push(decoder.decode(value, { stream: true }));
+    }
+    parts.push(decoder.decode());
+    return parts.join("");
+  } finally {
+    signal.removeEventListener("abort", abort);
+    reader.releaseLock();
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(`${API}${path}`, { cache: "no-store", ...init });
   if (!res.ok) {
     let detail = "";
     try {
-      const text = (await res.text()).trim();
+      const text = (await responseText(res, init?.signal)).trim();
       if (text) detail = text.length > 300 ? `${text.slice(0, 300)}…` : text;
     } catch {
       /* body unreadable — keep the status line */
@@ -42,11 +67,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`${res.status}: ${detail}`);
   }
   if (res.status === 204) return undefined as T;
+  if (init?.signal) return JSON.parse(await responseText(res, init.signal)) as T;
   return (await res.json()) as T;
 }
 
-export function getJSON<T>(path: string): Promise<T> {
-  return request<T>(path);
+export function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(path, init);
 }
 
 export function postJSON<T>(path: string, body: unknown): Promise<T> {
@@ -874,12 +900,12 @@ export async function deleteProject(id: string): Promise<void> {
   await del(`/api/projects/${encodeURIComponent(id)}`);
 }
 
-export async function getProjectRuns(id: string): Promise<ProjectDetail> {
-  return getJSON<ProjectDetail>(`/api/projects/${encodeURIComponent(id)}/runs`);
+export async function getProjectRuns(id: string, signal?: AbortSignal): Promise<ProjectDetail> {
+  return request<ProjectDetail>(`/api/projects/${encodeURIComponent(id)}/runs`, { signal });
 }
 
-export async function getProjectFindings(id: string): Promise<ProjectFindings> {
-  return getJSON<ProjectFindings>(`/api/projects/${encodeURIComponent(id)}/findings`);
+export async function getProjectFindings(id: string, signal?: AbortSignal): Promise<ProjectFindings> {
+  return request<ProjectFindings>(`/api/projects/${encodeURIComponent(id)}/findings`, { signal });
 }
 
 export async function getProjectReport(id: string): Promise<{ markdown: string }> {
@@ -905,17 +931,18 @@ export async function updateProjectScope(
   };
 }
 
-export async function getProjectSkillAnalytics(id: string): Promise<ProjectSkillAnalytics> {
-  return getJSON<ProjectSkillAnalytics>(
-    `/api/projects/${encodeURIComponent(id)}/analytics/skills`
+export async function getProjectSkillAnalytics(id: string, signal?: AbortSignal): Promise<ProjectSkillAnalytics> {
+  return request<ProjectSkillAnalytics>(
+    `/api/projects/${encodeURIComponent(id)}/analytics/skills`, { signal }
   );
 }
 
 export async function getProjectReports(
-  id: string
+  id: string,
+  signal?: AbortSignal,
 ): Promise<{ reports: ProjectReportVersion[]; stale: boolean }> {
-  return getJSON<{ reports: ProjectReportVersion[]; stale: boolean }>(
-    `/api/projects/${encodeURIComponent(id)}/reports`
+  return request<{ reports: ProjectReportVersion[]; stale: boolean }>(
+    `/api/projects/${encodeURIComponent(id)}/reports`, { signal }
   );
 }
 

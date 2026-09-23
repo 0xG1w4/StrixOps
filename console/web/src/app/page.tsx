@@ -6,15 +6,14 @@ import { ChevronLeft, ChevronRight, Plus, RotateCw, Search, Trash2, WifiOff, X }
 import {
   apiURL,
   del,
-  getJSON,
   getProjects,
   runTargetLabel,
   runTargets,
   type OkResult,
   type RunSummary,
-  type RunsPage,
   type ProjectSummary,
 } from "@/lib/api";
+import { useFleet } from "@/lib/fleet";
 import DeleteRunsDialog from "@/components/DeleteRunsDialog";
 import { describeDeletionError, type RunDeletionResult } from "@/lib/run-deletion";
 import { fmtDuration } from "@/lib/format";
@@ -36,9 +35,6 @@ import {
 /* ============================================================================
    Constants + helpers
    ========================================================================= */
-
-const FAST_POLL_MS = 4000;
-const SLOW_POLL_MS = 10000;
 
 const SEV_KEYS = ["critical", "high", "medium", "low", "info"] as const;
 type SevKey = (typeof SEV_KEYS)[number];
@@ -186,12 +182,9 @@ function SyncIndicator({
 export default function DashboardPage() {
   /* ---------------------------------------------------------------- state */
   const { t, locale } = useI18n();
-  const [data, setData] = React.useState<RunsPage | null>(null);
-  const [offline, setOffline] = React.useState(false);
-  const [fetchError, setFetchError] = React.useState<string | null>(null);
-  const [syncing, setSyncing] = React.useState(false);
-  const [lastSync, setLastSync] = React.useState<number | null>(null);
-  const [cadenceMs, setCadenceMs] = React.useState(FAST_POLL_MS);
+  const fleet = useFleet();
+  const { runs: data, runsError: fetchError, syncing, lastSync, cadenceMs, refresh: load } = fleet;
+  const offline = fetchError !== null;
 
   const [search, setSearch] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("all");
@@ -201,7 +194,6 @@ export default function DashboardPage() {
   const [deleteCandidates, setDeleteCandidates] = React.useState<RunSummary[] | null>(null);
   const [deleteResult, setDeleteResult] = React.useState<RunDeletionResult | null>(null);
   const selectAllRef = React.useRef<HTMLInputElement>(null);
-  const mutationRevision = React.useRef(0);
 
   /* pagination — page size persisted across visits */
   const [pageSize, setPageSize] = React.useState<number>(DEFAULT_PAGE_SIZE);
@@ -226,40 +218,6 @@ export default function DashboardPage() {
   /* 1s tick — only armed while at least one run is live, so durations breathe. */
   const [nowMs, setNowMs] = React.useState(() => Date.now());
 
-  const signatureRef = React.useRef("");
-  const fastRef = React.useRef(true);
-  const inFlight = React.useRef(false);
-  const refreshRef = React.useRef<(() => void) | undefined>(undefined);
-
-  /* ----------------------------------------------------------------- load */
-  const load = React.useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setSyncing(true);
-    const revision = mutationRevision.current;
-    try {
-      const page = await getJSON<RunsPage>("/api/runs");
-      // A response started before a deletion must not restore deleted rows.
-      if (revision !== mutationRevision.current) return;
-      const signature = JSON.stringify(page);
-      const changed = signature !== signatureRef.current;
-      signatureRef.current = signature;
-      /* Stay on the fast cadence while anything is live, else back off. */
-      fastRef.current = changed || page.runs.some((r) => r.live);
-      setCadenceMs(fastRef.current ? FAST_POLL_MS : SLOW_POLL_MS);
-      setData(page);
-      setOffline(false);
-      setFetchError(null);
-      setLastSync(Date.now());
-    } catch (e) {
-      setOffline(true);
-      setFetchError(errMsg(e));
-    } finally {
-      inFlight.current = false;
-      setSyncing(false);
-    }
-  }, []);
-
   const loadProjects = React.useCallback(async () => {
     try {
       setProjects((await getProjects()).projects);
@@ -270,54 +228,10 @@ export default function DashboardPage() {
   }, []);
   React.useEffect(() => { void loadProjects(); }, [loadProjects]);
 
-  /* -------------------------------------------- poll: 4s / 10s + visibility */
-  React.useEffect(() => {
-    let stopped = false;
-    let timer = 0;
-
-    const pump = () => {
-      if (stopped) return;
-      timer = window.setTimeout(() => void run(), fastRef.current ? FAST_POLL_MS : SLOW_POLL_MS);
-    };
-
-    const run = async () => {
-      if (stopped) return;
-      /* Hidden tab: skip the fetch, keep the chain alive until visible again. */
-      if (document.visibilityState === "hidden") {
-        pump();
-        return;
-      }
-      await load();
-      pump();
-    };
-
-    refreshRef.current = () => {
-      window.clearTimeout(timer);
-      void run();
-    };
-
-    void run();
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible" && !stopped) {
-        window.clearTimeout(timer);
-        void run();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      stopped = true;
-      window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-      refreshRef.current = undefined;
-    };
-  }, [load]);
-
   const refresh = React.useCallback(() => {
-    refreshRef.current?.();
+    void load();
     void loadProjects();
-  }, [loadProjects]);
+  }, [load, loadProjects]);
 
   /* -------------------------------------------------------- live 1s ticker */
   const anyLive = data?.runs.some((r) => r.live) ?? false;
@@ -337,23 +251,8 @@ export default function DashboardPage() {
   /* ---------------------------------------------------------------- delete */
   const forgetDeleted = (names: string[]) => {
     const removed = new Set(names);
-    mutationRevision.current += 1;
+    fleet.forgetRuns(names);
     setSelected((current) => new Set([...current].filter((name) => !removed.has(name))));
-    setData((current) => {
-      if (!current) return current;
-      const remaining = current.runs.filter((run) => !removed.has(run.name));
-      const severity: Record<string, number> = {};
-      for (const run of remaining) {
-        for (const [key, count] of Object.entries(run.severity)) {
-          severity[key] = (severity[key] ?? 0) + count;
-        }
-      }
-      return {
-        ...current,
-        runs: remaining,
-        totals: { runs: remaining.length, live: remaining.filter((run) => run.live).length, severity },
-      };
-    });
   };
 
   const handleDelete = async (name: string) => {

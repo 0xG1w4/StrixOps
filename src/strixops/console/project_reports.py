@@ -878,7 +878,16 @@ def calculate_staleness(
     project: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare a stored report snapshot with current eligible task reports."""
-    current = source_snapshot(run_dirs)
+    return _staleness_from_snapshot(metadata, source_snapshot(run_dirs), project=project)
+
+
+def _staleness_from_snapshot(
+    metadata: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    project: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare versions against the same request-local source observation."""
     stored_sources_value = metadata.get("source_runs")
     stored_sources = stored_sources_value if isinstance(stored_sources_value, list) else []
     stored_by_run = {
@@ -935,13 +944,16 @@ def list_project_reports(
 ) -> list[dict[str, Any]]:
     """List ready/corrupt report metadata newest-first, without artifact content."""
     dirs = list(run_dirs) if run_dirs is not None else None
+    current = None
     reports: list[dict[str, Any]] = []
     for _, version_dir in _version_dirs(_project_dir(project_id, storage_root)):
         metadata = _load_version(version_dir, include_content=False)
         if metadata is None:
             continue
         if dirs is not None:
-            metadata.update(calculate_staleness(metadata, dirs, project=project))
+            if current is None:
+                current = source_snapshot(dirs)
+            metadata.update(_staleness_from_snapshot(metadata, current, project=project))
         reports.append(metadata)
     return reports
 
@@ -993,6 +1005,19 @@ def project_report_status(
     storage_root: Path | None = None,
 ) -> dict[str, Any]:
     """Return a compact UI-ready status for the latest project report."""
+    return list_project_reports_with_status(
+        project_id, run_dirs, project=project, storage_root=storage_root,
+    )["status"]
+
+
+def list_project_reports_with_status(
+    project_id: str,
+    run_dirs: Iterable[Path],
+    *,
+    project: Mapping[str, Any] | None = None,
+    storage_root: Path | None = None,
+) -> dict[str, Any]:
+    """Read each version once and share its staleness result with list status."""
     dirs = list(run_dirs)
     reports = list_project_reports(
         project_id,
@@ -1002,7 +1027,7 @@ def project_report_status(
     )
     if not reports:
         current = source_snapshot(dirs)
-        return {
+        status = {
             "status": "none",
             "ready": False,
             "stale": False,
@@ -1012,16 +1037,17 @@ def project_report_status(
             "current_excluded_runs": current["excluded_runs"],
             "current_total_run_count": current["total_run_count"],
         }
+        return {"reports": reports, "stale": False, "status": status}
 
     latest = reports[0]
     if not latest.get("ready"):
-        status = "corrupt"
+        status_name = "corrupt"
     elif latest.get("stale"):
-        status = "outdated"
+        status_name = "outdated"
     else:
-        status = "ready"
-    return {
-        "status": status,
+        status_name = "ready"
+    status = {
+        "status": status_name,
         "ready": bool(latest.get("ready")),
         "stale": bool(latest.get("stale")),
         "version_count": len(reports),
@@ -1030,3 +1056,4 @@ def project_report_status(
         "current_excluded_runs": latest.get("current_excluded_runs", []),
         "current_total_run_count": latest.get("current_total_run_count"),
     }
+    return {"reports": reports, "stale": bool(status["stale"]), "status": status}

@@ -26,7 +26,8 @@ import { MatrixText } from "@/components/MatrixText";
 import CommandPalette from "@/components/CommandPalette";
 import AccountMenu from "@/components/auth/AccountMenu";
 import authStyles from "@/components/auth/auth.module.css";
-import { getJSON, runTargetLabel, runTargets, type Health, type RunSummary, type RunsPage } from "@/lib/api";
+import { runTargetLabel, runTargets, type RunSummary } from "@/lib/api";
+import { useFleet } from "@/lib/fleet";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import packageInfo from "../../package.json";
@@ -99,59 +100,19 @@ interface EngineStats {
 }
 
 function useEngineStats(): EngineStats {
-  const [stats, setStats] = React.useState<EngineStats>({
-    online: false,
-    version: null,
-    loaded: false,
-    liveRuns: 0,
-    totalRuns: 0,
-    findings: 0,
-    primaryRun: null,
-    lastSync: null,
-  });
-
-  React.useEffect(() => {
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const health = await getJSON<Health>("/api/health");
-        let page: RunsPage | null = null;
-        try {
-          page = await getJSON<RunsPage>("/api/runs");
-        } catch {
-          /* Health is authoritative; fleet details are optional enrichment. */
-        }
-        if (cancelled) return;
-        setStats((previous) => ({
-          online: Boolean(health.ok),
-          version: typeof health.version === "string" && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(health.version)
-            ? health.version : null,
-          loaded: true,
-          liveRuns: health.live_runs ?? page?.totals?.live ?? previous.liveRuns,
-          totalRuns: page?.totals?.runs ?? page?.runs.length ?? previous.totalRuns,
-          findings: page
-            ? Object.values(page.totals?.severity ?? {}).reduce((sum, count) => sum + count, 0)
-            : previous.findings,
-          primaryRun: page ? page.runs.find((run) => run.live) ?? null : previous.primaryRun,
-          lastSync: page ? Date.now() : previous.lastSync,
-        }));
-      } catch {
-        if (!cancelled) {
-          setStats((previous) => ({ ...previous, online: false, loaded: true }));
-        }
-      }
-    };
-
-    void poll();
-    const timer = window.setInterval(() => void poll(), 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  return stats;
+  const fleet = useFleet();
+  const health = fleet.health, page = fleet.runs;
+  return {
+    online: Boolean(health?.ok) && !fleet.healthError,
+    version: typeof health?.version === "string" && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(health.version)
+      ? health.version : null,
+    loaded: fleet.healthLoaded,
+    liveRuns: page?.totals?.live ?? health?.live_runs ?? 0,
+    totalRuns: page?.totals?.runs ?? page?.runs.length ?? 0,
+    findings: Object.values(page?.totals?.severity ?? {}).reduce((sum, count) => sum + count, 0),
+    primaryRun: page?.runs.find(run => run.live) ?? null,
+    lastSync: fleet.lastSync,
+  };
 }
 
 function BrandMark() {

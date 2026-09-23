@@ -111,6 +111,7 @@ const COPY = {
     internalFindings: "内部发现",
     noFindings: "此项目尚无发现。",
     dataUnavailable: "数据暂时无法加载。",
+    retry: "重试",
     source: "来源",
     target: "目标",
     unrestricted: "不限制",
@@ -194,6 +195,7 @@ const COPY = {
     internalFindings: "Internal findings",
     noFindings: "No findings in this project yet.",
     dataUnavailable: "Data is temporarily unavailable.",
+    retry: "Retry",
     source: "Source",
     target: "Target",
     unrestricted: "Unrestricted",
@@ -294,10 +296,24 @@ function ProjectWorkspace() {
   const [generating, setGenerating] = React.useState(false);
   const [openReport, setOpenReport] = React.useState<ProjectReportVersion | null>(null);
   const loadSequence = React.useRef(0);
+  const activeProject = React.useRef<string | null>(null);
+  const primaryRequest = React.useRef<AbortController | null>(null);
+  const secondaryRequests = React.useRef<Partial<Record<keyof SecondaryStatus, AbortController>>>({});
+
+  const cancelRequests = React.useCallback(() => {
+    primaryRequest.current?.abort();
+    primaryRequest.current = null;
+    for (const request of Object.values(secondaryRequests.current)) request.abort();
+    secondaryRequests.current = {};
+  }, []);
 
   const load = React.useCallback(async () => {
     if (!projectId) return;
+    cancelRequests();
     const sequence = ++loadSequence.current;
+    const controller = new AbortController();
+    primaryRequest.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     setGenerating(false);
     setPhase("loading");
     setFindings(null);
@@ -305,35 +321,65 @@ function ProjectWorkspace() {
     setReports([]);
     setSecondaryStatus({ findings: "loading", skills: "loading", reports: "loading" });
     try {
-      const detail = await getProjectRuns(projectId);
+      const detail = await getProjectRuns(projectId, controller.signal);
       if (sequence !== loadSequence.current) return;
       setProject(detail.project);
       setRuns(detail.runs);
       setPhase("ready");
-      const [findingResult, skillResult, reportResult] = await Promise.allSettled([
-        getProjectFindings(projectId),
-        getProjectSkillAnalytics(projectId),
-        getProjectReports(projectId),
-      ]);
-      if (sequence !== loadSequence.current) return;
-      if (findingResult.status === "fulfilled") setFindings(findingResult.value);
-      if (skillResult.status === "fulfilled") setSkills(skillResult.value);
-      if (reportResult.status === "fulfilled") setReports(reportResult.value.reports);
-      setSecondaryStatus({
-        findings: findingResult.status === "fulfilled" ? "ready" : "error",
-        skills: skillResult.status === "fulfilled" ? "ready" : "error",
-        reports: reportResult.status === "fulfilled" ? "ready" : "error",
-      });
     } catch {
       if (sequence === loadSequence.current) setPhase("error");
+    } finally {
+      window.clearTimeout(timeout);
+      if (primaryRequest.current === controller) primaryRequest.current = null;
     }
-  }, [projectId]);
+  }, [projectId, cancelRequests]);
 
   React.useEffect(() => {
+    activeProject.current = projectId;
     void load();
     setOpenReport(null);
-    return () => { loadSequence.current += 1; };
-  }, [load]);
+    return () => {
+      activeProject.current = null;
+      loadSequence.current += 1;
+      cancelRequests();
+    };
+  }, [load, cancelRequests, projectId]);
+
+  React.useEffect(() => {
+    if (phase !== "ready" || project?.id !== projectId) return;
+    const sequence = loadSequence.current;
+    // Keep loaded sections for this workspace visit. Reloading or changing
+    // projects clears them; failed sections can also retry on tab re-entry.
+    const fetchSection = <T,>(
+      section: keyof SecondaryStatus,
+      fetcher: (signal: AbortSignal) => Promise<T>,
+      apply: (value: T) => void,
+    ) => {
+      if (secondaryRequests.current[section]) return;
+      const controller = new AbortController();
+      secondaryRequests.current[section] = controller;
+      setSecondaryStatus((current) => ({ ...current, [section]: "loading" }));
+      const timeout = window.setTimeout(() => controller.abort(), 30_000);
+      void fetcher(controller.signal).then((value) => {
+        if (sequence !== loadSequence.current) return;
+        apply(value);
+        setSecondaryStatus((current) => ({ ...current, [section]: "ready" }));
+      }).catch(() => {
+        if (sequence === loadSequence.current) {
+          delete secondaryRequests.current[section];
+          setSecondaryStatus((current) => ({ ...current, [section]: "error" }));
+        }
+      }).finally(() => window.clearTimeout(timeout));
+    };
+
+    if (tab === "overview" || tab === "findings") {
+      fetchSection("findings", (signal) => getProjectFindings(projectId, signal), setFindings);
+    }
+    if (tab === "overview") {
+      fetchSection("skills", (signal) => getProjectSkillAnalytics(projectId, signal), setSkills);
+      fetchSection("reports", (signal) => getProjectReports(projectId, signal), (value) => setReports(value.reports));
+    }
+  }, [phase, project?.id, projectId, tab]);
 
   React.useEffect(() => {
     setTab(requestedTab && TABS.some((entry) => entry.id === requestedTab) ? requestedTab : "overview");
@@ -469,9 +515,11 @@ function ProjectWorkspace() {
         />
       )}
       {tab === "tasks" && <TaskPanel key={project.id} projectId={project.id} runs={runs} copy={copy} locale={locale} title={copy.allTasks} />}
-      {tab === "findings" && <FindingsPanel findings={findings} status={secondaryStatus.findings} copy={copy} />}
+      {tab === "findings" && <FindingsPanel findings={findings} status={secondaryStatus.findings} copy={copy} onRetry={() => void load()} />}
       {tab === "topology" && <ProjectTopology key={project.id} projectId={project.id} />}
-      {tab === "scope" && <ScopeEditor key={project.id} project={project} copy={copy} onSaved={async () => { await load(); }} />}
+      {tab === "scope" && <ScopeEditor key={project.id} project={project} copy={copy} onSaved={async (saved) => {
+        if (activeProject.current === saved.id) await load();
+      }} />}
       </section>
 
       {openReport && <ProjectReportReader key={project.id} projectId={project.id} initialReport={openReport} versions={reports} onClose={() => setOpenReport(null)} />}
@@ -535,6 +583,7 @@ function Overview({ project, runs, findings, skills, latestReport, reportCount, 
           {completedRuns === 0 && <p className={styles.reportHint}>{copy.reportUnavailable}</p>}
         </div>
         <div className={styles.reportActions}>
+          {secondaryStatus.reports === "error" && <button type="button" className="button-secondary button-compact" onClick={onRetry}>{copy.retry}</button>}
           {latestReport && <button className="button-primary button-compact" onClick={() => void onOpenReport()}><FileText className="h-3.5 w-3.5" aria-hidden="true" />{copy.openReport}</button>}
           <button className={`${latestReport ? "button-secondary" : "button-primary"} button-compact`} onClick={() => void onGenerate()} disabled={generating || completedRuns === 0 || secondaryStatus.reports === "loading"}>
             {generating ? <Spinner /> : <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />}{generating ? copy.generating : latestReport ? copy.regenerate : copy.generate}
@@ -550,7 +599,7 @@ function Overview({ project, runs, findings, skills, latestReport, reportCount, 
               {secondaryStatus.skills === "ready" && <div className={styles.skillSummary}>
                 <strong>{skills?.totals.total_hits ?? 0}</strong> {copy.hits} · {skills?.totals.distinct_skills ?? 0} {copy.distinct}
               </div>}
-              {skillEntries.length === 0 ? <div className={styles.compactEmpty}>{secondaryStatus.skills === "loading" ? copy.loading : secondaryStatus.skills === "error" ? copy.dataUnavailable : copy.noSkills}</div> : (
+              {skillEntries.length === 0 ? <div className={styles.compactEmpty}>{secondaryStatus.skills === "loading" ? copy.loading : secondaryStatus.skills === "error" ? <>{copy.dataUnavailable} <button type="button" className="button-secondary button-compact" onClick={onRetry}>{copy.retry}</button></> : copy.noSkills}</div> : (
                 <ul id={skillListId} className={`${styles.skillBars} ${skillsExpanded ? styles.skillBarsExpanded : ""}`} aria-label={copy.skillHits} tabIndex={skillsExpanded ? 0 : undefined}>
                   {visibleSkills.map((entry) => (
                     <li key={entry.skill}>
@@ -639,8 +688,8 @@ function TaskPanel({ runs, copy, locale, title, onViewAll, projectId }: { runs: 
   );
 }
 
-function FindingsPanel({ findings, status, copy }: { findings: ProjectFindings | null; status: SecondaryStatus["findings"]; copy: Copy }) {
-  if (status === "error") return <Panel code="FND" title={copy.findings}><div className={styles.compactEmpty}>{copy.dataUnavailable}</div></Panel>;
+function FindingsPanel({ findings, status, copy, onRetry }: { findings: ProjectFindings | null; status: SecondaryStatus["findings"]; copy: Copy; onRetry: () => void }) {
+  if (status === "error") return <Panel code="FND" title={copy.findings}><div className={styles.compactEmpty}>{copy.dataUnavailable} <button type="button" className="button-secondary button-compact" onClick={onRetry}>{copy.retry}</button></div></Panel>;
   if (!findings) return <div className="panel flex items-center gap-2 p-6"><Spinner /></div>;
   const rows = [
     ...findings.vulnerabilities.map((finding) => ({ ...finding, group: copy.webFindings, target: finding.target || finding.endpoint || "—" })),
@@ -680,6 +729,11 @@ function ScopeEditor({ project, copy, onSaved }: { project: ProjectSummary; copy
     initiallyRestricted ? storedRules : [{ kind: "domain", value: "", include_subdomains: false }]
   );
   const [saving, setSaving] = React.useState(false);
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const updateRule = (index: number, patch: Partial<ProjectScopeRule>) => {
     setRules((current) => current.map((rule, position) => position === index ? ({ ...rule, ...patch } as ProjectScopeRule) : rule));
@@ -698,17 +752,19 @@ function ScopeEditor({ project, copy, onSaved }: { project: ProjectSummary; copy
         ? rules.map((rule) => ({ ...rule, value: rule.value.trim() }) as ProjectScopeRule)
         : [{ kind: "any", value: "*" as const }];
       const result = await updateProjectScope(baseline.id, nextRules, baseline.revision ?? 0);
-      setBaseline(result.project);
-      await onSaved(result.project);
-      toast.success(copy.saveScope, {
+      if (mounted.current) setBaseline(result.project);
+      if (mounted.current) toast.success(copy.saveScope, {
         description: result.historical_out_of_scope.length
           ? `${result.historical_out_of_scope.length} ${copy.historyMarked}`
           : undefined,
       });
+      // The parent still refreshes this project when the user switches tabs
+      // during a save, but ignores the callback after navigating elsewhere.
+      await onSaved(result.project);
     } catch (error) {
-      toast.error(copy.saveScope, { description: configurationSaveError(error, locale === "en") });
+      if (mounted.current) toast.error(copy.saveScope, { description: configurationSaveError(error, locale === "en") });
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   };
 
