@@ -8,6 +8,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowUpRight, Download, FileText, History, RefreshCw, ShieldAlert, X } from "lucide-react";
 import { Select } from "@/components/Select";
+import { MarkdownViewToggle, RawMarkdown, type MarkdownViewMode } from "@/components/MarkdownView";
 import { getJSON, type ProjectReportVersion } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import styles from "./ProjectReportReader.module.css";
@@ -98,6 +99,7 @@ export default function ProjectReportReader({
   const copy = TEXT[locale];
   const [versionId, setVersionId] = React.useState(initialReport.version_id);
   const [mode, setMode] = React.useState<Mode>("summary");
+  const [viewMode, setViewMode] = React.useState<MarkdownViewMode>("preview");
   const [report, setReport] = React.useState<ProjectReportVersion | null>(null);
   const [phase, setPhase] = React.useState<"loading" | "ready" | "error">("loading");
   const [attempt, retry] = React.useReducer((value: number) => value + 1, 0);
@@ -135,6 +137,10 @@ export default function ProjectReportReader({
   React.useEffect(() => {
     bodyRef.current?.scrollTo({ top: 0 });
   }, [versionId, mode]);
+
+  React.useEffect(() => {
+    setViewMode("preview");
+  }, [projectId, versionId]);
 
   const metadata = report?.version_id === versionId ? report : selectedMetadata;
   const currentReport = phase === "ready" && report?.version_id === versionId ? report : null;
@@ -218,9 +224,16 @@ export default function ProjectReportReader({
                   <SnapshotSummary report={currentReport} copy={copy} locale={locale} onMode={setMode} />
                 </Tabs.Content>
                 <Tabs.Content className={styles.tabContent} value="full">
-                  {currentReport.content ? <div className={`prose-report report-document ${styles.markdown}`}>
-                    <ReportMarkdown report={currentReport} locale={locale} />
-                  </div> : <p className={styles.empty}>{copy.noContent}</p>}
+                  {currentReport.content ? <>
+                    <div className={styles.reportToolbar}>
+                      <MarkdownViewToggle value={viewMode} onChange={setViewMode} />
+                    </div>
+                    {viewMode === "raw" ? <RawMarkdown content={currentReport.content} /> : (
+                      <div className={`prose-report report-document ${styles.markdown}`}>
+                        <ReportMarkdown report={currentReport} locale={locale} />
+                      </div>
+                    )}
+                  </> : <p className={styles.empty}>{copy.noContent}</p>}
                 </Tabs.Content>
                 <Tabs.Content className={styles.tabContent} value="sources"><SourceTasks report={currentReport} copy={copy} /></Tabs.Content>
               </>}

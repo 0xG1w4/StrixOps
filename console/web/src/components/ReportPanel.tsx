@@ -14,6 +14,7 @@ import remarkGfm from "remark-gfm";
 import { Download, FileText, LoaderCircle, RefreshCw } from "lucide-react";
 import { EmptyState } from "@/components/ui";
 import MermaidDiagram from "@/components/MermaidDiagram";
+import { MarkdownViewToggle, RawMarkdown, type MarkdownViewMode } from "@/components/MarkdownView";
 import { apiURL, generateReport, getJSON, getReportGeneration } from "@/lib/api";
 import type { ReportGeneration, ReportPage, RunDetail } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -89,6 +90,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
   const [phase, setPhase] = React.useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = React.useState("");
   const [markdown, setMarkdown] = React.useState("");
+  const [viewMode, setViewMode] = React.useState<MarkdownViewMode>("preview");
   const [reportSynthesized, setReportSynthesized] = React.useState<boolean | undefined>(undefined);
   const [generation, setGeneration] = React.useState<ReportGeneration | null>(null);
   const [generationRequestError, setGenerationRequestError] = React.useState("");
@@ -156,6 +158,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
     // refresh failures must keep the current run's saved report readable.
     hasReportRef.current = false;
     setMarkdown("");
+    setViewMode("preview");
     setReportSynthesized(undefined);
     setError("");
     setPhase("loading");
@@ -328,6 +331,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
           </span>
         ) : <span />}
         <div className="flex flex-wrap items-center gap-2">
+          {phase === "ready" && <MarkdownViewToggle value={viewMode} onChange={setViewMode} />}
           {phase === "ready" && (
             <a
               className="button-secondary button-compact"
@@ -399,7 +403,7 @@ export default function ReportPanel({ name, run }: { name: string; run: RunDetai
         </div>
       )}
       {phase === "ready" && (
-        <div className="prose-report report-document">
+        viewMode === "raw" ? <RawMarkdown content={markdown} /> : <div className="prose-report report-document">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
             {markdown}
           </ReactMarkdown>

@@ -21,6 +21,7 @@ import { EmptyState, SeverityChip, Spinner } from "@/components/ui";
 import { apiURL, getJSON } from "@/lib/api";
 import type { FindingsPage, InternalFinding, RunDetail, Vulnerability } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
+import { MarkdownViewToggle, RawMarkdown, type MarkdownViewMode } from "@/components/MarkdownView";
 
 const FINDINGS_POLL_MS = 6000;
 const SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] as const;
@@ -152,6 +153,47 @@ type ActiveFinding =
   | { kind: "vuln"; v: Vulnerability }
   | { kind: "internal"; f: InternalFinding };
 
+type MarkdownArtifact = { key: string; phase: "loading" | "ready" | "error"; content: string };
+
+function useFindingMarkdown(path: string, enabled: boolean, revision = "") {
+  const key = JSON.stringify([path, revision]);
+  const [artifact, setArtifact] = React.useState<MarkdownArtifact | null>(null);
+  const [attempt, retry] = React.useReducer(value => value + 1, 0);
+  React.useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    setArtifact({ key, phase: "loading", content: "" });
+    const timer = window.setTimeout(() => {
+      controller.abort();
+      setArtifact({ key, phase: "error", content: "" });
+    }, 20_000);
+    void authFetch(apiURL(path), { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error("markdown_unavailable");
+        return response.text();
+      })
+      .then(content => {
+        if (!controller.signal.aborted) setArtifact({ key, phase: "ready", content });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setArtifact({ key, phase: "error", content: "" });
+      })
+      .finally(() => window.clearTimeout(timer));
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [path, key, enabled, attempt]);
+  return { phase: artifact?.key === key ? artifact.phase : "loading", content: artifact?.key === key ? artifact.content : "", retry };
+}
+
+function FindingMarkdown({ artifact, raw }: { artifact: ReturnType<typeof useFindingMarkdown>; raw: boolean }) {
+  const { t, locale } = useI18n();
+  if (artifact.phase === "loading") return <div className="flex items-center gap-2 py-6 text-sm text-fg-muted" role="status"><Spinner />{t("findings.detail.loading")}</div>;
+  if (artifact.phase === "error") return <div className="space-y-3" role="alert">
+    <p className="text-sm text-fg-muted">{locale === "en" ? "Could not load the Markdown source. Retry or open the .md file." : "无法加载 Markdown 原文。请重试或打开 .md 文件。"}</p>
+    <button type="button" className="button-secondary button-compact" onClick={artifact.retry}><RefreshCw size={14} aria-hidden="true" />{t("common.retry")}</button>
+  </div>;
+  return raw ? <RawMarkdown content={artifact.content} /> : <div className="prose-report"><ReactMarkdown remarkPlugins={[remarkGfm]}>{artifact.content}</ReactMarkdown></div>;
+}
+
 function FindingModal({
   active,
   name,
@@ -191,9 +233,9 @@ function FindingModal({
         onClick={(e) => e.stopPropagation()}
       >
         {isVuln ? (
-          <VulnModalBody vuln={active.v} name={name} onClose={onClose} closeRef={closeRef} />
+          <VulnModalBody key={`${name}:${active.v.id}`} vuln={active.v} name={name} onClose={onClose} closeRef={closeRef} />
         ) : (
-          <InternalModalBody finding={active.f} name={name} onClose={onClose} closeRef={closeRef} />
+          <InternalModalBody key={`${name}:${active.f.id}`} finding={active.f} name={name} onClose={onClose} closeRef={closeRef} />
         )}
       </div>
     </div>
@@ -262,6 +304,9 @@ function VulnModalBody({
 }) {
   const { t, locale } = useI18n();
   const en = locale === "en";
+  const [view, setView] = React.useState<MarkdownViewMode>("preview");
+  const artifactPath = `/api/runs/${encodeURIComponent(name)}/artifacts/vulnerabilities/${encodeURIComponent(vuln.id)}.md`;
+  const artifact = useFindingMarkdown(artifactPath, view === "raw", vuln.updated_at || vuln.timestamp || "");
   const history = Array.isArray(vuln.update_history) ? vuln.update_history : [];
   const locations = Array.isArray(vuln.code_locations) ? vuln.code_locations : [];
   return (
@@ -291,11 +336,13 @@ function VulnModalBody({
         }
         onClose={onClose}
         closeRef={closeRef}
-        artifactHref={apiURL(
-          `/api/runs/${encodeURIComponent(name)}/artifacts/vulnerabilities/${vuln.id}.md`
-        )}
+        artifactHref={apiURL(artifactPath)}
       />
-      <div className="space-y-4 overflow-y-auto px-5 py-4">
+      <div className="flex shrink-0 items-center justify-end border-b border-line/6 px-5 py-2">
+        <MarkdownViewToggle value={view} onChange={setView} />
+      </div>
+      <div className="min-h-0 min-w-0 space-y-4 overflow-y-auto px-5 py-4">
+        {view === "raw" ? <FindingMarkdown artifact={artifact} raw /> : <>
         <Field label={t("findings.field.description")} value={vuln.description ?? ""} />
         <Field label={t("findings.field.impact")} value={vuln.impact ?? ""} />
         <Field label={en ? "Confidence rationale" : "置信度依据"} value={vuln.confidence_rationale || vuln.confidence || ""} />
@@ -370,6 +417,7 @@ function VulnModalBody({
             </ol>
           </details>
         )}
+        </>}
       </div>
     </>
   );
@@ -387,32 +435,9 @@ function InternalModalBody({
   closeRef: React.RefObject<HTMLButtonElement>;
 }) {
   const { t } = useI18n();
-  const [markdown, setMarkdown] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    let disposed = false;
-    authFetch(
-      apiURL(`/api/runs/${encodeURIComponent(name)}/artifacts/internal_findings/${finding.id}.md`)
-    )
-      .then(async (res) =>
-        res.ok
-          ? res.text()
-          : `# ${finding.title || finding.id}\n\n(${t("findings.artifact.unreadable")})`
-      )
-      .then((text) => {
-        if (!disposed) setMarkdown(text);
-      })
-      .catch(() => {
-        if (!disposed) {
-          setMarkdown(
-            `# ${finding.title || finding.id}\n\n(${t("findings.artifact.unavailable")})`
-          );
-        }
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [name, finding.id, finding.title, t]);
+  const [view, setView] = React.useState<MarkdownViewMode>("preview");
+  const artifactPath = `/api/runs/${encodeURIComponent(name)}/artifacts/internal_findings/${encodeURIComponent(finding.id)}.md`;
+  const artifact = useFindingMarkdown(artifactPath, true);
 
   return (
     <>
@@ -436,20 +461,13 @@ function InternalModalBody({
         }
         onClose={onClose}
         closeRef={closeRef}
-        artifactHref={apiURL(
-          `/api/runs/${encodeURIComponent(name)}/artifacts/internal_findings/${finding.id}.md`
-        )}
+        artifactHref={apiURL(artifactPath)}
       />
-      <div className="overflow-y-auto px-5 py-4">
-        {markdown === null ? (
-          <div className="flex items-center gap-2 py-6 text-sm text-fg-muted">
-            <Spinner /> {t("findings.detail.loading")}
-          </div>
-        ) : (
-          <div className="prose-report">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
-          </div>
-        )}
+      <div className="flex shrink-0 items-center justify-end border-b border-line/6 px-5 py-2">
+        <MarkdownViewToggle value={view} onChange={setView} />
+      </div>
+      <div className="min-h-0 min-w-0 overflow-y-auto px-5 py-4">
+        <FindingMarkdown artifact={artifact} raw={view === "raw"} />
       </div>
     </>
   );
@@ -466,6 +484,8 @@ export default function FindingsPanel({ name, run }: { name: string; run: RunDet
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState<ActiveFinding | null>(null);
   const live = Boolean(run?.live);
+
+  React.useEffect(() => { setActive(null); }, [name]);
 
   const load = React.useCallback(async () => {
     try {

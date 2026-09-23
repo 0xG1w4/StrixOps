@@ -124,6 +124,7 @@
 .hashes { display: flex; flex-direction: column; gap: 15px; margin: 0; padding: 5px 0; }
 .hashes dt { color: var(--signal-muted); font-size: 11px; overflow-wrap: anywhere; }
 .hashes dd { margin: 5px 0 0; color: var(--signal-text); font: 11px/1.6 var(--font-mono); overflow-wrap: anywhere; }
+.reportToolbar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
 .markdown { min-width: 0; max-width: 850px; margin: 0 auto; font-size: 14px; overflow-wrap: anywhere; }
 .markdown :global(table) { display: block; max-width: 100%; overflow-x: auto; }
 .markdown :global(pre) { max-width: 100%; overflow-x: auto; }
