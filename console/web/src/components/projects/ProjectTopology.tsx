@@ -1,17 +1,18 @@
 "use client";
 
 import * as React from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
-import { ArrowRight, Check, ChevronLeft, ChevronRight, CircleAlert, Eye, EyeOff, Fingerprint, KeyRound, Network, RefreshCw, Search, Server, ShieldAlert, X } from "lucide-react";
+import { ArrowRight, Check, CircleAlert, Eye, EyeOff, KeyRound, Maximize2, Minimize2, Network, RefreshCw, Search, Server, X } from "lucide-react";
 import { Spinner } from "@/components/ui";
 import { useI18n } from "@/lib/i18n";
 import { generateProjectTopology, getProjectTopology, getProjectTopologyStatus, revealTopologyCredential, type ProjectTopologyResponse, type TopologyCredential, type TopologyEdge, type TopologyNode, type TopologyRecord, type TopologySecret, type TopologySnapshot } from "@/lib/topology";
+import TopologyCanvas from "./TopologyCanvas";
+import { getNodeGrouping, groupTopologyNodes, type GroupingBasis } from "@/lib/topology-graph";
 import styles from "./ProjectTopology.module.css";
 
 const COPY = {
   "zh-CN": {
-    title: "内网拓扑", hint: "按网络环境与网段分组，保留跨网段发现的主机。",
+    title: "内网拓扑", hint: "在同一张画布中查看 CIDR 分组与主机关联。",
     generate: "生成拓扑", regenerate: "重新生成", generating: "生成中…", loading: "正在读取拓扑…",
     refresh: "检查更新", retry: "重试", loadFailed: "无法读取拓扑，请重试。", generateFailed: "生成失败，已有拓扑仍保留。请重试。",
     manual: "拓扑由你手动生成", manualHint: "汇总项目内网任务已记录的主机、关系、漏洞与凭据。生成后保存为快照。",
@@ -21,11 +22,15 @@ const COPY = {
     partial: "部分来源资料不完整。此拓扑只包含已读取的记录。", warnings: "来源提示", sourceWarning: "此来源有未完整收录的资料", freshnessUnknown: "暂时无法检查最新资料。当前显示已保存的拓扑，请稍后检查更新。",
     stale: "任务资料已有变化，点击“重新生成”以更新拓扑。", generated: "生成于", version: "版本",
     hosts: "主机", subnets: "网络分组", relations: "关系", tasks: "内网任务", withCredentials: "含凭据的主机",
-    search: "搜索主机名称、IP、网段或网络环境", allGroups: "全部网络分组", unknownSubnet: "网段未记录", unknownContext: "默认网络环境",
-    allRisk: "全部风险", highRisk: "高风险", credentialsOnly: "有凭据", filters: "主机筛选", noMatch: "没有符合筛选的主机。", reset: "清除筛选",
-    observed: "已识别", reachable: "已确认可达", unnamed: "未记录主机名称", membership: "分组表示网段归属，不代表主机互通",
+    search: "搜索主机名称、IP、网段或网络环境", allGroups: "全部网络分组", unknownSubnet: "未归属", unknownContext: "未指定网络环境",
+    allRisk: "全部风险", highRisk: "高风险", credentialsOnly: "有凭据", filters: "高亮主机", noMatch: "没有匹配的主机，仍保留完整拓扑。", reset: "清除高亮",
+    observed: "已识别", reachable: "已确认可达", unnamed: "未记录主机名称", membership: "地址分组与扫描范围不等于已确认网段；连线来自主机关系记录",
     verified: "已记录验证", unverified: "未验证关系", edgeHint: "验证状态来自任务记录；查看来源证据确认细节。",
-    showing: "显示", of: "共", previous: "上一页", next: "下一页", page: "页", visibleEdges: "当前页关系", hiddenEdges: "其他关系可在主机详情中查看",
+    matched: "匹配主机", fullscreen: "全屏画布", exitFullscreen: "退出全屏", groupBasis: "分组依据", groupCidr: "CIDR 分组",
+    recorded_subnet: "已记录网段", scan_range: "扫描范围", address_group: "地址分组", unassigned: "未归属", mixed: "多种分组依据",
+    groupUpgrade: "旧快照按已记录网段或地址分组显示。重新生成可纳入旧任务保存的扫描范围，无需重新扫描。",
+    subnetConflict: "来源的网段记录存在冲突，当前按扫描范围或地址分组展示。", overviewTab: "概览", vulnTab: "漏洞", findingTab: "发现", credentialTab: "凭据", sourceTab: "来源",
+    relationships: "主机关联", relationshipDetails: "关系详情", relationBundleHint: "这里汇总的是具体主机之间的关系，不代表整个网段互通。", from: "来源主机", to: "目标主机",
     details: "主机详情", close: "关闭详情", vulnerabilities: "漏洞", findings: "发现", credentials: "凭据", sources: "来源与关系",
     noVulns: "此主机没有关联的漏洞记录。", noFindings: "此主机没有关联的发现记录。", noCredentials: "此主机没有明确关联的凭据。",
     noSources: "未记录来源证据。", noRelations: "此主机尚无主机间关系记录。", context: "网络环境", subnet: "网段", role: "角色", os: "操作系统",
@@ -36,7 +41,7 @@ const COPY = {
     critical: "严重", high: "高危", medium: "中危", low: "低危", info: "信息", unknownRisk: "未评级",
   },
   en: {
-    title: "Internal topology", hint: "Hosts grouped by network context and subnet, including cross-subnet discoveries.",
+    title: "Internal topology", hint: "Explore CIDR groups and host relationships on one canvas.",
     generate: "Generate topology", regenerate: "Regenerate", generating: "Generating…", loading: "Loading topology…",
     refresh: "Check for updates", retry: "Retry", loadFailed: "Could not load topology. Try again.", generateFailed: "Generation failed. The existing topology is preserved. Try again.",
     manual: "Generate your topology", manualHint: "Combine recorded hosts, relationships, findings, and credentials from this project's internal tasks into a saved snapshot.",
@@ -46,11 +51,15 @@ const COPY = {
     partial: "Some source data is incomplete. This topology includes only the records that could be read.", warnings: "Source notices", sourceWarning: "Some records from this source could not be included", freshnessUnknown: "Unable to check the latest data. The saved topology is shown; check for updates again later.",
     stale: "Task data has changed. Select Regenerate to update this topology.", generated: "Generated", version: "Version",
     hosts: "Hosts", subnets: "Network groups", relations: "Relationships", tasks: "Internal tasks", withCredentials: "Hosts with credentials",
-    search: "Search hostname, IP, subnet, or network context", allGroups: "All network groups", unknownSubnet: "Subnet not recorded", unknownContext: "Default network context",
-    allRisk: "All risk levels", highRisk: "High risk", credentialsOnly: "With credentials", filters: "Host filters", noMatch: "No hosts match these filters.", reset: "Clear filters",
-    observed: "Identified", reachable: "Reachability confirmed", unnamed: "Hostname not recorded", membership: "Groups show subnet membership, not host connectivity",
+    search: "Search hostname, IP, subnet, or network context", allGroups: "All network groups", unknownSubnet: "Unassigned", unknownContext: "Network context unspecified",
+    allRisk: "All risk levels", highRisk: "High risk", credentialsOnly: "With credentials", filters: "Highlight hosts", noMatch: "No matching hosts. The full topology remains visible.", reset: "Clear highlights",
+    observed: "Identified", reachable: "Reachability confirmed", unnamed: "Hostname not recorded", membership: "Address groups and scan ranges are not confirmed subnets; edges reflect recorded host relationships",
     verified: "Recorded as verified", unverified: "Unverified relationship", edgeHint: "Verification comes from task records. Inspect source evidence for details.",
-    showing: "Showing", of: "of", previous: "Previous page", next: "Next page", page: "Page", visibleEdges: "Relationships on this page", hiddenEdges: "Other relationships are available in host details",
+    matched: "Matching hosts", fullscreen: "Fullscreen canvas", exitFullscreen: "Exit fullscreen", groupBasis: "Group basis", groupCidr: "CIDR group",
+    recorded_subnet: "Recorded subnet", scan_range: "Scan range", address_group: "Address group", unassigned: "Unassigned", mixed: "Multiple grouping sources",
+    groupUpgrade: "This older snapshot uses recorded subnets or address groups. Regenerate to include saved scan ranges; no rescan is needed.",
+    subnetConflict: "Source subnet records conflict. This host is displayed using a scan range or address group.", overviewTab: "Overview", vulnTab: "Vulns", findingTab: "Findings", credentialTab: "Credentials", sourceTab: "Sources",
+    relationships: "Host relationships", relationshipDetails: "Relationship details", relationBundleHint: "These are relationships between specific hosts, not connectivity between entire subnets.", from: "Source host", to: "Target host",
     details: "Host details", close: "Close details", vulnerabilities: "Vulnerabilities", findings: "Findings", credentials: "Credentials", sources: "Sources & relationships",
     noVulns: "No vulnerability records are linked to this host.", noFindings: "No finding records are linked to this host.", noCredentials: "No credentials are explicitly linked to this host.",
     noSources: "No source evidence recorded.", noRelations: "No host-to-host relationships recorded for this host.", context: "Network context", subnet: "Subnet", role: "Role", os: "Operating system",
@@ -63,12 +72,10 @@ const COPY = {
 } as const;
 
 type Copy = (typeof COPY)[keyof typeof COPY];
-type DetailTab = "vulnerabilities" | "findings" | "credentials" | "sources";
-const DETAIL_TABS: DetailTab[] = ["vulnerabilities", "findings", "credentials", "sources"];
-const PAGE_SIZE = 30;
+type DetailTab = "overview" | "vulnerabilities" | "findings" | "credentials" | "sources";
+const DETAIL_TABS: DetailTab[] = ["overview", "vulnerabilities", "findings", "credentials", "sources"];
 const EMPTY_NODES: TopologyNode[] = [];
 const EMPTY_EDGES: TopologyEdge[] = [];
-const groupKey = (node: TopologyNode) => JSON.stringify([node.network_context, node.subnet]);
 const nodeName = (node: TopologyNode) => node.hostname || node.ip || node.address;
 const field = (record: TopologyRecord, name: string) => typeof record[name] === "string" ? record[name] as string : "";
 const taskHref = (name: string) => `/run?name=${encodeURIComponent(name)}`;
@@ -86,6 +93,8 @@ function RiskBadge({ severity, copy }: { severity: string; copy: Copy }) {
 }
 function warningLabel(code: string, locale: string, fallback: string) {
   const labels: Record<string, [string, string]> = {
+    recorded_subnet_conflict: ["同一主机的网段记录存在冲突，当前使用扫描范围或地址分组。", "A host has conflicting subnet records; a scan range or address group is shown."],
+    scan_ranges_unreadable: ["部分任务的扫描范围无法读取，已按可用主机地址分组。", "Some scan ranges could not be read; available host addresses are used for grouping."],
     source_unreadable: ["无法读取部分任务来源。", "Some task sources could not be read."],
     legacy_inventory: ["旧任务没有完整主机清单，已从保留资料回补可识别的主机。", "This older task has no complete host inventory; identifiable hosts were recovered from retained records."],
     host_inventory_unreadable: ["无法读取任务的主机清单。", "The task's host inventory could not be read."],
@@ -120,7 +129,11 @@ export default function ProjectTopology({ projectId }: { projectId: string }) {
   const [group, setGroup] = React.useState("");
   const [risk, setRisk] = React.useState("all");
   const [credentialOnly, setCredentialOnly] = React.useState(false);
-  const [page, setPage] = React.useState(0);
+  const [selectedEdgeIds, setSelectedEdgeIds] = React.useState<string[]>([]);
+  const [fullscreen, setFullscreen] = React.useState(false);
+  const container = React.useRef<HTMLElement | null>(null);
+  const detailPanel = React.useRef<HTMLElement | null>(null);
+  const searchInput = React.useRef<HTMLInputElement | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const origin = React.useRef<HTMLButtonElement | null>(null);
   const request = React.useRef<AbortController | null>(null);
@@ -167,11 +180,11 @@ export default function ProjectTopology({ projectId }: { projectId: string }) {
 
   React.useEffect(() => {
     loaded.current = false; fingerprint.current = "";
-    setData(null); setSelectedId(null);
+    setData(null); setSelectedId(null); setSelectedEdgeIds([]);
     void load("read");
     // Reads only check freshness; generation is exclusively a user action.
     const poll = window.setInterval(() => { if (document.visibilityState === "visible") void load("read", true); }, 30_000);
-    const clear = () => { generation.current += 1; loaded.current = false; request.current?.abort(); setData(null); setSelectedId(null); };
+    const clear = () => { generation.current += 1; loaded.current = false; request.current?.abort(); setData(null); setSelectedId(null); setSelectedEdgeIds([]); };
     window.addEventListener("strixops:auth-cleared", clear);
     return () => {
       generation.current += 1; request.current?.abort(); request.current = null;
@@ -182,34 +195,66 @@ export default function ProjectTopology({ projectId }: { projectId: string }) {
   const snapshot = data?.snapshot;
   const nodes = snapshot?.nodes ?? EMPTY_NODES;
   const edges = snapshot?.edges ?? EMPTY_EDGES;
-  const selected = nodes.find((node) => node.id === selectedId) ?? null;
-  const groups = React.useMemo(() => {
-    const map = new Map<string, { context: string; subnet: string; count: number }>();
-    for (const node of nodes) {
-      const key = groupKey(node), existing = map.get(key);
-      if (existing) existing.count += 1;
-      else map.set(key, { context: node.network_context, subnet: node.subnet, count: 1 });
-    }
-    return [...map].sort(([a], [b]) => a.localeCompare(b));
-  }, [nodes]);
-  const filtered = React.useMemo(() => nodes.filter((node) => (
-    (!group || groupKey(node) === group)
-    && (risk !== "high" || ["critical", "high"].includes(node.severity.toLowerCase()))
-    && (!credentialOnly || node.credentials.length > 0)
-    && (!query.trim() || [node.hostname, node.ip, node.address, node.network_context, node.subnet].some((value) => value.toLowerCase().includes(query.trim().toLowerCase())))
-  )).sort((a, b) => groupKey(a).localeCompare(groupKey(b)) || nodeName(a).localeCompare(nodeName(b), undefined, { numeric: true })), [nodes, group, risk, credentialOnly, query]);
-  const maxPage = Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1);
-  const currentPage = Math.min(page, maxPage);
-  const shown = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-  const visibleIds = new Set(shown.map((node) => node.id));
-  const visibleEdges = edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
-  React.useEffect(() => { setPage(0); }, [query, group, risk, credentialOnly]);
-  const reset = () => { setQuery(""); setGroup(""); setRisk("all"); setCredentialOnly(false); setPage(0); };
-
-  return <section className={styles.root} aria-label={copy.title}>
+  const nodeIndex = React.useMemo(() => new Map(nodes.map(node => [node.id, node])), [nodes]);
+  const selected = selectedId ? nodeIndex.get(selectedId) ?? null : null;
+  const selectedEdges = React.useMemo(() => {
+    const ids = new Set(selectedEdgeIds);
+    return edges.filter(edge => ids.has(edge.id));
+  }, [edges, selectedEdgeIds]);
+  React.useEffect(() => {
+    if (selectedId && !nodeIndex.has(selectedId)) setSelectedId(null);
+    const currentEdges = new Set(edges.map(edge => edge.id));
+    setSelectedEdgeIds(ids => ids.some(id => !currentEdges.has(id)) ? ids.filter(id => currentEdges.has(id)) : ids);
+  }, [nodeIndex, edges, selectedId]);
+  const groups = React.useMemo(() => groupTopologyNodes(nodes), [nodes]);
+  React.useEffect(() => {
+    if (group && !groups.some(entry => entry.id === group)) setGroup("");
+  }, [groups, group]);
+  const hasFilters = !!(query.trim() || group || risk !== "all" || credentialOnly);
+  const matching = React.useMemo(() => nodes.filter(node => {
+    const grouping = getNodeGrouping(node);
+    return (!group || grouping.key === group)
+      && (risk !== "high" || ["critical", "high"].includes(node.severity.toLowerCase()))
+      && (!credentialOnly || node.credentials.length > 0)
+      && (!query.trim() || [node.hostname, node.ip, node.address, grouping.cidr, grouping.context].some(value => value.toLowerCase().includes(query.trim().toLowerCase())));
+  }), [nodes, query, group, risk, credentialOnly]);
+  const highlightIds = React.useMemo(() => hasFilters ? matching.map(node => node.id) : undefined, [hasFilters, matching]);
+  const reset = () => { setQuery(""); setGroup(""); setRisk("all"); setCredentialOnly(false); };
+  const closeDetails = React.useCallback(() => {
+    setSelectedId(null); setSelectedEdgeIds([]);
+    requestAnimationFrame(() => { if (origin.current?.isConnected) origin.current.focus({ preventScroll: true }); else searchInput.current?.focus({ preventScroll: true }); });
+  }, []);
+  const selectHost = React.useCallback((id: string) => { setSelectedId(id); setSelectedEdgeIds([]); }, []);
+  const onSelect = React.useCallback((node: TopologyNode, element: HTMLButtonElement) => { origin.current = element; selectHost(node.id); }, [selectHost]);
+  const onSelectEdges = React.useCallback((selection: TopologyEdge[]) => { setSelectedId(null); setSelectedEdgeIds(selection.map(edge => edge.id)); }, []);
+  React.useEffect(() => {
+    if (!selectedId && !selectedEdgeIds.length) return;
+    const frame = requestAnimationFrame(() => {
+      const panel = detailPanel.current;
+      if (!panel) return;
+      if (window.innerWidth <= 800 || (container.current?.clientWidth ?? 0) <= 780) panel.scrollIntoView({ block: "start" });
+      panel.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedId, selectedEdgeIds]);
+  React.useEffect(() => {
+    const update = () => setFullscreen(document.fullscreenElement === container.current);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === container.current) await document.exitFullscreen();
+      else await container.current?.requestFullscreen();
+    } catch { /* Browsers may disable fullscreen; the canvas remains usable inline. */ }
+  };
+  return <section ref={container} className={styles.root} aria-label={copy.title} onKeyDown={event => {
+    if (event.key === "Escape" && (selected || selectedEdges.length)) { event.stopPropagation(); closeDetails(); }
+  }}>
     <header className={styles.header}>
       <div><h2><Network size={17} aria-hidden="true" />{copy.title}</h2><p>{copy.hint}</p></div>
       <div className={styles.actions}>
+        <button type="button" className={styles.iconButton} aria-label={fullscreen ? copy.exitFullscreen : copy.fullscreen} title={fullscreen ? copy.exitFullscreen : copy.fullscreen} onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
         <button type="button" className={styles.secondary} disabled={busy !== null} onClick={() => void load("read")}><RefreshCw size={14} aria-hidden="true" />{copy.refresh}</button>
         <button type="button" className={styles.primary} disabled={busy !== null || !data || data.eligible_runs === 0 || data.source_status === "missing"} onClick={() => void load("generate")}>
           {busy === "generate" ? <Spinner /> : <Network size={15} aria-hidden="true" />}{busy === "generate" ? copy.generating : snapshot ? copy.regenerate : copy.generate}
@@ -224,92 +269,44 @@ export default function ProjectTopology({ projectId }: { projectId: string }) {
     {!!data?.warnings.length && <details className={styles.warnings}><summary>{copy.warnings} · {data.warnings.length}</summary><ul>{data.warnings.map((warning, index) => <li key={`${warning.code}:${warning.run}:${index}`}>
       <span>{warningLabel(warning.code, locale, copy.sourceWarning)}</span>{warning.run && <Link href={taskHref(warning.run)}>{warning.run}</Link>}
     </li>)}</ul></details>}
+    {snapshot && !snapshot.grouping_version && nodes.length > 0 && <p className={styles.upgradeNote}>{copy.groupUpgrade}</p>}
     {!data && busy && <div className={styles.empty} role="status"><Spinner /><p>{copy.loading}</p></div>}
     {data && <>
-      <div className={styles.stats} aria-label={copy.title}>
-        {[[nodes.length, copy.hosts], [groups.length, copy.subnets], [edges.length, copy.relations], [nodes.filter((node) => node.credentials.length).length, copy.withCredentials], [data.eligible_runs, copy.tasks]].map(([count, label]) => <div key={label}><strong>{count}</strong><span>{label}</span></div>)}
+      <div className={styles.summaryBar}>
+        <div className={styles.stats} aria-label={copy.title}>{[[nodes.length, copy.hosts], [groups.length, copy.subnets], [edges.length, copy.relations], [nodes.filter(node => node.credentials.length).length, copy.withCredentials]].map(([count, label]) => <span key={label}><strong>{count}</strong> {label}</span>)}</div>
+        {snapshot && <div className={styles.snapshotMeta}><span>{copy.generated} · {timestamp(snapshot.generated_at, locale)}</span><span>v{snapshot.version}</span></div>}
       </div>
-      {snapshot && <div className={styles.snapshotMeta}><span>{copy.generated} · {timestamp(snapshot.generated_at, locale)}</span><span>{copy.version} {snapshot.version}</span></div>}
       {!snapshot ? <div className={styles.empty}><Network size={36} aria-hidden="true" /><h3>{data.eligible_runs ? copy.manual : copy.noTasks}</h3><p>{data.eligible_runs ? copy.manualHint : copy.noTasksHint}</p></div>
         : !nodes.length ? <div className={styles.empty}><Server size={32} aria-hidden="true" /><h3>{copy.noHosts}</h3><p>{copy.noHostsHint}</p></div>
           : <>
             <div className={styles.toolbar} role="group" aria-label={copy.filters}>
-              <label className={styles.search}><Search size={15} aria-hidden="true" /><input aria-label={copy.search} placeholder={copy.search} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-              <select aria-label={copy.subnets} value={group} onChange={(event) => setGroup(event.target.value)}><option value="">{copy.allGroups}</option>{groups.map(([key, entry]) => <option key={key} value={key}>{entry.context || copy.unknownContext} / {entry.subnet || copy.unknownSubnet} ({entry.count})</option>)}</select>
-              <select aria-label={copy.allRisk} value={risk} onChange={(event) => setRisk(event.target.value)}><option value="all">{copy.allRisk}</option><option value="high">{copy.highRisk}</option></select>
+              <label className={styles.search}><Search size={15} aria-hidden="true" /><input ref={searchInput} type="search" aria-label={copy.search} placeholder={copy.search} value={query} onChange={event => setQuery(event.target.value)} /></label>
+              <select aria-label={copy.subnets} value={group} onChange={event => setGroup(event.target.value)}><option value="">{copy.allGroups}</option>{groups.map(entry => <option key={entry.id} value={entry.id}>{entry.cidr || copy.unknownSubnet}{entry.context ? ` · ${entry.context}` : ""} ({entry.nodes.length})</option>)}</select>
+              <select aria-label={copy.allRisk} value={risk} onChange={event => setRisk(event.target.value)}><option value="all">{copy.allRisk}</option><option value="high">{copy.highRisk}</option></select>
               <button type="button" className={styles.filter} aria-pressed={credentialOnly} onClick={() => setCredentialOnly(!credentialOnly)}><KeyRound size={14} aria-hidden="true" />{copy.credentialsOnly}</button>
             </div>
-            <div className={styles.legend}><span><i className={styles.solidLine} />{copy.verified}</span><span><i className={styles.dashedLine} />{copy.unverified}</span><span>{copy.membership}</span></div>
-            {shown.length ? <HostGraph nodes={shown} edges={visibleEdges} copy={copy} selectedId={selectedId} onSelect={(node, element) => { origin.current = element; setSelectedId(node.id); }} />
-              : <div className={styles.empty}><p>{copy.noMatch}</p><button type="button" className={styles.secondary} onClick={reset}>{copy.reset}</button></div>}
-            <footer className={styles.footer}>
-              <div><span>{copy.showing} {filtered.length ? currentPage * PAGE_SIZE + 1 : 0}–{Math.min((currentPage + 1) * PAGE_SIZE, filtered.length)} / {filtered.length} · {copy.of} {nodes.length} {copy.hosts}</span><small>{copy.visibleEdges} {visibleEdges.length} / {edges.length}{visibleEdges.length < edges.length ? ` · ${copy.hiddenEdges}` : ""}</small></div>
-              <div className={styles.pagination}><button type="button" className={styles.iconButton} aria-label={copy.previous} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} /></button><span>{copy.page} {currentPage + 1} / {maxPage + 1}</span><button type="button" className={styles.iconButton} aria-label={copy.next} disabled={currentPage >= maxPage} onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} /></button></div>
-            </footer>
+            {hasFilters && <div className={styles.matchStatus} role="status"><span>{matching.length ? `${copy.matched} · ${matching.length} / ${nodes.length}` : copy.noMatch}</span><button type="button" className={styles.textButton} onClick={reset}>{copy.reset}</button></div>}
+            <div className={styles.workspace}>
+              <div className={styles.canvasPane}><TopologyCanvas projectId={projectId} nodes={nodes} edges={edges} locale={locale} selectedId={selectedId} onSelect={onSelect} onSelectEdges={onSelectEdges} query={query} highlightIds={highlightIds} selectedEdgeIds={selectedEdgeIds} /></div>
+              {(selected || selectedEdges.length > 0) && <aside ref={detailPanel} className={styles.drawer} tabIndex={-1} aria-label={selected ? copy.details : copy.relationshipDetails}>
+                {selected ? <HostDetails key={`${selected.id}:${snapshot.version}`} node={selected} snapshot={snapshot} projectId={projectId} locale={locale} copy={copy} onSelect={selectHost} onClose={closeDetails} />
+                  : <RelationshipDetails edges={selectedEdges} nodes={nodeIndex} locale={locale} copy={copy} onSelect={selectHost} onClose={closeDetails} />}
+              </aside>}
+            </div>
+            <footer className={styles.legend}>{copy.membership}</footer>
           </>}
     </>}
-    <Dialog.Root open={!!selected} onOpenChange={(open) => { if (!open) setSelectedId(null); }}>
-      <Dialog.Portal><Dialog.Overlay className={styles.overlay} /><Dialog.Content className={styles.drawer} onCloseAutoFocus={(event) => { event.preventDefault(); origin.current?.focus(); }}>
-        {selected && snapshot && <HostDetails key={`${selected.id}:${snapshot.version}`} node={selected} snapshot={snapshot} projectId={projectId} locale={locale} copy={copy} onSelect={setSelectedId} />}
-      </Dialog.Content></Dialog.Portal>
-    </Dialog.Root>
   </section>;
 }
 
-function HostGraph({ nodes, edges, copy, selectedId, onSelect }: { nodes: TopologyNode[]; edges: TopologyEdge[]; copy: Copy; selectedId: string | null; onSelect: (node: TopologyNode, element: HTMLButtonElement) => void }) {
-  const canvas = React.useRef<HTMLDivElement | null>(null);
-  const elements = React.useRef(new Map<string, HTMLButtonElement>());
-  const [paths, setPaths] = React.useState<Array<{ edge: TopologyEdge; path: string }>>([]);
-  const marker = React.useId().replace(/:/g, "");
-  const groups = new Map<string, TopologyNode[]>();
-  for (const node of nodes) groups.set(groupKey(node), [...(groups.get(groupKey(node)) ?? []), node]);
-  React.useEffect(() => {
-    const root = canvas.current;
-    if (!root) return;
-    const measure = () => {
-      const base = root.getBoundingClientRect();
-      setPaths(edges.flatMap((edge) => {
-        const source = elements.current.get(edge.source)?.getBoundingClientRect(), target = elements.current.get(edge.target)?.getBoundingClientRect();
-        if (!source || !target) return [];
-        const sameRow = Math.abs(source.top - target.top) < 10;
-        const direction = source.left < target.left ? 1 : -1;
-        const sx = (sameRow ? (direction > 0 ? source.right : source.left) : source.left + source.width / 2) - base.left;
-        const sy = (sameRow ? source.top + source.height / 2 : source.top < target.top ? source.bottom : source.top) - base.top;
-        const tx = (sameRow ? (direction > 0 ? target.left : target.right) : target.left + target.width / 2) - base.left;
-        const ty = (sameRow ? target.top + target.height / 2 : source.top < target.top ? target.top : target.bottom) - base.top;
-        // Keep long connections in the outside gutter so they never appear
-        // to terminate on unrelated host cards between the two endpoints.
-        const vertical = sy < ty ? 1 : -1;
-        const path = sameRow ? `M${sx},${sy} C${sx + direction * 28},${sy - 30} ${tx - direction * 28},${ty - 30} ${tx},${ty}` : `M${sx},${sy} L${sx},${sy + vertical * 12} L9,${sy + vertical * 12} L9,${ty - vertical * 12} L${tx},${ty - vertical * 12} L${tx},${ty}`;
-        return [{ edge, path }];
-      }));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    for (const element of elements.current.values()) observer.observe(element);
-    return () => observer.disconnect();
-  }, [nodes, edges]);
-  return <div className={styles.canvas} ref={canvas}>
-    <svg className={styles.connections} aria-hidden="true"><defs><marker id={marker} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>{paths.map(({ edge, path }) => <path key={edge.id} d={path} fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray={edge.verified ? undefined : "5 5"} markerEnd={`url(#${marker})`} />)}</svg>
-    {[...groups].map(([key, groupNodes]) => <section key={key} className={styles.networkGroup}>
-      <header className={styles.groupHeading}><Network size={14} aria-hidden="true" /><strong>{groupNodes[0].subnet || copy.unknownSubnet}</strong><span>{groupNodes[0].network_context || copy.unknownContext}</span><small>{groupNodes.length} {copy.hosts}</small></header>
-      <div className={styles.hostGrid}>{groupNodes.map((node) => <div key={node.id} className={styles.hostWrap}>
-        <button type="button" ref={(element) => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }} className={styles.host} data-risk={node.severity.toLowerCase()} aria-pressed={selectedId === node.id} onClick={(event) => onSelect(node, event.currentTarget)} aria-label={`${nodeName(node)} · ${node.ip || node.address} · ${riskLabel(node.severity, copy)} · ${copy.vulnerabilities} ${node.vulnerabilities.length} · ${copy.findings} ${node.findings.length} · ${copy.credentials} ${node.credentials.length}`}>
-          <span className={styles.hostTop}><Server size={23} aria-hidden="true" /><span className={styles.statusDot} data-reachable={node.status === "reachable"} title={node.status === "reachable" ? copy.reachable : copy.observed} /><span className={styles.hostRisk}>{riskLabel(node.severity, copy)}</span></span>
-          <strong title={node.hostname || copy.unnamed}>{node.hostname || copy.unnamed}</strong><code>{node.ip || node.address || "—"}</code>
-          <span className={styles.hostCounts}><span title={copy.vulnerabilities}><ShieldAlert size={12} />{node.vulnerabilities.length}</span><span title={copy.findings}><Fingerprint size={12} />{node.findings.length}</span><span title={copy.credentials}><KeyRound size={12} />{node.credentials.length}</span></span>
-        </button>
-        <div className={styles.tooltip} role="tooltip"><strong>{nodeName(node)}</strong><span>{node.status === "reachable" ? copy.reachable : copy.observed}</span><span>{copy.vulnerabilities} {node.vulnerabilities.length} · {copy.findings} {node.findings.length} · {copy.credentials} {node.credentials.length}</span></div>
-      </div>)}</div>
-    </section>)}
-  </div>;
-}
+function basisLabel(basis: GroupingBasis, copy: Copy) { return copy[basis]; }
 
-function HostDetails({ node, snapshot, projectId, locale, copy, onSelect }: { node: TopologyNode; snapshot: TopologySnapshot; projectId: string; locale: string; copy: Copy; onSelect: (id: string) => void }) {
-  const [tab, setTab] = React.useState<DetailTab>("vulnerabilities");
+function HostDetails({ node, snapshot, projectId, locale, copy, onSelect, onClose }: { node: TopologyNode; snapshot: TopologySnapshot; projectId: string; locale: string; copy: Copy; onSelect: (id: string) => void; onClose: () => void }) {
+  const [tab, setTab] = React.useState<DetailTab>("overview");
   const id = React.useId();
-  const edges = snapshot.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+  const grouping = getNodeGrouping(node);
+  const nodeIndex = React.useMemo(() => new Map(snapshot.nodes.map(entry => [entry.id, entry])), [snapshot.nodes]);
+  const edges = React.useMemo(() => snapshot.edges.filter(edge => edge.source === node.id || edge.target === node.id), [snapshot.edges, node.id]);
   const tabKey = (event: React.KeyboardEvent<HTMLButtonElement>, current: DetailTab) => {
     const index = DETAIL_TABS.indexOf(current);
     const next = event.key === "ArrowRight" ? (index + 1) % DETAIL_TABS.length : event.key === "ArrowLeft" ? (index + DETAIL_TABS.length - 1) % DETAIL_TABS.length : event.key === "Home" ? 0 : event.key === "End" ? DETAIL_TABS.length - 1 : null;
@@ -317,23 +314,39 @@ function HostDetails({ node, snapshot, projectId, locale, copy, onSelect }: { no
     event.preventDefault(); setTab(DETAIL_TABS[next]);
     document.getElementById(`${id}-${DETAIL_TABS[next]}`)?.focus();
   };
+  const tabLabels = { overview: copy.overviewTab, vulnerabilities: copy.vulnTab, findings: copy.findingTab, credentials: copy.credentialTab, sources: copy.sourceTab };
   return <>
-    <header className={styles.drawerHeader}><div><span className={styles.kicker}>{copy.details}</span><Dialog.Title className={styles.drawerTitle}>{nodeName(node)}</Dialog.Title><Dialog.Description className={styles.drawerDescription}>{node.ip || node.address} · {node.status === "reachable" ? copy.reachable : copy.observed}</Dialog.Description></div><Dialog.Close className={styles.iconButton} aria-label={copy.close}><X size={18} /></Dialog.Close></header>
-    <div className={styles.drawerSummary}><RiskBadge severity={node.severity} copy={copy} />{node.backfilled && <span>{copy.backfilled}</span>}<dl className={styles.properties}>{[[copy.context, node.network_context || copy.unknownContext], [copy.subnet, node.subnet || copy.unknownSubnet], [copy.os, node.os], [copy.role, node.role], [copy.firstSeen, timestamp(node.first_seen, locale)], [copy.lastSeen, timestamp(node.last_seen, locale)]].filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></div>
-    <nav className={styles.detailTabs} role="tablist" aria-label={copy.details}>{DETAIL_TABS.map((entry) => <button key={entry} type="button" id={`${id}-${entry}`} role="tab" aria-selected={tab === entry} tabIndex={tab === entry ? 0 : -1} aria-controls={`${id}-panel`} onClick={() => setTab(entry)} onKeyDown={(event) => tabKey(event, entry)}>{copy[entry]}<span>{entry === "sources" ? node.sources.length + edges.length : node[entry].length}</span></button>)}</nav>
+    <header className={styles.drawerHeader}><div><span className={styles.kicker}>{copy.details}</span><h3 className={styles.drawerTitle}>{nodeName(node)}</h3><p className={styles.drawerDescription}>{node.ip || node.address}</p></div><button type="button" className={styles.iconButton} aria-label={copy.close} onClick={onClose}><X size={18} /></button></header>
+    <div className={styles.drawerBadges}><RiskBadge severity={node.severity} copy={copy} /><span>{node.status === "reachable" ? copy.reachable : copy.observed}</span>{node.backfilled && <span>{copy.backfilled}</span>}</div>
+    <nav className={styles.detailTabs} role="tablist" aria-label={copy.details}>{DETAIL_TABS.map(entry => <button key={entry} type="button" id={`${id}-${entry}`} role="tab" aria-selected={tab === entry} tabIndex={tab === entry ? 0 : -1} aria-controls={`${id}-panel`} onClick={() => setTab(entry)} onKeyDown={event => tabKey(event, entry)}>{tabLabels[entry]}{entry !== "overview" && <span>{entry === "sources" ? node.sources.length + edges.length : node[entry].length}</span>}</button>)}</nav>
     <div className={styles.drawerBody} role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} tabIndex={0}>
+      {tab === "overview" && <>
+        {node.group_conflict && <p className={styles.note}>{copy.subnetConflict}</p>}
+        <dl className={styles.properties}>{[[copy.groupCidr, grouping.cidr || copy.unknownSubnet], [copy.groupBasis, basisLabel(grouping.basis, copy)], [copy.context, grouping.context || copy.unknownContext], [copy.os, node.os], [copy.role, node.role], [copy.firstSeen, timestamp(node.first_seen, locale)], [copy.lastSeen, timestamp(node.last_seen, locale)]].filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+        <h3 className={styles.sectionTitle}>{copy.related} · {edges.length}</h3>
+        {edges.length ? edges.map(edge => { const other = nodeIndex.get(edge.source === node.id ? edge.target : edge.source); return <div className={styles.relatedRow} key={edge.id}><span>{edge.source === node.id ? <ArrowRight size={14} /> : <ArrowRight size={14} className={styles.incoming} />}</span><button type="button" className={styles.textButton} disabled={!other} onClick={() => other && onSelect(other.id)}>{other ? nodeName(other) : copy.unknown}<small>{other?.ip || other?.address}</small></button><span>{relationLabel(edge.relation_type, locale)}</span></div>; }) : <p className={styles.note}>{copy.noRelations}</p>}
+      </>}
       {(tab === "vulnerabilities" || tab === "findings") && <RecordList records={node[tab]} empty={tab === "vulnerabilities" ? copy.noVulns : copy.noFindings} copy={copy} />}
-      {tab === "credentials" && <><p className={styles.note}>{copy.secretHint}</p>{node.credentials.length ? node.credentials.map((credential) => <Credential key={`${credential.source_run}:${credential.id}`} credential={credential} projectId={projectId} nodeId={node.id} version={snapshot.version} copy={copy} />) : <p className={styles.note}>{copy.noCredentials}</p>}</>}
+      {tab === "credentials" && <><p className={styles.note}>{copy.secretHint}</p>{node.credentials.length ? node.credentials.map(credential => <Credential key={`${credential.source_run}:${credential.id}`} credential={credential} projectId={projectId} nodeId={node.id} version={snapshot.version} copy={copy} />) : <p className={styles.note}>{copy.noCredentials}</p>}</>}
       {tab === "sources" && <>
         <h3 className={styles.sectionTitle}>{copy.related} · {edges.length}</h3><p className={styles.note}>{copy.edgeHint}</p>
-        {edges.length ? edges.map((edge) => {
-          const other = snapshot.nodes.find((entry) => entry.id === (edge.source === node.id ? edge.target : edge.source));
-          return <article key={edge.id} className={styles.record}><div className={styles.recordHeader}><span className={styles.relationship} data-verified={edge.verified}>{edge.verified ? <Check size={13} /> : <CircleAlert size={13} />}{edge.verified ? copy.verified : copy.unverified}</span><code>{relationLabel(edge.relation_type, locale)}</code></div><div className={styles.relatedHost}><span>{edge.source === node.id ? nodeName(node) : other ? nodeName(other) : edge.source}</span><ArrowRight size={14} aria-hidden="true" /><span>{edge.target === node.id ? nodeName(node) : other ? nodeName(other) : edge.target}</span></div>{other && <button type="button" className={styles.textButton} onClick={() => onSelect(other.id)}><Server size={13} />{nodeName(other)}</button>}<p>{edge.evidence || copy.noSources}</p>{edge.source_run && <SourceLink name={edge.source_run} copy={copy} />}</article>;
-        }) : <p className={styles.note}>{copy.noRelations}</p>}
+        {edges.length ? edges.map(edge => <RelationshipRecord key={edge.id} edge={edge} nodes={nodeIndex} locale={locale} copy={copy} onSelect={onSelect} />) : <p className={styles.note}>{copy.noRelations}</p>}
         <h3 className={styles.sectionTitle}>{copy.evidence} · {node.sources.length}</h3>{node.sources.length ? node.sources.map((source, index) => <article className={styles.record} key={`${source.run}:${source.source}:${index}`}><div className={styles.recordHeader}><code>{source.source || copy.unknown}</code>{source.observed_at && <time>{timestamp(source.observed_at, locale)}</time>}</div><p>{source.evidence || copy.noSources}</p>{source.agent_id && <p className={styles.note}>{copy.agent} · {source.agent_id}</p>}{source.run && <SourceLink name={source.run} copy={copy} />}</article>) : <p className={styles.note}>{copy.noSources}</p>}
       </>}
     </div>
   </>;
+}
+
+function RelationshipRecord({ edge, nodes, locale, copy, onSelect }: { edge: TopologyEdge; nodes: Map<string, TopologyNode>; locale: string; copy: Copy; onSelect: (id: string) => void }) {
+  return <article className={styles.record}>
+    <div className={styles.recordHeader}><span className={styles.relationship} data-verified={edge.verified}>{edge.verified ? <Check size={13} /> : <CircleAlert size={13} />}{edge.verified ? copy.verified : copy.unverified}</span><code>{relationLabel(edge.relation_type, locale)}</code></div>
+    <div className={styles.edgeEndpoints}>{[[copy.from, edge.source], [copy.to, edge.target]].map(([label, id]) => { const node = nodes.get(id); return <div key={label}><small>{label}</small><button type="button" className={styles.textButton} disabled={!node} onClick={() => node && onSelect(node.id)}>{node ? nodeName(node) : id}<small>{node?.ip || node?.address}</small></button></div>; })}</div>
+    <p>{edge.evidence || copy.noSources}</p>{edge.source_run && <SourceLink name={edge.source_run} copy={copy} />}
+  </article>;
+}
+
+function RelationshipDetails({ edges, nodes, locale, copy, onSelect, onClose }: { edges: TopologyEdge[]; nodes: Map<string, TopologyNode>; locale: string; copy: Copy; onSelect: (id: string) => void; onClose: () => void }) {
+  return <><header className={styles.drawerHeader}><div><span className={styles.kicker}>{copy.relationshipDetails}</span><h3 className={styles.drawerTitle}>{copy.relationships} · {edges.length}</h3></div><button type="button" className={styles.iconButton} aria-label={copy.close} onClick={onClose}><X size={18} /></button></header><div className={styles.drawerBody}><p className={styles.note}>{copy.relationBundleHint}</p>{edges.map(edge => <RelationshipRecord key={edge.id} edge={edge} nodes={nodes} locale={locale} copy={copy} onSelect={onSelect} />)}</div></>;
 }
 
 function SourceLink({ name, copy }: { name: string; copy: Copy }) {

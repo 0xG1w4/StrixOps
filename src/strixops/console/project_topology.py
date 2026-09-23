@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from strixops.console import credentials, json_store
+from strixops.engine.targets import MAX_TARGETS
 from strixops.report.host_inventory import HostInventory, HostInventoryError, canonical_address
 
 OpenFile = Callable[[Path, str], int]
@@ -31,6 +32,8 @@ MAX_RECORDS = 200_000
 _PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SEVERITY = {"critical": 5, "high": 4, "medium": 3, "low": 2, "info": 1, "": 0}
 _TEXT_FIELDS = {"title", "description", "content", "evidence", "source", "validation_evidence", "os", "role"}
+_CIDR = re.compile(r"[0-9a-fA-F:.]+/[0-9]{1,3}\Z")
+Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
 def _open_file(run_dir: Path, relative: str) -> int:
@@ -316,11 +319,101 @@ def _record_view(row: dict, run: str) -> dict:
     return result
 
 
+def _cidr(value: Any, *, strict: bool) -> Network | None:
+    """Only complete address/prefix tokens qualify; never extract from prose or URLs."""
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    value = value.strip()
+    if not _CIDR.fullmatch(value):
+        return None
+    try:
+        return ipaddress.ip_network(value, strict=strict)
+    except ValueError:
+        return None
+
+
+def _scan_ranges(config: Any) -> list[Network]:
+    if not isinstance(config, dict):
+        raise ValueError("invalid scan configuration")
+    primary, targets = config.get("target"), config.get("targets", [])
+    if targets is None:
+        targets = []
+    if not isinstance(targets, list) or len(targets) > MAX_TARGETS:
+        raise ValueError("invalid recorded target list")
+    if primary is not None and not isinstance(primary, str):
+        raise ValueError("invalid recorded target")
+    if not all(isinstance(target, str) for target in targets):
+        raise ValueError("invalid recorded target")
+    networks = {}
+    for target in [primary, *targets]:
+        # Host bits are accepted for a *scan range*, not promoted to a confirmed subnet.
+        network = _cidr(target, strict=False)
+        if network is not None:
+            networks[str(network)] = network
+    return sorted(networks.values(), key=lambda network: (-network.prefixlen, str(network)))
+
+
+def _group_hosts(
+    nodes: dict[str, dict],
+    node_runs: dict[str, set[str]],
+    recorded_subnets: dict[str, set[str]],
+    scan_ranges: dict[str, list[Network]],
+    warnings: list[dict],
+) -> None:
+    """Compute display groups without changing recorded host identity or network evidence."""
+    for node_id, node in nodes.items():
+        node.update(group_cidr="", group_basis="unassigned")
+        if not node["ip"]:
+            continue
+        address = ipaddress.ip_address(node["ip"])
+        recorded = {
+            str(network): network
+            for value in recorded_subnets[node_id]
+            if (network := _cidr(value, strict=True)) is not None
+            and network.version == address.version
+            and address in network
+        }
+        if len(recorded) == 1:
+            node.update(group_cidr=next(iter(recorded)), group_basis="recorded_subnet")
+            continue
+        if len(recorded) > 1:
+            # Even nested CIDRs disagree about a host's actual mask. Keep the evidence,
+            # but use a labelled display fallback instead of claiming either is confirmed.
+            node["group_conflict"] = True
+            _warning(warnings, "recorded_subnet_conflict")
+        matches = (
+            network
+            for run in node_runs[node_id]
+            for network in scan_ranges.get(run, [])
+            if network.version == address.version and address in network
+        )
+        network = min(matches, key=lambda value: (-value.prefixlen, str(value)), default=None)
+        if network is not None:
+            node.update(group_cidr=str(network), group_basis="scan_range")
+        else:
+            prefix = 24 if address.version == 4 else 64
+            node.update(
+                group_cidr=str(ipaddress.ip_network(f"{address}/{prefix}", strict=False)),
+                group_basis="address_group",
+            )
+
+
 def _build(runs: list[Path], opener: OpenFile, warnings: list[dict]) -> tuple[list[dict], list[dict]]:
     documents: dict[str, dict] = {}
     known_names: dict[tuple[str, str], set[str]] = defaultdict(set)
     project_secrets: set[str] = set()
+    scan_ranges: dict[str, list[Network]] = {}
+    range_count = 0
     for run in runs:
+        try:
+            config = _json(run, "run.json", opener).get("scan_config", {})
+            scan_ranges[run.name] = _scan_ranges(config)
+        except (OSError, ValueError, AttributeError, TypeError, RecursionError):
+            scan_ranges[run.name] = []
+            _warning(warnings, "scan_ranges_unreadable", run.name)
+        range_count += len(scan_ranges[run.name])
+        if range_count > MAX_RECORDS:
+            raise ValueError("topology scan range limit exceeded")
         try:
             inventory = HostInventory(run).snapshot()
         except (HostInventoryError, OSError, ValueError):
@@ -394,6 +487,8 @@ def _build(runs: list[Path], opener: OpenFile, warnings: list[dict]) -> tuple[li
     nodes: dict[str, dict] = {}
     aliases: dict[tuple[str, str], set[str]] = defaultdict(set)
     host_ids: dict[tuple[str, str], str] = {}
+    node_runs: dict[str, set[str]] = defaultdict(set)
+    recorded_subnets: dict[str, set[str]] = defaultdict(set)
 
     def add_host(host: dict, run: str, *, backfilled: bool = False) -> str:
         context = "context:" + host["network_context"] if host.get("network_context") else "run:" + run
@@ -412,6 +507,7 @@ def _build(runs: list[Path], opener: OpenFile, warnings: list[dict]) -> tuple[li
                 "ip": normalized[1] if normalized else "",
                 "hostname": host.get("hostname", ""),
                 "network_context": host.get("network_context") or run,
+                "group_context": host.get("network_context") or "",
                 "subnet": host.get("subnet", ""),
                 "os": host.get("os", ""),
                 "role": host.get("role", ""),
@@ -426,6 +522,9 @@ def _build(runs: list[Path], opener: OpenFile, warnings: list[dict]) -> tuple[li
                 "credentials": [],
             }
         node = nodes[node_id]
+        node_runs[node_id].add(run)
+        if host.get("subnet"):
+            recorded_subnets[node_id].add(host["subnet"])
         for field in ("hostname", "subnet", "os", "role"):
             if not node[field] and host.get(field):
                 node[field] = host[field]
@@ -472,7 +571,9 @@ def _build(runs: list[Path], opener: OpenFile, warnings: list[dict]) -> tuple[li
             _warning(warnings, "ambiguous_host", run)
             return None
         if matching:
-            return nodes[next(iter(matching))]
+            node_id = next(iter(matching))
+            node_runs[node_id].add(run)
+            return nodes[node_id]
         node_id = add_host(
             {
                 "address": address,
@@ -549,6 +650,7 @@ def _build(runs: list[Path], opener: OpenFile, warnings: list[dict]) -> tuple[li
             )
     for node in nodes.values():
         node["vulnerabilities"].sort(key=lambda row: -_SEVERITY.get(row["severity"], 0))
+    _group_hosts(nodes, node_runs, recorded_subnets, scan_ranges, warnings)
     return sorted(
         nodes.values(),
         key=lambda node: (
@@ -596,6 +698,7 @@ def generate_topology(
             raise ValueError("invalid topology snapshot")
         snapshot = {
             "version": previous.get("version", 0) + 1,
+            "grouping_version": 1,
             "generated_at": datetime.now(UTC).isoformat(),
             "source_fingerprint": fingerprint,
             "run_names": [run.name for run in runs],

@@ -12,6 +12,10 @@ export type TopologyCredential = {
 export type TopologyNode = {
   id: string; address: string; ip: string; hostname: string; network_context: string;
   subnet: string; os: string; role: string; status: "observed" | "reachable";
+  group_cidr?: string;
+  group_basis?: "recorded_subnet" | "scan_range" | "address_group" | "unassigned";
+  group_context?: string;
+  group_conflict?: boolean;
   sources: TopologySource[]; first_seen: string; last_seen: string; severity: string;
   backfilled: boolean; vulnerabilities: TopologyRecord[]; findings: TopologyRecord[];
   credentials: TopologyCredential[];
@@ -22,6 +26,7 @@ export type TopologyEdge = {
 };
 export type TopologySnapshot = {
   version: number; generated_at: string; source_fingerprint: string; run_names: string[];
+  grouping_version?: number;
   nodes: TopologyNode[]; edges: TopologyEdge[]; warnings: TopologyWarning[]; partial: boolean;
 };
 export type ProjectTopologyResponse = {
