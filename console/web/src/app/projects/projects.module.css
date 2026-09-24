@@ -614,6 +614,7 @@
 
 .findingRow {
   display: grid;
+  width: 100%;
   min-width: 0;
   min-height: 55px;
   grid-template-columns: 86px minmax(140px, 1fr) minmax(90px, .5fr) minmax(100px, .5fr);
@@ -621,8 +622,11 @@
   gap: 10px;
   padding: 9px 13px;
   border-bottom: 1px solid var(--signal-line-soft);
+  text-align: left;
+  cursor: pointer;
 }
 
+.findingRow:hover { background: color-mix(in srgb, var(--signal-accent) 5%, transparent); }
 .findingRow:last-child { border-bottom: 0; }
 
 .findingTitle {

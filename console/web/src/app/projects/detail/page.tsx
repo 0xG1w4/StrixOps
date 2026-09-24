@@ -48,6 +48,7 @@ import { ExposureExplorer } from "@/components/projects/ExposureExplorer";
 import ProjectReportReader from "@/components/projects/ProjectReportReader";
 import ProjectTopology from "@/components/projects/ProjectTopology";
 import CredentialsPanel from "@/components/CredentialsPanel";
+import { FindingDetailDialog, type ActiveFinding } from "@/components/FindingDetailDialog";
 import styles from "../projects.module.css";
 
 type WorkspaceTab = "overview" | "tasks" | "findings" | "credentials" | "topology" | "scope";
@@ -113,6 +114,7 @@ const COPY = {
     webFindings: "Web 漏洞",
     internalFindings: "内部发现",
     noFindings: "此项目尚无发现。",
+    openFinding: "查看发现详情",
     dataUnavailable: "数据暂时无法加载。",
     retry: "重试",
     source: "来源",
@@ -198,6 +200,7 @@ const COPY = {
     webFindings: "Web findings",
     internalFindings: "Internal findings",
     noFindings: "No findings in this project yet.",
+    openFinding: "View finding details",
     dataUnavailable: "Data is temporarily unavailable.",
     retry: "Retry",
     source: "Source",
@@ -520,7 +523,7 @@ function ProjectWorkspace() {
         />
       )}
       {tab === "tasks" && <TaskPanel key={project.id} projectId={project.id} runs={runs} copy={copy} locale={locale} title={copy.allTasks} />}
-      {tab === "findings" && <FindingsPanel findings={findings} status={secondaryStatus.findings} copy={copy} onRetry={() => void load()} />}
+      {tab === "findings" && <FindingsPanel key={project.id} findings={findings} status={secondaryStatus.findings} copy={copy} onRetry={() => void load()} />}
       {tab === "credentials" && <CredentialsPanel key={project.id} name={project.id} live={false} scope="project" />}
       {tab === "topology" && <ProjectTopology key={project.id} projectId={project.id} />}
       {tab === "scope" && <ScopeEditor key={project.id} project={project} copy={copy} onSaved={async (saved) => {
@@ -695,32 +698,52 @@ function TaskPanel({ runs, copy, locale, title, onViewAll, projectId }: { runs: 
 }
 
 function FindingsPanel({ findings, status, copy, onRetry }: { findings: ProjectFindings | null; status: SecondaryStatus["findings"]; copy: Copy; onRetry: () => void }) {
+  const [active, setActive] = React.useState<{ sourceRun: string; finding: ActiveFinding } | null>(null);
   if (status === "error") return <Panel code="FND" title={copy.findings}><div className={styles.compactEmpty}>{copy.dataUnavailable} <button type="button" className="button-secondary button-compact" onClick={onRetry}>{copy.retry}</button></div></Panel>;
   if (!findings) return <div className="panel flex items-center gap-2 p-6"><Spinner /></div>;
   const rows = [
-    ...findings.vulnerabilities.map((finding) => ({ ...finding, group: copy.webFindings, target: finding.target || finding.endpoint || "—" })),
+    ...findings.vulnerabilities.map((finding) => ({
+      id: finding.id,
+      title: finding.title || finding.id,
+      severity: finding.severity || "info",
+      source_run: finding.source_run,
+      target: finding.target || finding.endpoint || "—",
+      detail: { kind: "vuln", v: finding } satisfies ActiveFinding,
+    })),
     ...findings.internal.map((finding) => ({
       id: finding.id,
       title: finding.title || finding.finding_type || copy.internalFindings,
       severity: finding.severity || "info",
       source_run: finding.source_run,
       target: finding.host || "—",
-      group: copy.internalFindings,
+      detail: { kind: "internal", f: finding } satisfies ActiveFinding,
     })),
   ];
   return (
-    <Panel code="FND" title={copy.findings} actions={<span className="mono-chip">{rows.length}</span>}>
-      {rows.length === 0 ? <div className={styles.compactEmpty}>{copy.noFindings}</div> : <div className={styles.findingList}>
-        {rows.map((finding) => (
-          <Link key={`${finding.source_run}/${finding.id}`} href={`/run?name=${encodeURIComponent(finding.source_run)}&tab=findings`} className={styles.findingRow}>
-            <SeverityChip severity={finding.severity} />
-            <span className={styles.findingTitle}>{finding.title}</span>
-            <span className={styles.findingTarget}>{finding.target}</span>
-            <span className={styles.findingSource}>{copy.source} · {finding.source_run}</span>
-          </Link>
-        ))}
-      </div>}
-    </Panel>
+    <>
+      <Panel code="FND" title={copy.findings} actions={<span className="mono-chip">{rows.length}</span>}>
+        {rows.length === 0 ? <div className={styles.compactEmpty}>{copy.noFindings}</div> : <div className={styles.findingList}>
+          {rows.map((finding) => (
+            <button key={JSON.stringify([finding.source_run, finding.detail.kind, finding.id])}
+              type="button" className={styles.findingRow} aria-haspopup="dialog"
+              aria-label={`${copy.openFinding}: ${finding.title} · ${finding.source_run}`}
+              onClick={(event) => {
+                event.currentTarget.focus({ preventScroll: true });
+                setActive({ sourceRun: finding.source_run, finding: finding.detail });
+              }}>
+              <SeverityChip severity={finding.severity} />
+              <span className={styles.findingTitle}>{finding.title}</span>
+              <span className={styles.findingTarget}>{finding.target}</span>
+              <span className={styles.findingSource}>{copy.source} · {finding.source_run}</span>
+            </button>
+          ))}
+        </div>}
+      </Panel>
+      {active && <FindingDetailDialog
+        key={JSON.stringify([active.sourceRun, active.finding.kind, active.finding.kind === "vuln" ? active.finding.v.id : active.finding.f.id])}
+        active={active.finding} name={active.sourceRun} showSource onClose={() => setActive(null)}
+      />}
+    </>
   );
 }
 

@@ -29,7 +29,7 @@ export function configurationSaveError(error: unknown, english: boolean): string
   return message;
 }
 
-async function responseText(res: Response, signal?: AbortSignal | null): Promise<string> {
+export async function responseText(res: Response, signal?: AbortSignal | null): Promise<string> {
   if (!signal || !res.body) return res.text();
   // authFetch owns cancellation until response headers arrive. Keep the body
   // cancellable as well, including a CDN response that stalls after its headers.
