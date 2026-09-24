@@ -14,6 +14,7 @@ import {
   FileText,
   Fingerprint,
   History,
+  KeyRound,
   ListChecks,
   Network,
   Plus,
@@ -46,9 +47,10 @@ import { readStorage, writeStorage } from "@/lib/storage";
 import { ExposureExplorer } from "@/components/projects/ExposureExplorer";
 import ProjectReportReader from "@/components/projects/ProjectReportReader";
 import ProjectTopology from "@/components/projects/ProjectTopology";
+import CredentialsPanel from "@/components/CredentialsPanel";
 import styles from "../projects.module.css";
 
-type WorkspaceTab = "overview" | "tasks" | "findings" | "topology" | "scope";
+type WorkspaceTab = "overview" | "tasks" | "findings" | "credentials" | "topology" | "scope";
 type SecondaryStatus = {
   findings: "loading" | "ready" | "error";
   skills: "loading" | "ready" | "error";
@@ -62,6 +64,7 @@ const COPY = {
     overview: "总览",
     tasks: "任务",
     findings: "发现",
+    credentials: "凭证",
     topology: "拓扑",
     scope: "范围",
     live: "运行中",
@@ -146,6 +149,7 @@ const COPY = {
     overview: "Overview",
     tasks: "Tasks",
     findings: "Findings",
+    credentials: "Credentials",
     topology: "Topology",
     scope: "Scope",
     live: "Live",
@@ -230,6 +234,7 @@ const TABS: Array<{ id: WorkspaceTab; icon: React.ComponentType<{ className?: st
   { id: "overview", icon: Activity },
   { id: "tasks", icon: ListChecks },
   { id: "findings", icon: Fingerprint },
+  { id: "credentials", icon: KeyRound },
   { id: "topology", icon: Network },
   { id: "scope", icon: ShieldCheck },
 ];
@@ -516,6 +521,7 @@ function ProjectWorkspace() {
       )}
       {tab === "tasks" && <TaskPanel key={project.id} projectId={project.id} runs={runs} copy={copy} locale={locale} title={copy.allTasks} />}
       {tab === "findings" && <FindingsPanel findings={findings} status={secondaryStatus.findings} copy={copy} onRetry={() => void load()} />}
+      {tab === "credentials" && <CredentialsPanel key={project.id} name={project.id} live={false} scope="project" />}
       {tab === "topology" && <ProjectTopology key={project.id} projectId={project.id} />}
       {tab === "scope" && <ScopeEditor key={project.id} project={project} copy={copy} onSaved={async (saved) => {
         if (activeProject.current === saved.id) await load();

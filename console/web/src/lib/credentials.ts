@@ -14,6 +14,7 @@ export interface Credential {
   validation_status: CredentialStatus;
   validation_evidence?: string;
   sources: Array<{ kind: string; id: string; title: string }>;
+  source_runs?: string[];
 }
 
 export interface CredentialsPage {
@@ -29,6 +30,12 @@ export interface CredentialsPage {
     validation_status: Record<CredentialStatus, number>;
     secret_type: Record<string, number>;
   };
+}
+
+export interface ProjectCredentialsPage extends CredentialsPage {
+  credentials: Array<Credential & { source_runs: string[] }>;
+  run_count: number;
+  contributing_run_count: number;
 }
 
 export const CREDENTIAL_STATUSES: CredentialStatus[] = ["unverified", "validated", "failed", "unknown"];
@@ -76,5 +83,22 @@ export function parseCredentialsPage(value: unknown): CredentialsPage {
       validation_status: Object.fromEntries(CREDENTIAL_STATUSES.map(status => [status, summary.validation_status[status] ?? 0])) as Record<CredentialStatus, number>,
       secret_type: { ...summary.secret_type },
     },
+  };
+}
+
+export function parseProjectCredentialsPage(value: unknown): ProjectCredentialsPage {
+  const page = parseCredentialsPage(value);
+  const data = value as Record<string, unknown>;
+  if (!count(data.run_count) || !count(data.contributing_run_count)
+    || data.contributing_run_count > data.run_count
+    || page.credentials.some(row => !Array.isArray(row.source_runs) || !row.source_runs.length
+      || row.source_runs.some(name => typeof name !== "string" || !name)
+      || new Set(row.source_runs).size !== row.source_runs.length
+      || row.source_runs.length > (data.contributing_run_count as number))) {
+    throw new Error("invalid_project_credentials");
+  }
+  return {
+    ...page, credentials: page.credentials as ProjectCredentialsPage["credentials"],
+    run_count: data.run_count, contributing_run_count: data.contributing_run_count,
   };
 }

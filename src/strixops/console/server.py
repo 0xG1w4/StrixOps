@@ -53,6 +53,7 @@ from strixops.console import (
     notes,
     parser,
     project_assignment,
+    project_credentials,
     project_reports,
     project_scope,
     project_skills,
@@ -2276,6 +2277,50 @@ def _topology_project_runs(project_id: str) -> list[Path]:
     if projects_store.find_project(projects_store.load_projects(), project_id) is None:
         raise HTTPException(status_code=404, detail="unknown project")
     return projects_store.project_runs(project_id)
+
+
+@app.get("/api/projects/{project_id}/credentials")
+def project_credentials_endpoint(
+    project_id: str, limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    query: Annotated[str | None, Query(max_length=500)] = None,
+    validation_status: Literal["unverified", "validated", "failed", "unknown"] | None = None,
+) -> Response:
+    payload = project_credentials.list_response(
+        _topology_project_runs(project_id), _open_run_file,
+        valid_assessment=_valid_assessment_document,
+        query=query, validation_status=validation_status, limit=limit, offset=offset,
+    )
+    return JSONResponse(payload, headers={"Cache-Control": "no-store, private"})
+
+
+@app.post("/api/projects/{project_id}/credentials/query")
+def query_project_credentials(project_id: str, request: CredentialQuery) -> Response:
+    # Keep searches (which can contain literal secrets) out of URLs/access logs.
+    return project_credentials_endpoint(project_id, **request.model_dump())
+
+
+@app.get("/api/projects/{project_id}/credentials.csv")
+def project_credentials_csv(project_id: str) -> Response:
+    inventory = project_credentials.ProjectCredentialInventory(
+        _topology_project_runs(project_id), _open_run_file,
+        valid_assessment=_valid_assessment_document,
+    )
+    if inventory.source_status == "unreadable":
+        inventory.close()
+        return JSONResponse(
+            {"detail": "Credential sources could not be read.", "source_status": "unreadable"},
+            status_code=503, headers={"Cache-Control": "no-store, private"},
+        )
+    return _OwnedFileStream(
+        inventory, credentials.csv_chunks(inventory.iter_credentials()),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Cache-Control": "no-store, private",
+            "Content-Disposition": 'attachment; filename="project-credentials.csv"',
+            "X-Credential-Source-Status": inventory.source_status,
+        },
+    )
 
 
 @app.get("/api/projects/{project_id}/topology")

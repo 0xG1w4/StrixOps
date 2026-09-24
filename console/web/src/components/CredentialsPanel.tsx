@@ -3,19 +3,21 @@
 import * as React from "react";
 import { ChevronLeft, ChevronRight, Download, KeyRound, RefreshCw } from "lucide-react";
 import { Spinner } from "@/components/ui";
-import { apiURL } from "@/lib/api";
+import { apiURL, getJSON } from "@/lib/api";
 import { authFetch } from "@/lib/auth";
-import { CREDENTIAL_STATUSES, parseCredentialsPage } from "@/lib/credentials";
-import type { Credential, CredentialStatus, CredentialsPage } from "@/lib/credentials";
+import { CREDENTIAL_STATUSES, parseCredentialsPage, parseProjectCredentialsPage } from "@/lib/credentials";
+import type { Credential, CredentialStatus, CredentialsPage, ProjectCredentialsPage } from "@/lib/credentials";
 import { useI18n } from "@/lib/i18n";
 import styles from "./CredentialsPanel.module.css";
 
 const PAGE_SIZE = 25;
-type Resource = { key: string; data: CredentialsPage | null; loading: boolean; error: boolean };
+type Scope = "run" | "project";
+type Props = { name: string; live: boolean; scope?: Scope };
+type Resource = { key: string; data: CredentialsPage | ProjectCredentialsPage | null; loading: boolean; error: boolean };
 type Filters = { name: string; search: string; status: CredentialStatus | ""; page: number };
 
-function useCredentials(name: string, live: boolean, query: string, status: CredentialStatus | "", offset: number, pending: boolean) {
-  const key = JSON.stringify([name, query, status, offset]);
+function useCredentials(name: string, scope: Scope, live: boolean, query: string, status: CredentialStatus | "", offset: number, pending: boolean) {
+  const key = JSON.stringify([scope, name, query, status, offset]);
   const [state, setState] = React.useState<Resource>({ key, data: null, loading: true, error: false });
   const [revision, setRevision] = React.useState(0);
   React.useEffect(() => {
@@ -32,12 +34,11 @@ function useCredentials(name: string, live: boolean, query: string, status: Cred
       const deadline = window.setTimeout(() => { timedOut = true; request.abort(); }, 60_000);
       setState(previous => ({ key, data: previous.key === key ? previous.data : null, loading: true, error: false }));
       try {
-        const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/credentials/query`), {
+        const response = await getJSON<unknown>(`/api/${scope === "project" ? "projects" : "runs"}/${encodeURIComponent(name)}/credentials/query`, {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: request.signal,
           body: JSON.stringify({ limit: PAGE_SIZE, offset, ...(query ? { query } : {}), ...(status ? { validation_status: status } : {}) }),
         });
-        if (!response.ok) throw new Error("credentials_unavailable");
-        const data = parseCredentialsPage(await response.json());
+        const data = scope === "project" ? parseProjectCredentialsPage(response) : parseCredentialsPage(response);
         if (data.offset !== offset || data.limit !== PAGE_SIZE) throw new Error("invalid_credentials_page");
         if (!disposed && !request.signal.aborted) setState({ key, data, loading: false, error: false });
       } catch {
@@ -67,7 +68,7 @@ function useCredentials(name: string, live: boolean, query: string, status: Cred
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [name, live, query, status, offset, pending, key, revision]);
+  }, [name, scope, live, query, status, offset, pending, key, revision]);
   const current = state.key === key && !pending ? state : { key, data: null, loading: true, error: false };
   return { ...current, refresh: () => setRevision(value => value + 1) };
 }
@@ -116,11 +117,19 @@ function warningLabel(code: string, en: boolean) {
   return labels[code]?.[en ? 1 : 0] ?? (en ? "Some scan records could not be read" : "部分扫描记录无法读取");
 }
 
-function CredentialRow({ row, en }: { row: Credential; en: boolean }) {
+function CredentialRow({ row, en, project }: { row: Credential; en: boolean; project: boolean }) {
   const severities: Record<string, [string, string]> = {
     critical: ["严重", "Critical"], high: ["高危", "High"], medium: ["中危", "Medium"],
     low: ["低危", "Low"], info: ["信息", "Info"], informational: ["信息", "Info"],
   };
+  const provenance = <>
+    {row.source && <p className={styles.sourceText}>{row.source}</p>}
+    {row.sources.length > 0 && <ul className={styles.provenance} aria-label={en ? "Source records" : "来源记录"}>{row.sources.map((source, index) => (
+      <li key={`${source.kind}:${source.id}:${index}`}><span>{sourceLabel(source.kind, en)}</span><strong>{source.title || (project ? sourceLabel(source.kind, en) : source.id) || "—"}</strong>{!project && source.id && source.title && <code>{source.id}</code>}</li>
+    ))}</ul>}
+    {row.validation_evidence && <details className={styles.note}><summary>{en ? "Validation evidence" : "验证依据"}</summary><p>{row.validation_evidence}</p></details>}
+    {row.note && <details className={styles.note}><summary>{en ? "Notes" : "备注"}</summary><p>{row.note}</p></details>}
+  </>;
   return (
     <tr>
       <td>
@@ -137,28 +146,32 @@ function CredentialRow({ row, en }: { row: Credential; en: boolean }) {
         {row.severity && <div className={styles.severity}>{severities[row.severity.toLowerCase()]?.[en ? 1 : 0] ?? row.severity}</div>}
       </td>
       <td>
-        {row.source && <p className={styles.sourceText}>{row.source}</p>}
-        {row.sources.length > 0 && <ul className={styles.provenance} aria-label={en ? "Source records" : "来源记录"}>{row.sources.map((source, index) => (
-          <li key={`${source.kind}:${source.id}:${index}`}><span>{sourceLabel(source.kind, en)}</span><strong>{source.title || source.id || "—"}</strong>{source.id && source.title && <code>{source.id}</code>}</li>
-        ))}</ul>}
-        {row.validation_evidence && <details className={styles.note}><summary>{en ? "Validation evidence" : "验证依据"}</summary><p>{row.validation_evidence}</p></details>}
-        {row.note && <details className={styles.note}><summary>{en ? "Notes" : "备注"}</summary><p>{row.note}</p></details>}
+        {project && row.source_runs && <details className={styles.taskSources} open={row.source_runs.length === 1}>
+          <summary>{row.source_runs.length.toLocaleString(en ? "en-US" : "zh-CN")} {en ? (row.source_runs.length === 1 ? "source task" : "source tasks") : "个来源任务"}</summary>
+          <ul aria-label={en ? "Source tasks" : "来源任务"}>{row.source_runs.map(run => <li key={run}>{run}</li>)}</ul>
+        </details>}
+        {project ? <details className={styles.sourceDetails}><summary>{en ? "Source details" : "来源详情"}</summary>{provenance}</details> : provenance}
         {!row.source && row.sources.length === 0 && !row.note && <span className={styles.muted}>—</span>}
       </td>
     </tr>
   );
 }
 
-export default function CredentialsPanel({ name, live }: { name: string; live: boolean }) {
+export default function CredentialsPanel({ scope = "run", ...props }: Props) {
+  return <CredentialInventoryPanel key={`${scope}:${props.name}`} {...props} scope={scope} />;
+}
+
+function CredentialInventoryPanel({ name, live, scope = "run" }: Props) {
   const { locale } = useI18n();
   const en = locale === "en";
+  const project = scope === "project";
   const [filterState, setFilters] = React.useState<Filters>({ name, search: "", status: "", page: 0 });
   const filters = filterState.name === name ? filterState : { name, search: "", status: "" as const, page: 0 };
   const [debounced, setDebounced] = React.useState({ name, query: "" });
   const query = debounced.name === name ? debounced.query : "";
   const pendingSearch = filters.search.trim() !== query;
   const offset = filters.page * PAGE_SIZE;
-  const result = useCredentials(name, live, query, filters.status, offset, pendingSearch);
+  const result = useCredentials(name, scope, live, query, filters.status, offset, pendingSearch);
   React.useEffect(() => {
     const timer = window.setTimeout(() => setDebounced({ name, query: filters.search.trim() }), 300);
     return () => window.clearTimeout(timer);
@@ -180,6 +193,7 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
   const rows = result.data?.credentials ?? [];
   const total = result.data?.total ?? 0;
   const overallTotal = result.data?.overall_total ?? 0;
+  const projectData = result.data && "run_count" in result.data ? result.data : null;
   const number = (value: number) => value.toLocaleString(en ? "en-US" : "zh-CN");
   const unreadable = result.data?.source_status === "unreadable";
   const partial = result.data?.source_status === "partial";
@@ -192,7 +206,7 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
     const deadline = window.setTimeout(() => controller.abort(), 120_000);
     let objectURL: string | null = null;
     try {
-      const response = await authFetch(apiURL(`/api/runs/${encodeURIComponent(name)}/credentials.csv`), { signal: controller.signal });
+      const response = await authFetch(apiURL(`/api/${project ? "projects" : "runs"}/${encodeURIComponent(name)}/credentials.csv`), { signal: controller.signal });
       if (!response.ok) throw new Error("credentials_download_failed");
       const blob = await response.blob();
       if (downloadRequest.current !== controller) return;
@@ -200,7 +214,7 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
       objectURL = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectURL;
-      link.download = `${name}-credentials.csv`;
+      link.download = `${project ? "project-" : ""}${name}-credentials.csv`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -215,16 +229,18 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
   };
 
   return (
-    <section className={styles.panel} aria-label={en ? "Credentials" : "凭据"}>
+    <section className={`${styles.panel} ${project ? styles.projectPanel : ""}`} aria-label={en ? "Credentials" : project ? "凭证" : "凭据"}>
       <header className={styles.header}>
-        <div><h2><KeyRound size={16} aria-hidden />{en ? "Credentials" : "凭据"}</h2><p>{en ? "Credentials from Agent registrations, explicit structured records, and identified credential CSV files. The register retains the latest validation and its evidence." : "汇总 Agent 登记、明确的结构化记录及明确标识的凭据 CSV；登记清单保留最新验证结果及依据。"}</p></div>
+        <div><h2><KeyRound size={16} aria-hidden />{en ? (project ? "Project credentials" : "Credentials") : project ? "项目凭证总表" : "凭据"}</h2><p>{project
+          ? (en ? "Credentials from all tasks in this project. Records with the same host, account, type, and secret are combined, with every source task retained." : "汇总此项目所有任务的凭证。主机、账号、类型与密钥值均相同的记录会合并，并保留所有来源任务。")
+          : (en ? "Credentials from Agent registrations, explicit structured records, and identified credential CSV files. The register retains the latest validation and its evidence." : "汇总 Agent 登记、明确的结构化记录及明确标识的凭据 CSV；登记清单保留最新验证结果及依据。")}</p></div>
         <button type="button" className={styles.download} disabled={!canDownload} onClick={() => void download()}><Download size={14} aria-hidden />{downloadState === "downloading" ? (en ? "Downloading…" : "下载中…") : (en ? "Download all CSV" : "下载全部 CSV")}</button>
       </header>
       <div className={styles.filters}>
         <label><span>{en ? "Search credentials" : "搜索凭据"}</span><input className="input-shell" maxLength={500} value={filters.search} placeholder={en ? "Host, account, secret, or source" : "主机、账号、密钥或来源"} onChange={event => changeFilters({ search: event.target.value, page: 0 })} /></label>
         <label><span>{en ? "Validation status" : "验证状态"}</span><select className="input-shell" value={filters.status} onChange={event => changeFilters({ status: event.target.value as CredentialStatus | "", page: 0 })}><option value="">{en ? "All statuses" : "所有状态"}</option>{CREDENTIAL_STATUSES.map(value => <option key={value} value={value}>{statusLabel(value, en)}</option>)}</select></label>
       </div>
-      <div className={styles.resultsBar}><span>{result.data ? `${number(total)} / ${number(overallTotal)} ${en ? "credentials" : "条凭据"}` : "—"}{partial && ` · ${en ? "Partial inventory" : "部分汇总"}`}</span><button type="button" onClick={result.refresh} disabled={result.loading}><RefreshCw size={13} aria-hidden />{result.loading ? (en ? "Refreshing…" : "刷新中…") : (en ? "Refresh" : "刷新")}</button></div>
+      <div className={styles.resultsBar}><div className={styles.resultCounts}><span>{result.data ? `${number(total)} / ${number(overallTotal)} ${en ? (project ? "unique credentials" : "credentials") : project ? "条去重凭证" : "条凭据"}` : "—"}{partial && ` · ${en ? "Partial inventory" : "部分汇总"}`}</span>{projectData && <span>{en ? `Credentials found in ${number(projectData.contributing_run_count)} of ${number(projectData.run_count)} tasks` : `${number(projectData.contributing_run_count)} / ${number(projectData.run_count)} 个任务有凭证记录`}</span>}</div><button type="button" onClick={result.refresh} disabled={result.loading}><RefreshCw size={13} aria-hidden />{result.loading ? (en ? "Refreshing…" : "刷新中…") : (en ? "Refresh" : "刷新")}</button></div>
       {result.data && overallTotal > 0 && <ul className={styles.summary} aria-label={en ? "All credentials by validation status" : "全部凭据验证状态"}>{CREDENTIAL_STATUSES.map(value => <li key={value}><span>{statusLabel(value, en)}</span><strong>{number(result.data!.summary.validation_status[value])}</strong></li>)}</ul>}
       {result.error && <p className={styles.warning} role="status">{result.data ? (en ? "Refresh failed. Showing the previously fetched inventory. Please retry." : "刷新失败，当前显示上次读取的凭据，请重试。") : (en ? "Credential records could not be read. Please refresh to retry." : "无法读取凭据记录，请刷新重试。")}</p>}
       {(partial || unreadable) && <div className={styles.warning} role="status"><p>{unreadable ? (en ? "Scan records could not be read. Credential discovery is unknown." : "扫描记录无法读取，无法确认是否发现凭据。") : (en ? "Some scan records could not be fully read. This inventory and its CSV may be incomplete." : "部分扫描记录无法完整读取，当前凭据列表及 CSV 可能不完整。")}</p>{result.data!.warnings.length > 0 && <ul>{Array.from(new Set(result.data!.warnings.map(code => warningLabel(code, en)))).map(message => <li key={message}>{message}</li>)}</ul>}</div>}
@@ -232,7 +248,7 @@ export default function CredentialsPanel({ name, live }: { name: string; live: b
       {downloadState === "partial" && <p className={styles.warning} role="status">{en ? "CSV downloaded. Some credential sources could not be fully collected; the export may be incomplete." : "CSV 已下载，但部分凭据来源无法完整汇总，导出内容可能有遗漏。"}</p>}
       {rows.length > 0 ? <>
         <div className={styles.tableScroll} tabIndex={0} role="region" aria-label={en ? "Credential inventory" : "凭据列表"} aria-busy={result.loading}>
-          <table><thead><tr><th scope="col">{en ? "Host / account" : "主机 / 账号"}</th><th scope="col">{en ? "Password / key / hash" : "密码 / 密钥 / 哈希"}</th><th scope="col">{en ? "Validation" : "验证"}</th><th scope="col">{en ? "Source / notes" : "来源 / 备注"}</th></tr></thead><tbody>{rows.map(row => <CredentialRow key={row.id} row={row} en={en} />)}</tbody></table>
+          <table><thead><tr><th scope="col">{en ? "Host / account" : "主机 / 账号"}</th><th scope="col">{en ? "Password / key / hash" : "密码 / 密钥 / 哈希"}</th><th scope="col">{en ? "Validation" : "验证"}</th><th scope="col">{en ? "Source / notes" : "来源 / 备注"}</th></tr></thead><tbody>{rows.map(row => <CredentialRow key={row.id} row={row} en={en} project={project} />)}</tbody></table>
         </div>
         <nav className={styles.pagination} aria-label={en ? "Credential pages" : "凭据分页"}><span>{number(offset + 1)}–{number(offset + rows.length)} / {number(total)} · {en ? "Page" : "第"} {number(filters.page + 1)} / {number(Math.max(1, Math.ceil(total / PAGE_SIZE)))}{en ? "" : " 页"}</span><div><button type="button" disabled={filters.page === 0 || result.loading} aria-label={en ? "Previous credentials page" : "上一页凭据"} onClick={() => changeFilters({ page: filters.page - 1 })}><ChevronLeft size={16} /></button><button type="button" disabled={!result.data?.has_more || result.loading} aria-label={en ? "Next credentials page" : "下一页凭据"} onClick={() => changeFilters({ page: filters.page + 1 })}><ChevronRight size={16} /></button></div></nav>
       </> : !result.error && !unreadable && <div className={styles.empty}>
