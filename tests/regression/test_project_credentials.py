@@ -207,12 +207,149 @@ def test_project_query_preserves_auth_csrf_and_validates_pagination(project_api)
     client, project, _run = project_api
     route = endpoint(project)
     assert client.post(route + "/query", json={}, headers={"X-CSRF-Token": ""}).status_code == 403
-    for body in ({"limit": 101}, {"offset": -1}, {"query": "x" * 501}, {"validation_status": "ok"}):
+    for body in ({"limit": 501}, {"offset": -1}, {"query": "x" * 501}, {"validation_status": "ok"}):
         assert client.post(route + "/query", json=body).status_code == 422
     client.cookies.clear()
     for url in (route, route + ".csv"):
         assert client.get(url).status_code == 401
     assert client.post(route + "/query", json={}).status_code == 401
+
+
+def test_project_page_limit_increases_to_500_without_changing_run_limit(project_api):
+    client, project, run = project_api
+    for route, maximum in ((endpoint(project), 500), (f"/api/runs/{run.name}/credentials", 100)):
+        for body in ({"limit": maximum}, {"limit": maximum + 1}):
+            expected = 200 if body["limit"] == maximum else 422
+            posted = client.post(route + "/query", json=body)
+            fetched = client.get(route, params=body)
+            assert posted.status_code == fetched.status_code == expected
+            if expected == 200:
+                assert posted.json()["limit"] == fetched.json()["limit"] == maximum
+    assert client.post(
+        f"/api/runs/{run.name}/credentials/query", json={"secret_category": "password"},
+    ).status_code == 422
+    assert client.post(endpoint(project) + "/query", json={"limit": "500"}).status_code == 422
+
+
+def test_secret_categories_follow_recorded_type_including_empty_password_and_unknowns(project_api):
+    client, project, run = project_api
+    register(run)
+    register(run, username="empty-password", password="")
+    for secret_type in ("api_key", "token", "secret", "private_key", "encryption_key"):
+        register(run, secret_type=secret_type)
+    register(run, password=None, hash="recorded-hash", secret_type="hash")
+    register(run, password=None, secret_type="username")
+    # Preserve forward-compatible legacy types in All; do not guess their group.
+    (run / "vulnerabilities.json").write_text(json.dumps([{
+        "id": "future-type", "host": "db", "username": "root",
+        "password": "future-value", "secret_type": "future_type",
+    }]))
+    route = endpoint(project)
+    unfiltered = client.post(route + "/query", json={}).json()
+    assert unfiltered["overall_total"] == unfiltered["total"] == 10
+    assert client.post(route + "/query", json={"secret_category": None}).json() == unfiltered
+    assert client.get(route).json() == unfiltered
+    mapping = {
+        "password": ({"password"}, 2),
+        "key": ({"api_key", "token", "secret", "private_key", "encryption_key"}, 5),
+        "hash": ({"hash"}, 1),
+    }
+    for category, (secret_types, count) in mapping.items():
+        response = client.post(route + "/query", json={"secret_category": category})
+        assert response.status_code == 200
+        data = response.json()
+        assert client.get(route, params={"secret_category": category}).json() == data
+        assert data["total"] == len(data["credentials"]) == count
+        assert {row["secret_type"] for row in data["credentials"]} == secret_types
+        assert data["overall_total"] == 10 and data["summary"] == unfiltered["summary"]
+        if category == "password":
+            assert any(row["password"] == "" and row["username"] == "empty-password"
+                       for row in data["credentials"])
+
+
+def test_category_combines_literal_search_with_deduplicated_validation_status(project_api):
+    client, project, run = project_api
+    other = add_run(project, "conflicting-token")
+    literal = "%' OR 1=1 --"
+    register(run, username="alice", password=literal, secret_type="api_key",
+             validation_status="validated", validation_evidence="API accepted key")
+    register(run, username="bob", password=literal, secret_type="token",
+             validation_status="validated", validation_evidence="Token accepted")
+    register(other, username="bob", password=literal, secret_type="token",
+             validation_status="failed", validation_evidence="Token rejected")
+    register(run, username="carol", password=literal,
+             validation_status="validated", validation_evidence="Password accepted")
+    register(run, username="unrelated", password="no literal match", secret_type="api_key",
+             validation_status="validated", validation_evidence="Other key accepted")
+    route = endpoint(project)
+    for category, status, username in (
+        ("key", "validated", "alice"), ("key", "unknown", "bob"), ("password", "validated", "carol"),
+    ):
+        response = client.post(route + "/query", json={
+            "secret_category": category, "validation_status": status, "query": literal,
+        })
+        assert response.status_code == 200 and not response.request.url.query
+        data = response.json()
+        assert data["total"] == 1 and data["overall_total"] == 4
+        assert data["credentials"][0]["username"] == username
+        assert data["summary"]["validation_status"]["validated"] == 3
+        assert data["summary"]["validation_status"]["unknown"] == 1
+    assert client.post(route + "/query", json={"query": "_absent%", "secret_category": "key"}).json()[
+        "total"
+    ] == 0
+    for invalid in ("all", "Password", "password') OR 1=1 --", ""):
+        assert client.post(route + "/query", json={"secret_category": invalid}).status_code == 422
+        assert client.get(route, params={"secret_category": invalid}).status_code == 422
+
+
+def test_secret_category_filters_full_inventory_before_500_row_pagination_and_csv_stays_complete(project_api):
+    client, project, run = project_api
+    other = add_run(project, "duplicate-key-task")
+    per_category = 513
+
+    def records():
+        for host, secret_type in (("a-password", "password"), ("m-key", "token"), ("z-hash", "hash")):
+            for index in range(per_category):
+                value = (
+                    {"hash": f"hash-{index}"} if secret_type == "hash" else {"password": f"secret-{index}"}
+                )
+                yield {
+                    "host": host, "username": f"user-{index:04d}", "secret_type": secret_type,
+                    **value,
+                }
+
+    imported = CredentialStore(run).import_rows(records(), source="Complete categories", **AUTHOR)
+    duplicates = CredentialStore(other).import_rows(
+        ({"host": "m-key", "username": f"user-{index:04d}", "secret_type": "token",
+          "password": f"secret-{index}"} for index in range(25)),
+        source="Another task", **AUTHOR,
+    )
+    assert imported["success"] and duplicates["success"]
+    route = endpoint(project)
+    unfiltered = client.post(route + "/query", json={"limit": 500}).json()
+    assert len(unfiltered["credentials"]) == 500 and unfiltered["total"] == per_category * 3
+    assert all(row["secret_type"] == "password" for row in unfiltered["credentials"])
+    all_ids = set()
+    for category, secret_type in (("password", "password"), ("key", "token"), ("hash", "hash")):
+        pages = [client.post(route + "/query", json={
+            "secret_category": category, "limit": 500, "offset": offset,
+        }).json() for offset in (0, 500)]
+        assert [len(page["credentials"]) for page in pages] == [500, 13]
+        assert [page["has_more"] for page in pages] == [True, False]
+        rows = [row for page in pages for row in page["credentials"]]
+        ids = {row["id"] for row in rows}
+        assert len(ids) == per_category and ids.isdisjoint(all_ids)
+        all_ids.update(ids)
+        assert all(row["secret_type"] == secret_type for row in rows)
+        if category == "key":
+            assert sum(row["source_count"] == 2 for row in rows) == 25
+        for page in pages:
+            assert page["total"] == per_category and page["overall_total"] == per_category * 3
+            assert page["summary"] == unfiltered["summary"]
+    download = client.get(route + ".csv")
+    rows = list(csv.DictReader(io.StringIO(download.content.decode("utf-8-sig"))))
+    assert len(rows) == len(all_ids) == per_category * 3
+    assert {row["host"] for row in rows} == {"a-password", "m-key", "z-hash"}
 
 
 def test_source_failures_remain_partial_and_preserve_readable_findings(project_api):

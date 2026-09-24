@@ -1,4 +1,5 @@
 export type CredentialStatus = "unverified" | "validated" | "failed" | "unknown";
+export type CredentialCategory = "password" | "key" | "hash";
 export type CredentialSourceStatus = "available" | "missing" | "partial" | "unreadable";
 
 export interface Credential {
@@ -39,11 +40,16 @@ export interface ProjectCredentialsPage extends CredentialsPage {
 }
 
 export const CREDENTIAL_STATUSES: CredentialStatus[] = ["unverified", "validated", "failed", "unknown"];
+export const CREDENTIAL_CATEGORIES: CredentialCategory[] = ["password", "key", "hash"];
 const STRING_FIELDS = ["id", "host", "username", "password", "hash", "source", "severity", "note", "secret_type"] as const;
 const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 /** Invalid source responses must never look like a successful empty inventory. */
 export function parseCredentialsPage(value: unknown): CredentialsPage {
+  return parsePage(value, 100);
+}
+
+function parsePage(value: unknown, maxLimit: number): CredentialsPage {
   if (!value || typeof value !== "object") throw new Error("invalid_credentials");
   const data = value as Record<string, unknown>;
   if (!Array.isArray(data.credentials)
@@ -53,7 +59,7 @@ export function parseCredentialsPage(value: unknown): CredentialsPage {
   }
   const summary = data.summary as CredentialsPage["summary"] | undefined;
   if (!count(data.total) || !count(data.overall_total) || data.total > data.overall_total
-    || !count(data.limit) || data.limit < 1 || data.limit > 100
+    || !count(data.limit) || data.limit < 1 || data.limit > maxLimit
     || !count(data.offset) || typeof data.has_more !== "boolean"
     || data.credentials.length > data.limit || data.credentials.length > data.total
     || !summary || typeof summary !== "object"
@@ -87,7 +93,7 @@ export function parseCredentialsPage(value: unknown): CredentialsPage {
 }
 
 export function parseProjectCredentialsPage(value: unknown): ProjectCredentialsPage {
-  const page = parseCredentialsPage(value);
+  const page = parsePage(value, 500);
   const data = value as Record<string, unknown>;
   if (!count(data.run_count) || !count(data.contributing_run_count)
     || data.contributing_run_count > data.run_count

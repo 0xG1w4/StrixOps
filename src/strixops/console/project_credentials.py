@@ -12,6 +12,12 @@ from strixops.console import credentials
 from strixops.report.credential_store import _IDENTITY, _LIMITS, VALIDATION_STATUSES
 from strixops.report.credentials import merge_credentials
 
+_CATEGORY_TYPES = {
+    "password": ("password",),
+    "key": ("api_key", "token", "secret", "private_key", "encryption_key"),
+    "hash": ("hash",),
+}
+
 
 def _attributed(row: dict, run: str) -> dict:
     """Retain each task's evidence, including contradictory current validations."""
@@ -174,7 +180,7 @@ class ProjectCredentialInventory:
         }
 
     def page(self, *, query: str | None = None, validation_status: str | None = None,
-             limit: int = 25, offset: int = 0) -> dict:
+             secret_category: str | None = None, limit: int = 25, offset: int = 0) -> dict:
         clauses, values = [], []
         if query:
             clauses.append("instr(search_text, ?) > 0")
@@ -182,6 +188,12 @@ class ProjectCredentialInventory:
         if validation_status:
             clauses.append("validation_status=?")
             values.append(validation_status)
+        if secret_category is not None:
+            secret_types = _CATEGORY_TYPES.get(secret_category)
+            if secret_types is None:
+                raise ValueError("invalid secret category")
+            clauses.append("secret_type IN (" + ",".join("?" for _ in secret_types) + ")")
+            values.extend(secret_types)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         overall_total = self.connection.execute("SELECT COUNT(*) FROM inventory").fetchone()[0]
         total = self.connection.execute("SELECT COUNT(*) FROM inventory" + where, values).fetchone()[0]

@@ -2279,23 +2279,30 @@ def _topology_project_runs(project_id: str) -> list[Path]:
     return projects_store.project_runs(project_id)
 
 
+class ProjectCredentialQuery(CredentialQuery):
+    limit: int = Field(default=25, ge=1, le=500)
+    secret_category: Literal["password", "key", "hash"] | None = None
+
+
 @app.get("/api/projects/{project_id}/credentials")
 def project_credentials_endpoint(
-    project_id: str, limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    project_id: str, limit: Annotated[int, Query(ge=1, le=500)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
     query: Annotated[str | None, Query(max_length=500)] = None,
     validation_status: Literal["unverified", "validated", "failed", "unknown"] | None = None,
+    secret_category: Literal["password", "key", "hash"] | None = None,
 ) -> Response:
     payload = project_credentials.list_response(
         _topology_project_runs(project_id), _open_run_file,
         valid_assessment=_valid_assessment_document,
-        query=query, validation_status=validation_status, limit=limit, offset=offset,
+        query=query, validation_status=validation_status, secret_category=secret_category,
+        limit=limit, offset=offset,
     )
     return JSONResponse(payload, headers={"Cache-Control": "no-store, private"})
 
 
 @app.post("/api/projects/{project_id}/credentials/query")
-def query_project_credentials(project_id: str, request: CredentialQuery) -> Response:
+def query_project_credentials(project_id: str, request: ProjectCredentialQuery) -> Response:
     # Keep searches (which can contain literal secrets) out of URLs/access logs.
     return project_credentials_endpoint(project_id, **request.model_dump())
 

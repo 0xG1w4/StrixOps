@@ -12,6 +12,9 @@ export const INSTRUCTION_KEY = "strixops_last_instruction";
 /** Dashboard run-list page size (30/50/100). */
 export const PAGE_SIZE_KEY = "strixops_runs_page_size";
 
+/** Project credential inventory page size (25/50/100/500), shared across projects. */
+export const PROJECT_CREDENTIALS_PAGE_SIZE_KEY = "strixops_project_credentials_page_size";
+
 export function readStorage(key: string): string | null {
   try {
     return window.localStorage.getItem(key);

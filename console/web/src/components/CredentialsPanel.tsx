@@ -5,19 +5,21 @@ import { ChevronLeft, ChevronRight, Download, KeyRound, RefreshCw } from "lucide
 import { Spinner } from "@/components/ui";
 import { apiURL, getJSON } from "@/lib/api";
 import { authFetch } from "@/lib/auth";
-import { CREDENTIAL_STATUSES, parseCredentialsPage, parseProjectCredentialsPage } from "@/lib/credentials";
-import type { Credential, CredentialStatus, CredentialsPage, ProjectCredentialsPage } from "@/lib/credentials";
+import { CREDENTIAL_CATEGORIES, CREDENTIAL_STATUSES, parseCredentialsPage, parseProjectCredentialsPage } from "@/lib/credentials";
+import type { Credential, CredentialCategory, CredentialStatus, CredentialsPage, ProjectCredentialsPage } from "@/lib/credentials";
 import { useI18n } from "@/lib/i18n";
+import { PROJECT_CREDENTIALS_PAGE_SIZE_KEY, readStorage, writeStorage } from "@/lib/storage";
 import styles from "./CredentialsPanel.module.css";
 
-const PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 25;
+const PAGE_SIZES = [25, 50, 100, 500];
 type Scope = "run" | "project";
 type Props = { name: string; live: boolean; scope?: Scope };
 type Resource = { key: string; data: CredentialsPage | ProjectCredentialsPage | null; loading: boolean; error: boolean };
-type Filters = { name: string; search: string; status: CredentialStatus | ""; page: number };
+type Filters = { name: string; search: string; status: CredentialStatus | ""; category: CredentialCategory | ""; page: number };
 
-function useCredentials(name: string, scope: Scope, live: boolean, query: string, status: CredentialStatus | "", offset: number, pending: boolean) {
-  const key = JSON.stringify([scope, name, query, status, offset]);
+function useCredentials(name: string, scope: Scope, live: boolean, query: string, status: CredentialStatus | "", category: CredentialCategory | "", limit: number, offset: number, pending: boolean) {
+  const key = JSON.stringify([scope, name, query, status, category, limit, offset]);
   const [state, setState] = React.useState<Resource>({ key, data: null, loading: true, error: false });
   const [revision, setRevision] = React.useState(0);
   React.useEffect(() => {
@@ -36,10 +38,10 @@ function useCredentials(name: string, scope: Scope, live: boolean, query: string
       try {
         const response = await getJSON<unknown>(`/api/${scope === "project" ? "projects" : "runs"}/${encodeURIComponent(name)}/credentials/query`, {
           method: "POST", headers: { "Content-Type": "application/json" }, signal: request.signal,
-          body: JSON.stringify({ limit: PAGE_SIZE, offset, ...(query ? { query } : {}), ...(status ? { validation_status: status } : {}) }),
+          body: JSON.stringify({ limit, offset, ...(query ? { query } : {}), ...(status ? { validation_status: status } : {}), ...(scope === "project" && category ? { secret_category: category } : {}) }),
         });
         const data = scope === "project" ? parseProjectCredentialsPage(response) : parseCredentialsPage(response);
-        if (data.offset !== offset || data.limit !== PAGE_SIZE) throw new Error("invalid_credentials_page");
+        if (data.offset !== offset || data.limit !== limit) throw new Error("invalid_credentials_page");
         if (!disposed && !request.signal.aborted) setState({ key, data, loading: false, error: false });
       } catch {
         if (!disposed && !document.hidden && (!request.signal.aborted || timedOut)) {
@@ -68,7 +70,7 @@ function useCredentials(name: string, scope: Scope, live: boolean, query: string
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [name, scope, live, query, status, offset, pending, key, revision]);
+  }, [name, scope, live, query, status, category, limit, offset, pending, key, revision]);
   const current = state.key === key && !pending ? state : { key, data: null, loading: true, error: false };
   return { ...current, refresh: () => setRevision(value => value + 1) };
 }
@@ -79,6 +81,11 @@ function statusLabel(status: CredentialStatus, en: boolean) {
     failed: ["验证失败", "Validation failed"], unknown: ["状态未知", "Unknown status"],
   };
   return labels[status][en ? 1 : 0];
+}
+
+function categoryLabel(category: CredentialCategory, en: boolean) {
+  const labels = { password: ["密码", "Passwords"], key: ["密钥", "Keys"], hash: ["哈希", "Hashes"] };
+  return labels[category][en ? 1 : 0];
 }
 
 function sourceLabel(kind: string, en: boolean) {
@@ -165,25 +172,40 @@ function CredentialInventoryPanel({ name, live, scope = "run" }: Props) {
   const { locale } = useI18n();
   const en = locale === "en";
   const project = scope === "project";
-  const [filterState, setFilters] = React.useState<Filters>({ name, search: "", status: "", page: 0 });
-  const filters = filterState.name === name ? filterState : { name, search: "", status: "" as const, page: 0 };
+  const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE);
+  const [pageSizeReady, setPageSizeReady] = React.useState(!project);
+  React.useEffect(() => {
+    if (!project) return;
+    const saved = Number(readStorage(PROJECT_CREDENTIALS_PAGE_SIZE_KEY));
+    if (PAGE_SIZES.includes(saved)) setPageSize(saved);
+    setPageSizeReady(true);
+  }, [project]);
+  const [filterState, setFilters] = React.useState<Filters>({ name, search: "", status: "", category: "", page: 0 });
+  const filters = filterState.name === name ? filterState : { name, search: "", status: "" as const, category: "" as const, page: 0 };
   const [debounced, setDebounced] = React.useState({ name, query: "" });
   const query = debounced.name === name ? debounced.query : "";
   const pendingSearch = filters.search.trim() !== query;
-  const offset = filters.page * PAGE_SIZE;
-  const result = useCredentials(name, scope, live, query, filters.status, offset, pendingSearch);
+  const offset = filters.page * pageSize;
+  const result = useCredentials(name, scope, live, query, filters.status, filters.category, pageSize, offset, pendingSearch || !pageSizeReady);
   React.useEffect(() => {
     const timer = window.setTimeout(() => setDebounced({ name, query: filters.search.trim() }), 300);
     return () => window.clearTimeout(timer);
   }, [name, filters.search]);
   const changeFilters = (change: Partial<Omit<Filters, "name">>) => setFilters({ ...filters, ...change, name });
+  const changePageSize = (value: string) => {
+    const next = Number(value);
+    if (!project || !PAGE_SIZES.includes(next)) return;
+    setPageSize(next);
+    changeFilters({ page: 0 });
+    writeStorage(PROJECT_CREDENTIALS_PAGE_SIZE_KEY, String(next));
+  };
   React.useEffect(() => {
     if (result.data && offset > 0 && offset >= result.data.total) {
       setFilters(previous => previous.name === name
-        ? { ...previous, page: Math.max(0, Math.ceil(result.data!.total / PAGE_SIZE) - 1) }
+        ? { ...previous, page: Math.max(0, Math.ceil(result.data!.total / pageSize) - 1) }
         : previous);
     }
-  }, [result.data, offset, name]);
+  }, [result.data, offset, name, pageSize]);
   const [downloadState, setDownloadState] = React.useState<"idle" | "downloading" | "failed" | "partial">("idle");
   const downloadRequest = React.useRef<AbortController | null>(null);
   React.useEffect(() => {
@@ -236,9 +258,11 @@ function CredentialInventoryPanel({ name, live, scope = "run" }: Props) {
           : (en ? "Credentials from Agent registrations, explicit structured records, and identified credential CSV files. The register retains the latest validation and its evidence." : "汇总 Agent 登记、明确的结构化记录及明确标识的凭据 CSV；登记清单保留最新验证结果及依据。")}</p></div>
         <button type="button" className={styles.download} disabled={!canDownload} onClick={() => void download()}><Download size={14} aria-hidden />{downloadState === "downloading" ? (en ? "Downloading…" : "下载中…") : (en ? "Download all CSV" : "下载全部 CSV")}</button>
       </header>
-      <div className={styles.filters}>
+      <div className={`${styles.filters} ${project ? styles.projectFilters : ""}`}>
         <label><span>{en ? "Search credentials" : "搜索凭据"}</span><input className="input-shell" maxLength={500} value={filters.search} placeholder={en ? "Host, account, secret, or source" : "主机、账号、密钥或来源"} onChange={event => changeFilters({ search: event.target.value, page: 0 })} /></label>
         <label><span>{en ? "Validation status" : "验证状态"}</span><select className="input-shell" value={filters.status} onChange={event => changeFilters({ status: event.target.value as CredentialStatus | "", page: 0 })}><option value="">{en ? "All statuses" : "所有状态"}</option>{CREDENTIAL_STATUSES.map(value => <option key={value} value={value}>{statusLabel(value, en)}</option>)}</select></label>
+        {project && <label><span>{en ? "Credential type" : "凭证类型"}</span><select className="input-shell" value={filters.category} onChange={event => changeFilters({ category: event.target.value as CredentialCategory | "", page: 0 })}><option value="">{en ? "All types" : "全部类型"}</option>{CREDENTIAL_CATEGORIES.map(category => <option key={category} value={category}>{categoryLabel(category, en)}</option>)}</select></label>}
+        {project && <label><span>{en ? "Rows per page" : "每页显示"}</span><select className="input-shell" value={pageSize} disabled={!pageSizeReady} onChange={event => changePageSize(event.target.value)}>{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label>}
       </div>
       <div className={styles.resultsBar}><div className={styles.resultCounts}><span>{result.data ? `${number(total)} / ${number(overallTotal)} ${en ? (project ? "unique credentials" : "credentials") : project ? "条去重凭证" : "条凭据"}` : "—"}{partial && ` · ${en ? "Partial inventory" : "部分汇总"}`}</span>{projectData && <span>{en ? `Credentials found in ${number(projectData.contributing_run_count)} of ${number(projectData.run_count)} tasks` : `${number(projectData.contributing_run_count)} / ${number(projectData.run_count)} 个任务有凭证记录`}</span>}</div><button type="button" onClick={result.refresh} disabled={result.loading}><RefreshCw size={13} aria-hidden />{result.loading ? (en ? "Refreshing…" : "刷新中…") : (en ? "Refresh" : "刷新")}</button></div>
       {result.data && overallTotal > 0 && <ul className={styles.summary} aria-label={en ? "All credentials by validation status" : "全部凭据验证状态"}>{CREDENTIAL_STATUSES.map(value => <li key={value}><span>{statusLabel(value, en)}</span><strong>{number(result.data!.summary.validation_status[value])}</strong></li>)}</ul>}
@@ -250,9 +274,9 @@ function CredentialInventoryPanel({ name, live, scope = "run" }: Props) {
         <div className={styles.tableScroll} tabIndex={0} role="region" aria-label={en ? "Credential inventory" : "凭据列表"} aria-busy={result.loading}>
           <table><thead><tr><th scope="col">{en ? "Host / account" : "主机 / 账号"}</th><th scope="col">{en ? "Password / key / hash" : "密码 / 密钥 / 哈希"}</th><th scope="col">{en ? "Validation" : "验证"}</th><th scope="col">{en ? "Source / notes" : "来源 / 备注"}</th></tr></thead><tbody>{rows.map(row => <CredentialRow key={row.id} row={row} en={en} project={project} />)}</tbody></table>
         </div>
-        <nav className={styles.pagination} aria-label={en ? "Credential pages" : "凭据分页"}><span>{number(offset + 1)}–{number(offset + rows.length)} / {number(total)} · {en ? "Page" : "第"} {number(filters.page + 1)} / {number(Math.max(1, Math.ceil(total / PAGE_SIZE)))}{en ? "" : " 页"}</span><div><button type="button" disabled={filters.page === 0 || result.loading} aria-label={en ? "Previous credentials page" : "上一页凭据"} onClick={() => changeFilters({ page: filters.page - 1 })}><ChevronLeft size={16} /></button><button type="button" disabled={!result.data?.has_more || result.loading} aria-label={en ? "Next credentials page" : "下一页凭据"} onClick={() => changeFilters({ page: filters.page + 1 })}><ChevronRight size={16} /></button></div></nav>
+        <nav className={styles.pagination} aria-label={en ? "Credential pages" : "凭据分页"}><span>{number(offset + 1)}–{number(offset + rows.length)} / {number(total)} · {en ? "Page" : "第"} {number(filters.page + 1)} / {number(Math.max(1, Math.ceil(total / pageSize)))}{en ? "" : " 页"}</span><div><button type="button" disabled={filters.page === 0 || result.loading} aria-label={en ? "Previous credentials page" : "上一页凭据"} onClick={() => changeFilters({ page: filters.page - 1 })}><ChevronLeft size={16} /></button><button type="button" disabled={!result.data?.has_more || result.loading} aria-label={en ? "Next credentials page" : "下一页凭据"} onClick={() => changeFilters({ page: filters.page + 1 })}><ChevronRight size={16} /></button></div></nav>
       </> : !result.error && !unreadable && <div className={styles.empty}>
-        {result.loading ? <><Spinner /><span>{en ? "Loading credentials…" : "加载凭据…"}</span></> : <><KeyRound size={24} aria-hidden /><strong>{overallTotal > 0 ? (en ? "No matching credentials" : "没有符合条件的凭据") : partial ? (en ? "No credentials in the readable records" : "当前可读取的记录中没有凭据") : result.data?.source_status === "missing" ? (en ? "No scan records to collect from yet" : "尚无可汇总的扫描记录") : (en ? "No credentials recorded" : "暂无凭据记录")}</strong><p>{overallTotal > 0 ? (en ? "Adjust your search or status filter." : "调整搜索或验证状态筛选。") : (en ? "Agent registrations, explicit structured credential records, and identified credential CSV files appear here." : "Agent 登记、明确的结构化凭据记录及凭据 CSV 会显示在这里。")}</p></>}
+        {result.loading ? <><Spinner /><span>{en ? "Loading credentials…" : "加载凭据…"}</span></> : <><KeyRound size={24} aria-hidden /><strong>{overallTotal > 0 ? (en ? "No matching credentials" : "没有符合条件的凭据") : partial ? (en ? "No credentials in the readable records" : "当前可读取的记录中没有凭据") : result.data?.source_status === "missing" ? (en ? "No scan records to collect from yet" : "尚无可汇总的扫描记录") : (en ? "No credentials recorded" : "暂无凭据记录")}</strong><p>{overallTotal > 0 ? (en ? "Adjust your search or filters." : "调整搜索或筛选条件。") : (en ? "Agent registrations, explicit structured credential records, and identified credential CSV files appear here." : "Agent 登记、明确的结构化凭据记录及凭据 CSV 会显示在这里。")}</p></>}
       </div>}
     </section>
   );
