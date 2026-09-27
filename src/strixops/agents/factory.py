@@ -36,6 +36,7 @@ from strixops.tools.collaboration import (
     view_agent_graph,
     wait_for_agents,
 )
+from strixops.tools.continuation import read_continuation_reference
 from strixops.tools.credentials import (
     get_credential,
     import_credentials,
@@ -192,6 +193,12 @@ def _bounded_tools(tools: list[Any]) -> list[Any]:
     return [_with_bounded_result(tool) if isinstance(tool, FunctionTool) else tool for tool in tools]
 
 
+def _continuation_tools(tools: list[Any], spec: ScanSpec | None) -> list[Any]:
+    if spec is not None and spec.continuation:
+        return [*tools, *_bounded_tools([read_continuation_reference])]
+    return tools
+
+
 def _apply_shell_output_cap(parsed: dict[str, Any]) -> None:
     """Use the configured ceiling unless the caller asks for fewer tokens."""
     from strixops.config.context import ContextSettings
@@ -288,9 +295,10 @@ def build_root_agent(
     run_dir: Any = None,
 ) -> Any:
     resources = _resources(run_dir, spec)
+    frozen_spec = resources.spec if resources is not None else spec
     with resources.activate() if resources is not None else nullcontext():
-        instructions = root_instructions(resources.spec if resources is not None else spec)
-    tools = _resource_tools(root_tools(), resources)
+        instructions = root_instructions(frozen_spec)
+    tools = _resource_tools(_continuation_tools(root_tools(), frozen_spec), resources)
     if resources is not None:
         resources.record_prompt("root", ROOT_AGENT_NAME, instructions, tools)
 
@@ -326,13 +334,14 @@ def build_child_agent(
     agent_id: str | None = None,
 ) -> Any:
     resources = _resources(run_dir, spec)
+    frozen_spec = resources.spec if resources is not None else spec
     with resources.activate() if resources is not None else nullcontext():
         instructions = child_instructions(
             task,
-            resources.spec if resources is not None else spec,
+            frozen_spec,
             skills=skills,
         )
-    tools = _resource_tools(child_tools(), resources)
+    tools = _resource_tools(_continuation_tools(child_tools(), frozen_spec), resources)
     if resources is not None:
         import uuid
 

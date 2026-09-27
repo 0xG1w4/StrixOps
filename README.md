@@ -406,12 +406,18 @@ Credentials must be revalidated within the current authorized scope.
 These references do not become operator instructions or restore old conversations,
 full finding records, or evidence attachments. Continuing again uses the immediate
 source's final report and the project's credential inventory at submission.
-Current scope and instructions govern all new testing. The existing prelaunch
-budget for the report and its launch context remains unchanged: oversized input
-is rejected without truncating the report, using the selected model's bundled
-limits or the configured fallback. Project credentials are excluded from that
-check; no additional token or context limit is imposed on the credential snapshot,
-and its Markdown content is supplied in full.
+Current scope and instructions govern all new testing. Continuation sends the
+complete report and credential snapshot in the first model request; offline token
+estimates do not block launch. Only an explicit context-overflow rejection from
+the provider triggers a shorter continuation reference and a retry, with at most
+two such retries. The original snapshots remain intact and the root can retrieve
+their contents on demand with `read_continuation_reference`. Credentials keep
+their exact values when retrieved; no additional token or context limit is imposed
+on the saved credential snapshot. Recovery summarizes the report in bounded,
+contiguous chunks; incomplete summaries are discarded, with direct access to the
+original as the fallback. Current operator instructions and hints are retained
+verbatim during this recovery. Source-report integrity checks and the existing
+8 MiB report snapshot limit still apply.
 
 | Limit | Console | CLI |
 |---|---|---|

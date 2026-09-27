@@ -119,7 +119,7 @@ async def _rewrite_session(
     session: Session,
     transform: Callable[[list[Any]], tuple[list[Any], bool]],
 ) -> bool:
-    """Apply an image-history change under the reference's session write lock."""
+    """Apply a history change under the session write lock, rolling back failed writes."""
     async with session_write_lock(session):
         original = list(await session.get_items())
         if not original:

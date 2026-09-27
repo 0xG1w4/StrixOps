@@ -17,13 +17,14 @@ from typing import TYPE_CHECKING, Any
 
 from agents.model_settings import ModelSettings
 from agents.models.interface import Model, ModelTracing
+from openai import APIError as OpenAIAPIError
 from openai import BadRequestError as OpenAIBadRequestError
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from strixops.config.context import ContextSettings
 from strixops.engine.context_budget import context_window, count_tokens, output_limit
 from strixops.engine.model_capacity import ModelCapacity
-from strixops.engine.resilience import MODEL_RETRY
+from strixops.engine.resilience import MODEL_RETRY, _stream_status
 from strixops.engine.sessions import replace_session_items, session_write_lock
 
 if TYPE_CHECKING:
@@ -87,6 +88,23 @@ def is_context_overflow(exc: BaseException) -> bool:
     context_window_exceeded, bad_request = _overflow_error_types()
     if isinstance(exc, context_window_exceeded):
         return True
+    if isinstance(exc, OpenAIAPIError):
+        # Native Responses SSE errors have no HTTP status and use APIError,
+        # not BadRequestError. Only explicit context codes authorize recovery.
+        body = getattr(exc, "body", None)
+        details = [body] if isinstance(body, dict) else []
+        if isinstance(body, dict) and isinstance(body.get("error"), dict):
+            details.append(body["error"])
+        statuses = [getattr(exc, "status_code", None)]
+        statuses.extend(detail.get(key) for detail in details for key in ("status", "status_code"))
+        if any((status := _stream_status(value)) is not None and status not in {400, 413, 422}
+               for value in statuses):
+            return False
+        from strixops.engine.context_probe import _CONTEXT_CODES
+
+        if any(isinstance(code := detail.get("code"), str) and code.lower() in _CONTEXT_CODES
+               for detail in details):
+            return True
     if isinstance(exc, (bad_request, OpenAIBadRequestError)):
         msg = str(exc).lower()
         if any(x in msg for x in _OVERFLOW_EXCLUSIONS):

@@ -122,10 +122,7 @@ def test_console_freezes_only_selected_project_and_launches_full_credentials(lau
     extra = {"targets": ["https://one.invalid", "https://two.invalid"], "max_concurrent": 1} if queued else {}
     response = client.post("/api/scans", json=_body(source, project, **extra))
     assert response.status_code == 200, response.text
-    budget.assert_called_once()
-    specs, report, _ = budget.call_args.args
-    assert all(not spec.project_credentials_file for spec in specs)
-    assert "fake-secret" not in report  # Original report budget does not limit credential context.
+    budget.assert_not_called()
     if queued:
         assert not calls
         controller = server._queue_controller()

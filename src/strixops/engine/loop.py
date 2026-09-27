@@ -26,7 +26,7 @@ from strixops.engine import compaction, resilience
 from strixops.engine.context_usage import ContextUsageModel
 from strixops.engine.coordinator import STATUS_CRASHED, STATUS_FAILED, AgentCoordinator
 from strixops.engine.model_capacity import ModelCapacity
-from strixops.engine.scanconfig import EngineContext
+from strixops.engine.scanconfig import EngineContext, ScanSpec
 from strixops.engine.sessions import (
     enforce_image_budget,
     open_agent_session,
@@ -190,6 +190,16 @@ async def _run_agent_cycles(
     consecutive_transport_recoveries = 0
     transport_recoveries = 0
     completed_model_turns = 0
+    spec = getattr(context.services, "spec", None)
+    continuation_root = (
+        isinstance(spec, ScanSpec) and spec.continuation is not None and context.parent_id is None
+    )
+    continuation_pending = False
+    if continuation_root:
+        existing = await session.get_items()
+        continuation_pending = bool(existing) and all(
+            isinstance(item, dict) and item.get("role") == "user" for item in existing
+        )
     context.failure_reason = ""
     context.lifecycle_completion = None
 
@@ -202,9 +212,17 @@ async def _run_agent_cycles(
             except Exception:
                 logger.exception("image-budget enforcement failed for %s", context.agent_id)
             try:
-                await _compact_session(agent, session, settings, force=False, **compact_options)
+                # A continued assessment first submits its complete references.
+                # Unknown metadata/token estimates must not preempt that request.
+                if not continuation_pending:
+                    await _compact_session(agent, session, settings, force=False, **compact_options)
             except Exception:
                 logger.exception("proactive compaction failed for %s", context.agent_id)
+            # Hints can arrive while the stream is detached for summarization
+            # or transport recovery. Include them before the next model request.
+            input_items = [
+                *input_items, *_message_input_items(coordinator.drain_messages(context.agent_id)),
+            ]
             result = Runner.run_streamed(
                 request_agent,
                 input=input_items,
@@ -230,6 +248,8 @@ async def _run_agent_cycles(
                 # Recovery continues this logical cycle. Count only completed
                 # turns so disconnects cannot renew its tool/model turn budget.
                 completed_model_turns += len(getattr(result, "raw_responses", []))
+                if completed_model_turns:
+                    continuation_pending = False
             if (
                 image_strips_used < MAX_IMAGE_STRIPS_PER_CYCLE
                 and getattr(exc, "status_code", None) in _INPUT_REJECTION_CODES
@@ -249,10 +269,26 @@ async def _run_agent_cycles(
                     input_items = []
                     continue
             if compactions_used < MAX_COMPACTIONS_PER_CYCLE and compaction.is_context_overflow(exc):
+                reference_recovered = False
                 try:
-                    compacted = await _compact_session(
-                        agent, session, settings, force=True, **compact_options
-                    )
+                    if continuation_root:
+                        from strixops.engine.continuation_recovery import recover_continuation, reported_capacity
+
+                        model = getattr(agent, "model", None)
+                        model_name = getattr(model, "model", "")
+                        if isinstance(model_name, str) and model_name and hasattr(model, "get_response"):
+                            reference_recovered = await recover_continuation(
+                                session, spec=spec, model=model_name, summary_model=model,
+                                settings=settings, capacity=reported_capacity(exc, model_name, capacity),
+                                attempt=compactions_used + 1,
+                            )
+                    compacted = reference_recovered
+                    # Never summarize away the operator's initial instructions
+                    # when historical references cannot be shortened any further.
+                    if not compacted and not continuation_pending:
+                        compacted = await _compact_session(
+                            agent, session, settings, force=True, **compact_options
+                        )
                 except Exception:
                     logger.exception("overflow compaction failed for %s", context.agent_id)
                     compacted = False
@@ -261,13 +297,17 @@ async def _run_agent_cycles(
                     # The SDK persisted this cycle's input and completed tools.
                     # Resume the rewritten session without replaying old input.
                     input_items = []
+                    notice = (
+                        "[context recovery] Historical references shortened after the model "
+                        "rejected the input. Full originals remain available through "
+                        f"read_continuation_reference. Retry {compactions_used}/{MAX_COMPACTIONS_PER_CYCLE}."
+                        if reference_recovered else
+                        "[context compacted] session summarized to fit the "
+                        f"model context window (compaction {compactions_used}/{MAX_COMPACTIONS_PER_CYCLE})"
+                    )
                     events.emit(
                         event_type="chat.message",
-                        payload={
-                            "content": f"[context compacted] session summarized to fit the "
-                            f"model context window (compaction {compactions_used}/"
-                            f"{MAX_COMPACTIONS_PER_CYCLE})"
-                        },
+                        payload={"content": notice},
                         agent_id=context.agent_id,
                         agent_name=context.agent_name,
                     )
@@ -304,6 +344,7 @@ async def _run_agent_cycles(
             break
 
         consecutive_transport_recoveries = 0
+        continuation_pending = False
         last_error = None
         # Retry any pending usage write; completed responses already published totals.
         if usage_sink is not None:

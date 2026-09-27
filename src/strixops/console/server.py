@@ -1658,7 +1658,7 @@ def _validated_launch_project(body: ScanBody) -> dict[str, Any] | None:
 
 
 def _prepare_continuation(body: ScanBody, llm_env: dict[str, str]) -> tuple[ScanBody, dict | None]:
-    """Freeze the selected report and check full input before any launch mutation."""
+    """Freeze complete, validated references before any launch mutation."""
     if body.rerun_mode == "new":
         return body, None
     try:
@@ -1678,27 +1678,12 @@ def _prepare_continuation(body: ScanBody, llm_env: dict[str, str]) -> tuple[Scan
             instruction += "\n\nCURRENT FOLLOW-UP INSTRUCTIONS\n" + body.additional_instruction
         prepared = body.model_copy(update={"instruction": instruction, "additional_instruction": ""})
 
-        from strixops.console.continuation_budget import validate_batch_budget
-        from strixops.engine.scanconfig import ScanSpec
-
-        # Each target is launched independently with the same reference. Count
-        # the shared report once while validating each target's actual scope.
-        specs = []
-        for target in _requested_targets(prepared):
-            specs.append(ScanSpec(
-                target=target, scan_type=prepared.scan_type, scan_mode=prepared.scan_mode,
-                crypto=prepared.crypto, instruction_text=instruction,
-                socks5_proxy=prepared.socks5, gsocket_key=prepared.gsocket,
-                report_language="en" if prepared.language.startswith("en") else "zh-CN",
-                continuation=snapshot["metadata"],
-            ))
-        validate_batch_budget(specs, snapshot["markdown"], llm_env)
         if prepared.project_id:
             from strixops.console.continuation_credentials import build_snapshot
 
             # Freeze the project's deduplicated inventory once for this launch,
-            # including queued targets. Credentials have a row cap, not a token
-            # cap; the existing report-only budget check above is unchanged.
+            # including queued targets. The first model request receives the
+            # complete references; provider overflow is handled by the engine.
             try:
                 snapshot["project_credentials"] = build_snapshot(
                     prepared.project_id, projects_store.project_runs(prepared.project_id), _open_run_file,
