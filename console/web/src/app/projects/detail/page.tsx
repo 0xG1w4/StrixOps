@@ -697,6 +697,10 @@ function TaskPanel({ runs, copy, locale, title, onViewAll, projectId }: { runs: 
   );
 }
 
+const FINDING_SEVERITY_ORDER: Record<string, number> = {
+  critical: 0, high: 1, medium: 2, low: 3, info: 4, informational: 4,
+};
+
 function FindingsPanel({ findings, status, copy, onRetry }: { findings: ProjectFindings | null; status: SecondaryStatus["findings"]; copy: Copy; onRetry: () => void }) {
   const [active, setActive] = React.useState<{ sourceRun: string; finding: ActiveFinding } | null>(null);
   if (status === "error") return <Panel code="FND" title={copy.findings}><div className={styles.compactEmpty}>{copy.dataUnavailable} <button type="button" className="button-secondary button-compact" onClick={onRetry}>{copy.retry}</button></div></Panel>;
@@ -718,7 +722,10 @@ function FindingsPanel({ findings, status, copy, onRetry }: { findings: ProjectF
       target: finding.host || "—",
       detail: { kind: "internal", f: finding } satisfies ActiveFinding,
     })),
-  ];
+  ].sort((a, b) =>
+    (FINDING_SEVERITY_ORDER[a.severity.trim().toLowerCase()] ?? 5)
+    - (FINDING_SEVERITY_ORDER[b.severity.trim().toLowerCase()] ?? 5)
+  );
   return (
     <>
       <Panel code="FND" title={copy.findings} actions={<span className="mono-chip">{rows.length}</span>}>
