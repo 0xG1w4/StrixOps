@@ -396,11 +396,22 @@ The dialog lets you preview the complete report before starting.
 Continuation saves an immutable `previous_report.md` and its source/hash in
 the new run, including queued targets. The full report enters the root's first
 input once; children receive relevant excerpts through their assignments.
-It never becomes operator instructions or automatically imports old findings,
-conversations, or evidence. Continuing again uses only the immediate source's
-final report. Current scope and instructions govern all new testing. Oversized
-input is rejected before launch, without truncating the report; offline budget
-estimates use the selected model's bundled limits or the configured fallback.
+For a task in a project, continuation also collects up to 1,000 deduplicated
+credentials from that project's tasks into a five-column Markdown table. The new
+run saves an immutable `project_credentials.md` with its hash. The root receives
+this complete snapshot as a separate historical
+reference and gives children only the entries relevant to their assignments.
+Credentials must be revalidated within the current authorized scope.
+
+These references do not become operator instructions or restore old conversations,
+full finding records, or evidence attachments. Continuing again uses the immediate
+source's final report and the project's credential inventory at submission.
+Current scope and instructions govern all new testing. The existing prelaunch
+budget for the report and its launch context remains unchanged: oversized input
+is rejected without truncating the report, using the selected model's bundled
+limits or the configured fallback. Project credentials are excluded from that
+check; no additional token or context limit is imposed on the credential snapshot,
+and its Markdown content is supplied in full.
 
 | Limit | Console | CLI |
 |---|---|---|

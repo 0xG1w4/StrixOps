@@ -1693,6 +1693,18 @@ def _prepare_continuation(body: ScanBody, llm_env: dict[str, str]) -> tuple[Scan
                 continuation=snapshot["metadata"],
             ))
         validate_batch_budget(specs, snapshot["markdown"], llm_env)
+        if prepared.project_id:
+            from strixops.console.continuation_credentials import build_snapshot
+
+            # Freeze the project's deduplicated inventory once for this launch,
+            # including queued targets. Credentials have a row cap, not a token
+            # cap; the existing report-only budget check above is unchanged.
+            try:
+                snapshot["project_credentials"] = build_snapshot(
+                    prepared.project_id, projects_store.project_runs(prepared.project_id), _open_run_file,
+                )
+            except (OSError, ValueError) as exc:
+                raise rerun_context.ContinuationError("credentials_unreadable") from exc
         return prepared, snapshot
     except rerun_context.ContinuationError as exc:
         raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": str(exc)}) from exc
@@ -1839,6 +1851,11 @@ def launch_scan(body: ScanBody, request: Request) -> dict:
         ]
         if continuation.get("report_generated_at"):
             argv += ["--source-report-generated-at", continuation["report_generated_at"]]
+        if credentials := continuation.get("project_credentials"):
+            argv += [
+                "--project-credentials-file", str(run_dir / credentials["snapshot_file"]),
+                "--project-credentials-sha256", credentials["sha256"],
+            ]
     if body.crypto:
         argv.append("--crypto")
     if body.socks5:

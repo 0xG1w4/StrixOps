@@ -31,11 +31,17 @@ def main() -> int:
             ScanSpec(**snapshot["spec"]), target=item["target"], targets=[], instruction_file=""
         )
         if snapshot.get("continuation") is not None:
+            credentials = snapshot["continuation"].get("project_credentials")
+            credential_metadata = credentials["metadata"] if credentials is not None else {}
             spec = dataclasses.replace(
                 spec, previous_report_file=str(run_dir / "previous_report.md"),
                 continuation=snapshot["continuation"]["metadata"],
+                project_credentials_file=str(run_dir / credential_metadata["snapshot_file"])
+                if credential_metadata else "",
+                project_credentials_sha256=credential_metadata.get("sha256", ""),
             )
             spec.load_previous_report()
+            spec.load_project_credentials()
         settings = dataclasses.replace(
             EngineSettings(**snapshot["settings"]),
             operator_hints_dir=str(run_dir / "operator_hints"),

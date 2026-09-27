@@ -29,6 +29,7 @@ MESSAGES = {
         "Choose a model with a larger context or use a new task. The report was not truncated."
     ),
     "invalid_continuation": "Select a source task and its current final report before continuing.",
+    "credentials_unreadable": "The project credential snapshot is unavailable or has changed.",
 }
 
 
@@ -129,6 +130,14 @@ def materialize(run_dir: Path, snapshot: dict) -> dict:
         raise ContinuationError("invalid_continuation")
     if len(markdown.encode("utf-8")) > MAX_REPORT_BYTES:
         raise ContinuationError("report_too_large")
+    credential_snapshot = snapshot.get("project_credentials")
+    if credential_snapshot is not None:
+        from strixops.console import continuation_credentials
+
+        try:
+            continuation_credentials.validate_snapshot(credential_snapshot)
+        except ValueError as exc:
+            raise ContinuationError("credentials_unreadable") from exc
     directory = os.open(run_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         descriptor = os.open(SNAPSHOT, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -140,4 +149,9 @@ def materialize(run_dir: Path, snapshot: dict) -> dict:
     result = {"source_run": source, "report_sha256": digest, "snapshot_file": SNAPSHOT}
     if isinstance(metadata.get("report_generated_at"), str):
         result["report_generated_at"] = metadata["report_generated_at"]
+    if credential_snapshot is not None:
+        try:
+            result["project_credentials"] = continuation_credentials.materialize(run_dir, credential_snapshot)
+        except (OSError, ValueError) as exc:
+            raise ContinuationError("credentials_unreadable") from exc
     return result

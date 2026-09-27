@@ -132,7 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--instruction-file", default="", help="path to operator instruction markdown")
     parser.add_argument("--instruction", default="", help="inline instruction (fallback)")
     for flag in (
-        "--previous-report-file", "--source-run", "--source-report-sha256", "--source-report-generated-at"
+        "--previous-report-file", "--source-run", "--source-report-sha256", "--source-report-generated-at",
+        "--project-credentials-file", "--project-credentials-sha256",
     ):
         parser.add_argument(flag, default="", help=argparse.SUPPRESS)
     parser.add_argument(
@@ -198,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
         or (os.environ.get("STRIXOPS_REPORT_LANG") or "").strip()
         or "zh-CN",
         previous_report_file=args.previous_report_file,
+        project_credentials_file=args.project_credentials_file,
+        project_credentials_sha256=args.project_credentials_sha256,
         continuation={
             "source_run": args.source_run,
             "report_sha256": args.source_report_sha256,
@@ -220,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     spec.load_instruction()
     try:
         spec.load_previous_report()
+        spec.load_project_credentials()
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr, flush=True)
         return EXIT_FAILED

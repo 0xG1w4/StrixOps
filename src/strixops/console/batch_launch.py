@@ -66,7 +66,25 @@ class LaunchSnapshots:
 
     def save(self, data: dict) -> str:
         reference = uuid.uuid4().hex
-        _write_private(self._path(reference), {"schema_version": 1, **data})
+        payload = {"schema_version": 1, **data}
+        try:
+            continuation = payload.get("continuation")
+            if isinstance(continuation, dict) and continuation.get("project_credentials") is not None:
+                from strixops.console import continuation_credentials
+
+                # Keep credential text outside the bounded control JSON so long
+                # secrets do not turn an accepted batch into an unreadable one.
+                directory = self.directory / f"{reference}.credentials"
+                directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+                metadata = continuation_credentials.materialize(directory, continuation["project_credentials"])
+                payload["continuation"] = {
+                    **continuation, "project_credentials": {"metadata": metadata},
+                }
+            _write_private(self._path(reference), payload)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                self.delete(reference)
+            raise
         return reference
 
     def read(self, reference: str) -> dict:
@@ -80,6 +98,16 @@ class LaunchSnapshots:
                 data = json.loads(handle.read(_MAX_SNAPSHOT + 1))
             if not isinstance(data, dict) or data.get("schema_version") != 1:
                 raise ValueError
+            continuation = data.get("continuation")
+            if isinstance(continuation, dict) and continuation.get("project_credentials") is not None:
+                from strixops.console import continuation_credentials
+
+                credentials = continuation["project_credentials"]
+                if not isinstance(credentials, dict):
+                    raise ValueError
+                continuation["project_credentials"] = continuation_credentials.load_snapshot(
+                    self.directory / f"{reference}.credentials", credentials.get("metadata"),
+                )
             return data
         except (OSError, ValueError, RecursionError) as exc:
             raise QueueError(
@@ -89,6 +117,11 @@ class LaunchSnapshots:
     def delete(self, reference: str) -> None:
         with contextlib.suppress(FileNotFoundError):
             self._path(reference).unlink()
+        directory = self.directory / f"{reference}.credentials"
+        with contextlib.suppress(FileNotFoundError):
+            (directory / "project_credentials.md").unlink()
+        with contextlib.suppress(FileNotFoundError):
+            directory.rmdir()
 
 
 def _capture_resources() -> dict:
@@ -238,6 +271,7 @@ class ConsoleBatchController:
 
             continuation = materialize(run_dir, snapshot["continuation"])
             previous_report_file = str(run_dir / "previous_report.md")
+        credential_metadata = (continuation or {}).get("project_credentials") or {}
         spec = ScanSpec(
             target=item["target"], scan_type=item["scan_type"], crypto=bool(scan.get("crypto")),
             scan_mode=scan.get("scan_mode", SCAN_DEFAULT),
@@ -245,6 +279,9 @@ class ConsoleBatchController:
             socks5_proxy=scan.get("socks5") or "", gsocket_key=scan.get("gsocket") or "",
             report_language=language,
             previous_report_file=previous_report_file, continuation=continuation,
+            project_credentials_file=str(run_dir / credential_metadata["snapshot_file"])
+            if credential_metadata else "",
+            project_credentials_sha256=credential_metadata.get("sha256", ""),
         )
         _publish_resources(run_dir, snapshot["resources"], spec)
         source = snapshot.get("sources", {}).get(item["target"])
@@ -287,6 +324,11 @@ class ConsoleBatchController:
             ])
             if continuation.get("report_generated_at"):
                 argv.extend(["--source-report-generated-at", continuation["report_generated_at"]])
+            if credential_metadata:
+                argv.extend([
+                    "--project-credentials-file", spec.project_credentials_file,
+                    "--project-credentials-sha256", spec.project_credentials_sha256,
+                ])
         for key, flag in (("socks5", "--socks5"), ("gsocket", "--gsocket")):
             if scan.get(key):
                 argv.extend([flag, scan[key]])

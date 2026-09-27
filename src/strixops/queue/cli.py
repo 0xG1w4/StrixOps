@@ -51,6 +51,13 @@ class CliBatchController:
         continuation = None
         if spec.continuation is not None:
             continuation = {"metadata": dict(spec.continuation), "markdown": spec.load_previous_report()}
+            if spec.project_credentials_file:
+                continuation["project_credentials"] = {
+                    "metadata": {
+                        "snapshot_file": "project_credentials.md", "sha256": spec.project_credentials_sha256,
+                    },
+                    "markdown": spec.load_project_credentials(),
+                }
         settings = dataclasses.replace(
             settings, strix_runs=str(resolve_runs_root(settings.strix_runs).resolve())
         )
@@ -131,8 +138,12 @@ class CliBatchController:
             from strixops.console.rerun_context import materialize
 
             metadata = materialize(run_dir, snapshot["continuation"])
+            credential_metadata = metadata.get("project_credentials") or {}
             spec = dataclasses.replace(
                 spec, previous_report_file=str(run_dir / "previous_report.md"), continuation=metadata,
+                project_credentials_file=str(run_dir / credential_metadata["snapshot_file"])
+                if credential_metadata else "",
+                project_credentials_sha256=credential_metadata.get("sha256", ""),
             )
         _publish_resources(run_dir, snapshot["resources"], spec)
         env = os.environ.copy()

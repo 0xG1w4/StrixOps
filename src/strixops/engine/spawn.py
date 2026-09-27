@@ -24,6 +24,8 @@ from strixops.engine.prompt_resources import PromptResources
 from strixops.engine.scanconfig import (
     PREVIOUS_REPORT_END,
     PREVIOUS_REPORT_START,
+    PROJECT_CREDENTIALS_END,
+    PROJECT_CREDENTIALS_START,
     EngineContext,
     EngineServices,
 )
@@ -34,23 +36,27 @@ logger = logging.getLogger(__name__)
 
 
 def _without_previous_report(value: Any) -> Any:
-    """Copy inherited history while omitting the root-only full report block."""
+    """Copy history while omitting root-only report and credential reference blocks."""
     if isinstance(value, dict):
         return {key: _without_previous_report(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_without_previous_report(item) for item in value]
     if isinstance(value, str):
-        while PREVIOUS_REPORT_START in value:
-            start = value.index(PREVIOUS_REPORT_START)
-            end = value.find(PREVIOUS_REPORT_END, start + len(PREVIOUS_REPORT_START))
-            if end < 0:
-                break
-            value = (
-                value[:start]
-                + "\n[Previous final report omitted; "
-                "the parent supplies relevant excerpts in your assignment.]\n"
-                + value[end + len(PREVIOUS_REPORT_END):]
-            )
+        for opening, closing, label in (
+            (PREVIOUS_REPORT_START, PREVIOUS_REPORT_END, "Previous final report"),
+            (PROJECT_CREDENTIALS_START, PROJECT_CREDENTIALS_END, "Project credentials"),
+        ):
+            while opening in value:
+                start = value.index(opening)
+                end = value.find(closing, start + len(opening))
+                if end < 0:
+                    break
+                value = (
+                    value[:start]
+                    + f"\n[{label} omitted; "
+                    "the parent supplies relevant excerpts in your assignment.]\n"
+                    + value[end + len(closing):]
+                )
     return value
 
 

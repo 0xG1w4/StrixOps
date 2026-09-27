@@ -38,6 +38,7 @@ const CONTEXT_REASON_KEYS: Record<string, string> = {
   context_budget_exceeded: "rerun.report.inputBudget",
   report_too_large: "rerun.report.tooLarge",
   invalid_continuation: "rerun.report.invalid",
+  credentials_unreadable: "rerun.credentials.unreadable",
 };
 
 function parseLaunchError(e: unknown, t: (key: string) => string): string {
@@ -288,7 +289,10 @@ export default function RerunDialog({
                   {reportContext.report_generated_at && (
                     <p>{t("rerun.report.generatedAt", { time: fmtTime(reportContext.report_generated_at, locale) })}</p>
                   )}
-                  <p className="text-fg-muted">{t("rerun.report.referenceHint")}</p>
+                  <p className="text-fg-muted">
+                    {t("rerun.report.referenceHint")}
+                    {run.project_id ? ` ${t("rerun.credentials.referenceHint")}` : ""}
+                  </p>
                 </div>
                 <details open={previewOpen} onToggle={(event) => setPreviewOpen(event.currentTarget.open)}>
                   <summary className="cursor-pointer text-xs font-semibold text-accent">{t("rerun.report.preview")}</summary>
